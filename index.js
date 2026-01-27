@@ -32,7 +32,7 @@ const app = express();
 // CORS Configuration
 // -----------------------------
 const allowedOrigins = [
-  'https://grub-dash-topaz.vercel.app',
+  'https://grub-dash-frontend-xi.vercel.app',
   'http://localhost:3000',
   'http://localhost:3001', // Add backend URL for local self-calls or testing
 ];
