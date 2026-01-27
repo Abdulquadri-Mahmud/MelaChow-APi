@@ -65,7 +65,7 @@ export const getFoods = async (req, res) => {
 
     // Fetch foods + all relevant vendor info
     const foods = await Food.find(filter)
-      .populate("vendor", "storeName fullAddress address logo phone openingHours rating") // include key vendor fields
+      .populate("vendor", "storeName fullAddress address logo phone openingHours rating ratingCount") // include key vendor fields
       .lean(); // convert to plain JS objects for faster access
 
     // Ensure each vendor has an `id` field for frontend consistency
