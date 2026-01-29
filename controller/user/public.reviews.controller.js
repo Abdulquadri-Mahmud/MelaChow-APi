@@ -40,7 +40,7 @@ export const getRestaurantReviews = async (req, res) => {
     // Get reviews with pagination
     const reviews = await Reviews
       .find(query)
-      .populate("userId", "firstname lastname")
+      .populate("userId", "firstname lastname avatar")
       .populate("foodId", "name price images")
       .sort({ createdAt: -1 })
       .skip(skip)
