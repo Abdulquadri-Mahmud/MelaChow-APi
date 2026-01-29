@@ -8,7 +8,7 @@ import {
     getLocationRequests, 
     toggleCityStatus, 
     toggleStateStatus
-} from "../../controller/admin/location.controller.js";
+} from "../../controller/Admin/location.controller.js";
 
 const router = express.Router();
 
