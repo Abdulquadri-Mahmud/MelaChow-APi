@@ -41,7 +41,8 @@ GET /api/public/reviews/vendor/60f7b3b3b3b3b3b3b3b3b3b3?page=1&limit=5&rating=5
         "comment": "Amazing food and great service!",
         "userId": {
           "firstname": "John",
-          "lastname": "Doe"
+          "lastname": "Doe",
+          "avatar": "https://cloudinary.com/user-avatar.jpg"
         },
         "foodId": {
           "name": "Jollof Rice",
@@ -178,7 +179,8 @@ GET /api/public/reviews/food/60f7b3b3b3b3b3b3b3b3b3b5?page=1&limit=10
         "comment": "Best jollof rice in town!",
         "userId": {
           "firstname": "Jane",
-          "lastname": "Smith"
+          "lastname": "Smith",
+          "avatar": "https://cloudinary.com/user-avatar2.jpg"
         },
         "vendorId": {
           "storeName": "Mama's Kitchen"
@@ -254,8 +256,77 @@ const fetchFiveStarReviews = async (vendorId) => {
 ✅ **Recent Reviews** - Quick access to latest reviews  
 ✅ **Restaurant Context** - Food reviews include restaurant information  
 ✅ **Food Context** - Restaurant reviews include food information when available  
-✅ **User Privacy** - Only shows user's first and last name  
+✅ **User Privacy** - Only shows user's first and last name + avatar  
+✅ **Avatar Support** - Includes user profile pictures for better review display  
 ✅ **Rating Transparency** - Shows calculation breakdown and stored vs calculated values  
+
+## Avatar Handling
+
+### User Avatar Display
+Each review includes the reviewer's avatar for a more personalized experience:
+
+```json
+{
+  "userId": {
+    "firstname": "John",
+    "lastname": "Doe", 
+    "avatar": "https://cloudinary.com/user-avatar.jpg"
+  }
+}
+```
+
+### Frontend Avatar Implementation
+```javascript
+const ReviewCard = ({ review }) => {
+  const user = review.userId;
+  const avatarUrl = user?.avatar;
+  const userName = `${user?.firstname || ''} ${user?.lastname || ''}`.trim();
+  
+  return (
+    <div className="review-card">
+      <div className="reviewer-info">
+        <div className="avatar">
+          {avatarUrl ? (
+            <img 
+              src={avatarUrl} 
+              alt={`${userName}'s avatar`}
+              className="user-avatar"
+              onError={(e) => {
+                // Fallback to initials if image fails to load
+                e.target.style.display = 'none';
+                e.target.nextSibling.style.display = 'flex';
+              }}
+            />
+          ) : null}
+          <div 
+            className="avatar-fallback"
+            style={{ display: avatarUrl ? 'none' : 'flex' }}
+          >
+            {getInitials(userName)}
+          </div>
+        </div>
+        <span className="reviewer-name">{userName}</span>
+      </div>
+      {/* Rest of review content */}
+    </div>
+  );
+};
+
+// Helper function for avatar fallback
+const getInitials = (name) => {
+  return name
+    .split(' ')
+    .map(word => word.charAt(0))
+    .join('')
+    .toUpperCase()
+    .slice(0, 2);
+};
+```
+
+### Avatar Fallback Strategy
+- **Primary**: Display user's uploaded avatar image
+- **Fallback**: Show user initials in a colored circle if no avatar
+- **Error Handling**: Gracefully handle broken image URLs
 
 ## Rating Calculation Details
 

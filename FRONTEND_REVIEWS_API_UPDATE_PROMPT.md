@@ -43,6 +43,17 @@ The backend public reviews API has been updated with bug fixes and enhanced rati
       "storedRating": 4.1,            // 🔍 Database stored (for debugging)
       "storedReviewCount": 44         // 🔍 Database stored (for debugging)
     },
+    "reviews": [
+      {
+        "userId": {
+          "firstname": "John",
+          "lastname": "Doe",
+          "avatar": "https://cloudinary.com/user-avatar.jpg"  // 🆕 NEW: User avatar
+        },
+        "rating": 5,
+        "comment": "Amazing food!"
+      }
+    ],
     "ratingDistribution": {
       "5": 20, "4": 15, "3": 7, "2": 2, "1": 1
     },
@@ -151,7 +162,97 @@ const calculatePercentagesFromDistribution = (distribution) => {
 };
 ```
 
-### 4. Error Handling Updates
+### 4. Enhanced Avatar Display
+Show user avatars with proper fallbacks:
+
+```javascript
+const ReviewCard = ({ review }) => {
+  const user = review.userId;
+  const avatarUrl = user?.avatar;
+  const userName = `${user?.firstname || ''} ${user?.lastname || ''}`.trim();
+  
+  return (
+    <div className="review-card">
+      <div className="reviewer-info">
+        <UserAvatar 
+          src={avatarUrl}
+          name={userName}
+          size="40px"
+        />
+        <div className="reviewer-details">
+          <span className="reviewer-name">{userName}</span>
+          <StarRating rating={review.rating} size="small" />
+        </div>
+      </div>
+      <div className="review-content">
+        <p className="review-comment">{review.comment}</p>
+        <span className="review-date">
+          {formatDate(review.createdAt)}
+        </span>
+      </div>
+    </div>
+  );
+};
+
+// Reusable Avatar Component
+const UserAvatar = ({ src, name, size = "40px" }) => {
+  const [imageError, setImageError] = useState(false);
+  
+  const getInitials = (fullName) => {
+    return fullName
+      .split(' ')
+      .map(word => word.charAt(0))
+      .join('')
+      .toUpperCase()
+      .slice(0, 2);
+  };
+  
+  const getAvatarColor = (name) => {
+    // Generate consistent color based on name
+    const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7', '#DDA0DD'];
+    const index = name.length % colors.length;
+    return colors[index];
+  };
+  
+  if (!src || imageError) {
+    return (
+      <div 
+        className="avatar-fallback"
+        style={{
+          width: size,
+          height: size,
+          borderRadius: '50%',
+          backgroundColor: getAvatarColor(name),
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          color: 'white',
+          fontWeight: 'bold',
+          fontSize: `calc(${size} * 0.4)`
+        }}
+      >
+        {getInitials(name)}
+      </div>
+    );
+  }
+  
+  return (
+    <img
+      src={src}
+      alt={`${name}'s avatar`}
+      className="user-avatar"
+      style={{
+        width: size,
+        height: size,
+        borderRadius: '50%',
+        objectFit: 'cover'
+      }}
+      onError={() => setImageError(true)}
+    />
+  );
+};
+```
+### 5. Error Handling Updates
 Update error handling to work with the fixed endpoints:
 
 ```javascript
@@ -226,7 +327,7 @@ const fetchFoodReviews = async (foodId, page = 1, rating = null) => {
 };
 ```
 
-### 5. State Management Updates
+### 6. State Management Updates
 Update your state to handle the new response format:
 
 ```javascript
@@ -257,7 +358,40 @@ const updateReviewsData = (apiResponse) => {
 
 ## New Features You Can Now Implement
 
-### 1. Rating Calculation Transparency
+### 1. Enhanced Review Cards with Avatars
+Show user avatars alongside reviews for better personalization:
+
+```javascript
+const EnhancedReviewCard = ({ review }) => {
+  const user = review.userId;
+  const userName = `${user?.firstname || ''} ${user?.lastname || ''}`.trim();
+  
+  return (
+    <div className="review-card">
+      <div className="review-header">
+        <UserAvatar src={user?.avatar} name={userName} />
+        <div className="reviewer-info">
+          <h4 className="reviewer-name">{userName}</h4>
+          <div className="review-meta">
+            <StarRating rating={review.rating} />
+            <span className="review-date">{formatDate(review.createdAt)}</span>
+          </div>
+        </div>
+      </div>
+      
+      {review.foodId && (
+        <div className="reviewed-item">
+          <span>Reviewed: {review.foodId.name}</span>
+        </div>
+      )}
+      
+      <p className="review-comment">{review.comment}</p>
+    </div>
+  );
+};
+```
+
+### 2. Rating Calculation Transparency
 Show users how ratings are calculated:
 
 ```javascript
@@ -278,7 +412,7 @@ const RatingTransparency = ({ ratingBreakdown }) => {
 };
 ```
 
-### 2. Enhanced Rating Charts
+### 2. Rating Calculation Transparency
 Use percentage data for better visualizations:
 
 ```javascript
@@ -306,7 +440,7 @@ const RatingChart = ({ ratingPercentages, ratingDistribution }) => {
 };
 ```
 
-### 3. Debug Mode (Optional)
+### 3. Enhanced Rating Charts
 For development, show stored vs calculated values:
 
 ```javascript
@@ -330,16 +464,18 @@ const DebugRatingInfo = ({ restaurant }) => {
 };
 ```
 
-## Testing Checklist
+### 4. Debug Mode (Optional)
 
+## Testing Checklist
 ### ✅ Backward Compatibility Tests
-- [ ] Existing rating displays still work
 - [ ] Old API response format still supported (if any cached)
 - [ ] No breaking changes in existing components
 - [ ] Graceful fallbacks for missing new fields
 
 ### ✅ New Features Tests
 - [ ] Food reviews endpoint now works (was previously broken)
+- [ ] User avatars display correctly with fallback to initials
+- [ ] Avatar error handling works (broken image URLs)
 - [ ] Rating percentages display correctly
 - [ ] Rating calculation transparency shows
 - [ ] Enhanced charts render properly

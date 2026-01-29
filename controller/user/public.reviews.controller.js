@@ -176,7 +176,7 @@ export const getFoodReviews = async (req, res) => {
     // Get reviews with pagination
     const reviews = await Reviews
       .find(query)
-      .populate("userId", "firstname lastname")
+      .populate("userId", "firstname lastname avatar")
       .populate("vendorId", "storeName")
       .sort({ createdAt: -1 })
       .skip(skip)
@@ -333,7 +333,7 @@ export const getRestaurantReviewsSummary = async (req, res) => {
     // Get recent reviews (last 5)
     const recentReviews = await Reviews
       .find({ vendorId })
-      .populate("userId", "firstname lastname")
+      .populate("userId", "firstname lastname avatar")
       .populate("foodId", "name")
       .sort({ createdAt: -1 })
       .limit(5);
