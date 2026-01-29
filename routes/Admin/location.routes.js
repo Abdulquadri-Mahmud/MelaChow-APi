@@ -1,13 +1,13 @@
 import express from "express";
 import { adminAuth } from "../../middleware/adminAuth.js";
-import {
-    createState,
+import { 
     createCity,
-    toggleStateStatus,
-    toggleCityStatus,
-    getLocationRequests,
-    getAllStates,
-    getAllCities,
+    createState, 
+    getAllCities, 
+    getAllStates, 
+    getLocationRequests, 
+    toggleCityStatus, 
+    toggleStateStatus
 } from "../../controller/admin/location.controller.js";
 
 const router = express.Router();
