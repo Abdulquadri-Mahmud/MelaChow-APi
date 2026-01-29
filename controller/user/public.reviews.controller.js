@@ -116,7 +116,7 @@ export const getFoodReviews = async (req, res) => {
     }
 
     // Check if food exists
-    const food = await Food.findById(foodId).populate("vendorId", "storeName");
+    const food = await Food.findById(foodId).populate("vendor", "storeName");
     if (!food) {
       return res.status(404).json({ 
         success: false, 
@@ -176,8 +176,8 @@ export const getFoodReviews = async (req, res) => {
           averageRating: food.rating || 0,
           totalReviews: food.ratingCount || 0,
           restaurant: {
-            id: food.vendorId._id,
-            name: food.vendorId.storeName
+            id: food.vendor._id,
+            name: food.vendor.storeName
           }
         },
         reviews,
