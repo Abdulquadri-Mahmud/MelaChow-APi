@@ -8,7 +8,7 @@ import {
     getVendorReviews,
     getUserReviews
 } from "../../controller/user/user.reviews.controller.js";
-import { getVendorLocations } from "../../controller/user/getVendorLocations.controller.js";
+import { getVendorLocations, getLegacyVendorLocations } from "../../controller/user/getVendorLocations.controller.js";
 import auth from "../../middleware/auth.middleware.js";
 
 const router = express.Router();
@@ -20,6 +20,7 @@ const router = express.Router();
  */
 // Locations first
 router.get("/locations", getVendorLocations);
+router.get("/locations/legacy", getLegacyVendorLocations);
 
 router.get("/foods", auth, getFoodsByLocation);
 
