@@ -30,7 +30,9 @@ GET /api/public/reviews/vendor/60f7b3b3b3b3b3b3b3b3b3b3?page=1&limit=5&rating=5
       "id": "60f7b3b3b3b3b3b3b3b3b3b3",
       "name": "Mama's Kitchen",
       "averageRating": 4.2,
-      "totalReviews": 45
+      "totalReviews": 45,
+      "storedRating": 4.1,
+      "storedReviewCount": 44
     },
     "reviews": [
       {
@@ -62,6 +64,17 @@ GET /api/public/reviews/vendor/60f7b3b3b3b3b3b3b3b3b3b3?page=1&limit=5&rating=5
       "3": 7,
       "2": 2,
       "1": 1
+    },
+    "ratingPercentages": {
+      "5": 44,
+      "4": 33,
+      "3": 16,
+      "2": 4,
+      "1": 2
+    },
+    "ratingBreakdown": {
+      "totalRatingPoints": 189,
+      "averageCalculation": "189 ÷ 45 = 4.2"
     }
   }
 }
@@ -89,7 +102,9 @@ GET /api/public/reviews/vendor/60f7b3b3b3b3b3b3b3b3b3b3/summary
       "id": "60f7b3b3b3b3b3b3b3b3b3b3",
       "name": "Mama's Kitchen",
       "averageRating": 4.2,
-      "totalReviews": 45
+      "totalReviews": 45,
+      "storedRating": 4.1,
+      "storedReviewCount": 44
     },
     "ratingDistribution": {
       "5": 20,
@@ -97,6 +112,24 @@ GET /api/public/reviews/vendor/60f7b3b3b3b3b3b3b3b3b3b3/summary
       "3": 7,
       "2": 2,
       "1": 1
+    },
+    "ratingPercentages": {
+      "5": 44,
+      "4": 33,
+      "3": 16,
+      "2": 4,
+      "1": 2
+    },
+    "ratingBreakdown": {
+      "totalRatingPoints": 189,
+      "averageCalculation": "189 ÷ 45 = 4.2",
+      "ratingDetails": [
+        { "stars": 5, "count": 20, "percentage": 44 },
+        { "stars": 4, "count": 15, "percentage": 33 },
+        { "stars": 3, "count": 7, "percentage": 16 },
+        { "stars": 2, "count": 2, "percentage": 4 },
+        { "stars": 1, "count": 1, "percentage": 2 }
+      ]
     },
     "recentReviews": [
       // Last 5 reviews
@@ -216,10 +249,55 @@ const fetchFiveStarReviews = async (vendorId) => {
 ✅ **Pagination** - Handle large numbers of reviews efficiently  
 ✅ **Rating Filter** - Filter reviews by star rating  
 ✅ **Rating Distribution** - See breakdown of ratings (5-star: 20, 4-star: 15, etc.)  
+✅ **Rating Percentages** - Percentage breakdown of each rating level  
+✅ **Accurate Calculations** - Real-time rating calculations from actual reviews  
 ✅ **Recent Reviews** - Quick access to latest reviews  
 ✅ **Restaurant Context** - Food reviews include restaurant information  
 ✅ **Food Context** - Restaurant reviews include food information when available  
 ✅ **User Privacy** - Only shows user's first and last name  
+✅ **Rating Transparency** - Shows calculation breakdown and stored vs calculated values  
+
+## Rating Calculation Details
+
+### Real-Time Accuracy
+The API provides both **stored ratings** (from the database models) and **calculated ratings** (computed in real-time from actual reviews) to ensure accuracy:
+
+- **averageRating**: Real-time calculated average (rounded to 1 decimal place)
+- **totalReviews**: Real-time count of actual reviews
+- **storedRating**: Database stored rating (for comparison)
+- **storedReviewCount**: Database stored count (for comparison)
+
+### Rating Breakdown
+Each response includes detailed rating analysis:
+
+```json
+{
+  "ratingBreakdown": {
+    "totalRatingPoints": 189,
+    "averageCalculation": "189 ÷ 45 = 4.2"
+  },
+  "ratingPercentages": {
+    "5": 44,
+    "4": 33,
+    "3": 16,
+    "2": 4,
+    "1": 2
+  }
+}
+```
+
+### Frontend Usage
+Use the calculated values for display:
+```javascript
+// Use these for accurate display
+const rating = data.restaurant.averageRating; // 4.2
+const total = data.restaurant.totalReviews; // 45
+const percentages = data.ratingPercentages; // For charts
+
+// Optional: Compare with stored values for debugging
+const storedRating = data.restaurant.storedRating; // 4.1
+const storedCount = data.restaurant.storedReviewCount; // 44
+```
 
 ## Use Cases
 

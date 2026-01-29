@@ -49,7 +49,7 @@ export const getRestaurantReviews = async (req, res) => {
     // Get total count for pagination
     const totalReviews = await Reviews.countDocuments(query);
 
-    // Calculate rating statistics
+    // Calculate accurate rating statistics from actual reviews
     const ratingStats = await Reviews.aggregate([
       { $match: { vendorId: vendor._id } },
       {
@@ -61,6 +61,19 @@ export const getRestaurantReviews = async (req, res) => {
       { $sort: { _id: -1 } }
     ]);
 
+    // Calculate real-time overall rating
+    const overallRatingCalc = await Reviews.aggregate([
+      { $match: { vendorId: vendor._id } },
+      {
+        $group: {
+          _id: null,
+          averageRating: { $avg: "$rating" },
+          totalReviews: { $sum: 1 },
+          totalRatingPoints: { $sum: "$rating" }
+        }
+      }
+    ]);
+
     // Format rating distribution
     const ratingDistribution = {
       5: 0, 4: 0, 3: 0, 2: 0, 1: 0
@@ -69,14 +82,34 @@ export const getRestaurantReviews = async (req, res) => {
       ratingDistribution[stat._id] = stat.count;
     });
 
+    // Calculate percentage distribution
+    const totalActualReviews = ratingStats.reduce((sum, stat) => sum + stat.count, 0);
+    const ratingPercentages = {};
+    Object.keys(ratingDistribution).forEach(rating => {
+      ratingPercentages[rating] = totalActualReviews > 0 
+        ? Math.round((ratingDistribution[rating] / totalActualReviews) * 100) 
+        : 0;
+    });
+
+    // Use calculated values or fallback to stored values
+    const calculatedRating = overallRatingCalc.length > 0 ? overallRatingCalc[0] : null;
+    const accurateAverageRating = calculatedRating 
+      ? Math.round(calculatedRating.averageRating * 10) / 10 
+      : vendor.rating || 0;
+    const accurateTotalReviews = calculatedRating 
+      ? calculatedRating.totalReviews 
+      : vendor.ratingCount || 0;
+
     res.status(200).json({
       success: true,
       data: {
         restaurant: {
           id: vendor._id,
           name: vendor.storeName,
-          averageRating: vendor.rating || 0,
-          totalReviews: vendor.ratingCount || 0
+          averageRating: accurateAverageRating,
+          totalReviews: accurateTotalReviews,
+          storedRating: vendor.rating || 0, // For comparison/debugging
+          storedReviewCount: vendor.ratingCount || 0 // For comparison/debugging
         },
         reviews,
         pagination: {
@@ -86,7 +119,14 @@ export const getRestaurantReviews = async (req, res) => {
           hasNext: page * limit < totalReviews,
           hasPrev: page > 1
         },
-        ratingDistribution
+        ratingDistribution,
+        ratingPercentages,
+        ratingBreakdown: {
+          totalRatingPoints: calculatedRating ? calculatedRating.totalRatingPoints : 0,
+          averageCalculation: calculatedRating 
+            ? `${calculatedRating.totalRatingPoints} ÷ ${calculatedRating.totalReviews} = ${accurateAverageRating}`
+            : "No reviews yet"
+        }
       }
     });
   } catch (error) {
@@ -145,7 +185,7 @@ export const getFoodReviews = async (req, res) => {
     // Get total count for pagination
     const totalReviews = await Reviews.countDocuments(query);
 
-    // Calculate rating statistics for this food
+    // Calculate accurate rating statistics for this food
     const ratingStats = await Reviews.aggregate([
       { $match: { foodId: food._id } },
       {
@@ -157,6 +197,19 @@ export const getFoodReviews = async (req, res) => {
       { $sort: { _id: -1 } }
     ]);
 
+    // Calculate real-time overall rating for food
+    const overallRatingCalc = await Reviews.aggregate([
+      { $match: { foodId: food._id } },
+      {
+        $group: {
+          _id: null,
+          averageRating: { $avg: "$rating" },
+          totalReviews: { $sum: 1 },
+          totalRatingPoints: { $sum: "$rating" }
+        }
+      }
+    ]);
+
     // Format rating distribution
     const ratingDistribution = {
       5: 0, 4: 0, 3: 0, 2: 0, 1: 0
@@ -164,6 +217,24 @@ export const getFoodReviews = async (req, res) => {
     ratingStats.forEach(stat => {
       ratingDistribution[stat._id] = stat.count;
     });
+
+    // Calculate percentage distribution
+    const totalActualReviews = ratingStats.reduce((sum, stat) => sum + stat.count, 0);
+    const ratingPercentages = {};
+    Object.keys(ratingDistribution).forEach(rating => {
+      ratingPercentages[rating] = totalActualReviews > 0 
+        ? Math.round((ratingDistribution[rating] / totalActualReviews) * 100) 
+        : 0;
+    });
+
+    // Use calculated values or fallback to stored values
+    const calculatedRating = overallRatingCalc.length > 0 ? overallRatingCalc[0] : null;
+    const accurateAverageRating = calculatedRating 
+      ? Math.round(calculatedRating.averageRating * 10) / 10 
+      : food.rating || 0;
+    const accurateTotalReviews = calculatedRating 
+      ? calculatedRating.totalReviews 
+      : food.ratingCount || 0;
 
     res.status(200).json({
       success: true,
@@ -173,8 +244,10 @@ export const getFoodReviews = async (req, res) => {
           name: food.name,
           price: food.price,
           images: food.images,
-          averageRating: food.rating || 0,
-          totalReviews: food.ratingCount || 0,
+          averageRating: accurateAverageRating,
+          totalReviews: accurateTotalReviews,
+          storedRating: food.rating || 0, // For comparison/debugging
+          storedReviewCount: food.ratingCount || 0, // For comparison/debugging
           restaurant: {
             id: food.vendor._id,
             name: food.vendor.storeName
@@ -188,7 +261,14 @@ export const getFoodReviews = async (req, res) => {
           hasNext: page * limit < totalReviews,
           hasPrev: page > 1
         },
-        ratingDistribution
+        ratingDistribution,
+        ratingPercentages,
+        ratingBreakdown: {
+          totalRatingPoints: calculatedRating ? calculatedRating.totalRatingPoints : 0,
+          averageCalculation: calculatedRating 
+            ? `${calculatedRating.totalRatingPoints} ÷ ${calculatedRating.totalReviews} = ${accurateAverageRating}`
+            : "No reviews yet"
+        }
       }
     });
   } catch (error) {
@@ -225,7 +305,7 @@ export const getRestaurantReviewsSummary = async (req, res) => {
       });
     }
 
-    // Get rating statistics
+    // Get accurate rating statistics
     const ratingStats = await Reviews.aggregate([
       { $match: { vendorId: vendor._id } },
       {
@@ -235,6 +315,19 @@ export const getRestaurantReviewsSummary = async (req, res) => {
         }
       },
       { $sort: { _id: -1 } }
+    ]);
+
+    // Calculate real-time overall rating
+    const overallRatingCalc = await Reviews.aggregate([
+      { $match: { vendorId: vendor._id } },
+      {
+        $group: {
+          _id: null,
+          averageRating: { $avg: "$rating" },
+          totalReviews: { $sum: 1 },
+          totalRatingPoints: { $sum: "$rating" }
+        }
+      }
     ]);
 
     // Get recent reviews (last 5)
@@ -253,7 +346,23 @@ export const getRestaurantReviewsSummary = async (req, res) => {
       ratingDistribution[stat._id] = stat.count;
     });
 
-    const totalReviews = ratingStats.reduce((sum, stat) => sum + stat.count, 0);
+    // Calculate percentage distribution
+    const totalActualReviews = ratingStats.reduce((sum, stat) => sum + stat.count, 0);
+    const ratingPercentages = {};
+    Object.keys(ratingDistribution).forEach(rating => {
+      ratingPercentages[rating] = totalActualReviews > 0 
+        ? Math.round((ratingDistribution[rating] / totalActualReviews) * 100) 
+        : 0;
+    });
+
+    // Use calculated values or fallback to stored values
+    const calculatedRating = overallRatingCalc.length > 0 ? overallRatingCalc[0] : null;
+    const accurateAverageRating = calculatedRating 
+      ? Math.round(calculatedRating.averageRating * 10) / 10 
+      : vendor.rating || 0;
+    const accurateTotalReviews = calculatedRating 
+      ? calculatedRating.totalReviews 
+      : vendor.ratingCount || 0;
 
     res.status(200).json({
       success: true,
@@ -261,10 +370,24 @@ export const getRestaurantReviewsSummary = async (req, res) => {
         restaurant: {
           id: vendor._id,
           name: vendor.storeName,
-          averageRating: vendor.rating || 0,
-          totalReviews: vendor.ratingCount || totalReviews
+          averageRating: accurateAverageRating,
+          totalReviews: accurateTotalReviews,
+          storedRating: vendor.rating || 0, // For comparison/debugging
+          storedReviewCount: vendor.ratingCount || 0 // For comparison/debugging
         },
         ratingDistribution,
+        ratingPercentages,
+        ratingBreakdown: {
+          totalRatingPoints: calculatedRating ? calculatedRating.totalRatingPoints : 0,
+          averageCalculation: calculatedRating 
+            ? `${calculatedRating.totalRatingPoints} ÷ ${calculatedRating.totalReviews} = ${accurateAverageRating}`
+            : "No reviews yet",
+          ratingDetails: ratingStats.map(stat => ({
+            stars: stat._id,
+            count: stat.count,
+            percentage: totalActualReviews > 0 ? Math.round((stat.count / totalActualReviews) * 100) : 0
+          }))
+        },
         recentReviews
       }
     });
