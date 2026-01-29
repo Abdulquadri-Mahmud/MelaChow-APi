@@ -61,3 +61,48 @@ We have added backend support for Users to review Vendors and specific Foods.
 > 4. On submit, call `POST /api/admin/user/reviews/create-reviews` with `vendorId`, `rating`, and `comment`.
 > 5. Display a success toast and refresh the list (if you have access to fetch them).
 > 6. *Note check:* Try to fetch reviews using `GET /api/admin/user/reviews/vendor-reviews?vendorId=...`. If it fails due to 403/401, mock the display for now or ask backend to make it public."
+
+---
+
+## 3. Location Filter Implementation
+
+**Context:**
+We have exposed a new endpoint to get all unique States and Cities where vendors are active.
+
+**Objectives:**
+1.  Allow users to filter the restaurant list by State and City.
+2.  Populate dropdowns dynamically from the backend.
+
+**Backend Endpoints:**
+-   **GET /api/user/locations**:
+    -   Returns: `{ success: true, count: number, locations: [{ state: 'Lagos', cities: ['Ikeja', 'Lekki'] }, ...] }`
+
+**Task for Frontend AI:**
+> "Please implement a Location Filter on the Home/Vendor Listing page.
+> 1. Fetch available locations from `GET /api/user/locations` on mount.
+> 2. Display a 'Filter by Location' section with two dropdowns: 'State' and 'City'.
+> 3. When a State is selected, populate the City dropdown with its cities.
+> 4. When a City is selected, filter the displayed vendors to show only those in that city (you might need to update the vendor fetch call with query params if the list is paginated, or filter locally if all are loaded).
+> 5. Ensure the filter can be cleared."
+
+---
+
+## 4. Dynamic Address Location Selectors
+
+**Context:**
+Ideally, users should only be able to select States and Cities where we actually have registered vendors. Previously, the User Address form might have used a hardcoded list of all Nigerian/World states.
+
+**Objective:**
+Update the User Address Form (or Profile Settings > Address) to fetch the list of *available* States and Cities from the backend.
+
+**Backend Endpoint:**
+-   **GET /api/user/locations**
+    -   Returns: `{ success: true, locations: [{ state: 'Lagos', cities: ['Ikeja', 'Lekki'] }, ...] }`
+
+**Task for Frontend AI:**
+> "Please refactor the **User Address Form** (or wherever the user inputs their delivery location).
+> 1. Remove any hardcoded or mock arrays for State and City.
+> 2. On component mount, fetch the active locations from `GET /api/user/locations`.
+> 3. Populate the **State select input** with the list of available states returned.
+> 4. When the user selects a State, update the **City select input** to show only the cities available for that specific state (from the same API response).
+> 5. Ensure validation prevents submitting an address outside these supported areas if strictly required, or just use this to guide the user."

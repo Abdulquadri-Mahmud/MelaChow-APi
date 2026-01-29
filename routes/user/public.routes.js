@@ -8,6 +8,7 @@ import {
     getVendorReviews,
     getUserReviews
 } from "../../controller/user/user.reviews.controller.js";
+import { getVendorLocations } from "../../controller/user/getVendorLocations.controller.js";
 import auth from "../../middleware/auth.middleware.js";
 
 const router = express.Router();
@@ -17,6 +18,9 @@ const router = express.Router();
  * @route GET /api/user/foods
  * @access Public
  */
+// Locations first
+router.get("/locations", getVendorLocations);
+
 router.get("/foods", auth, getFoodsByLocation);
 
 /**

@@ -20,6 +20,8 @@ import orderRoutes from './routes/order/orderRoutes.js';
 import vendorOrderRoutes from './routes/vendor/vendorOrder.routes.js';
 import categoryRoutes from './routes/category.routes.js';
 import walletRoutes from './routes/wallet/wallet.routes.js';
+import adminLocationRoutes from './routes/admin/location.routes.js';
+import publicLocationRoutes from './routes/location/location.routes.js';
 import { seedCategories } from './config/categorySeed.js';
 
 dotenv.config();
@@ -90,6 +92,7 @@ app.use('/api/user', userPublicRoutes); // Public user routes (e.g. location sea
 app.use('/api/search/food', searchFoodRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/wallet', walletRoutes);
+app.use('/api/locations', publicLocationRoutes);
 
 // Vendors routes
 app.use("/api/vendors", vendorRoutes);
@@ -101,6 +104,7 @@ app.use("/api/orders", vendorOrderRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin/user', userManagementRoutes);
 app.use('/api/admin/user/reviews', ReviewsRoutes);
+app.use('/api/admin/locations', adminLocationRoutes);
 
 // Transactions
 app.use("/api/transactions", transactionRoutes);

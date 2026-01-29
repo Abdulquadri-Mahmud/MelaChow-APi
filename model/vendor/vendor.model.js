@@ -26,13 +26,27 @@ const vendorSchema = new Schema(
     logo: { type: String, default: "" }, // Store logo (Cloudinary or CDN URL)
 
     // Address & geo-coordinates
-    // Address info
+    // Address info (legacy string fields - kept for backward compatibility)
     address: {
       street: { type: String, default: "" },
-      city: { type: String, default: "" },
-      state: { type: String, default: "" },
+      city: { type: String, default: "" }, // Legacy: kept for backward compatibility
+      state: { type: String, default: "" }, // Legacy: kept for backward compatibility
       postalCode: { type: String, default: "" },
     },
+
+    // Location references (NEW: database-driven)
+    stateId: { type: mongoose.Schema.Types.ObjectId, ref: "State", index: true },
+    cityId: { type: mongoose.Schema.Types.ObjectId, ref: "City", index: true },
+
+    // Location request tracking (for pending vendors)
+    locationStatus: {
+      type: String,
+      enum: ["approved", "pending_review", null],
+      default: null,
+      index: true,
+    },
+    requestedState: { type: String, default: "" }, // Vendor's requested state (if not in DB)
+    requestedCity: { type: String, default: "" }, // Vendor's requested city (if not in DB)
 
     // Food categories vendor serves
     cuisineTypes: [{ type: String }], // Example: ["Swallow", "Rice", "Salads"]

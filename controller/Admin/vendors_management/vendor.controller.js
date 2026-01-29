@@ -5,23 +5,76 @@ import { sendVendorRejectionEmail } from "../../../config/Admin/vendor_mailer/se
 import { sendVendorSuspensionEmail } from "../../../config/Admin/vendor_mailer/sendVendorSuspensionEmail.js";
 import Food from "../../../model/vendor/food.model.js";
 import vendorModel from "../../../model/vendor/vendor.model.js";
+import { resolveVendorLocation } from "../../../services/locationService.js";
 
 /**
  * APPROVE A VENDOR
  * --------------------------------
  * Admin marks vendor as verified and notifies via email
+ * Also handles location resolution for vendors with pending locations
+ * 
+ * Body params (optional):
+ * - state: State name to assign (if location pending)
+ * - city: City name to assign (if location pending)
+ * - createLocation: Boolean - whether to create state/city if they don't exist
  */
 export const approveVendor = async (req, res) => {
   try {
     const { vendorId } = req.query;
+    const { state, city, createLocation = false } = req.body;
 
-    const vendor = await vendorModel.findByIdAndUpdate(
-      vendorId,
-      { verified: true },
-      { new: true }
-    );
-
+    const vendor = await vendorModel.findById(vendorId);
     if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
+
+    // ========================================
+    // HANDLE LOCATION RESOLUTION (NEW)
+    // ========================================
+    if (vendor.locationStatus === "pending_review") {
+      // Use provided state/city or fall back to vendor's requested values
+      const stateName = state || vendor.requestedState;
+      const cityName = city || vendor.requestedCity;
+
+      if (!stateName || !cityName) {
+        return res.status(400).json({
+          success: false,
+          message: "Vendor has pending location. Please provide state and city to approve.",
+          requestedState: vendor.requestedState,
+          requestedCity: vendor.requestedCity,
+        });
+      }
+
+      try {
+        // Resolve location (create if admin allows)
+        const locationData = await resolveVendorLocation(
+          stateName,
+          cityName,
+          createLocation
+        );
+
+        // Update vendor with resolved location
+        vendor.stateId = locationData.stateId;
+        vendor.cityId = locationData.cityId;
+        vendor.locationStatus = "approved";
+        vendor.requestedState = "";
+        vendor.requestedCity = "";
+
+        // Update legacy string fields for backward compatibility
+        vendor.address.state = stateName;
+        vendor.address.city = cityName;
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          message: `Location resolution failed: ${error.message}`,
+          hint: "Set createLocation=true to create new state/city if they don't exist",
+        });
+      }
+    }
+
+    // ========================================
+    // APPROVE VENDOR
+    // ========================================
+    vendor.verified = true;
+    await vendor.save();
 
     // Send approval email
     await sendVendorApprovalEmail(vendor);

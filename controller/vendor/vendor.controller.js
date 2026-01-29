@@ -3,6 +3,7 @@ import Food from "../../model/vendor/food.model.js";
 import vendorModel from "../../model/vendor/vendor.model.js";
 import walletMode from "../../model/wallet/wallet.mode.js";
 import VendorOrder from "../../model/vendor/VendorOrder.js";
+import { validateVendorLocation } from "../../services/locationService.js";
 
 // ----------------------------------------------
 // ✅ CREATE NEW VENDOR WITH AUTO WALLET CREATION
@@ -12,7 +13,56 @@ export const createVendor = async (req, res) => {
 
     const vendorData = req.body;
 
-    const vendor = await vendorModel.create(vendorData);
+    // ========================================
+    // LOCATION VALIDATION (NEW)
+    // ========================================
+    // Extract state and city from address or top-level fields
+    const stateName = vendorData.address?.state || vendorData.state;
+    const cityName = vendorData.address?.city || vendorData.city;
+
+    let locationData = {
+      stateId: null,
+      cityId: null,
+      locationStatus: null,
+      requestedState: "",
+      requestedCity: "",
+    };
+
+    if (stateName && cityName) {
+      try {
+        // Validate location against database
+        locationData = await validateVendorLocation(stateName, cityName);
+
+        console.log("Location validation result:", locationData);
+      } catch (error) {
+        console.error("Location validation failed:", error.message);
+        // Continue with vendor creation but flag location as pending
+        locationData.locationStatus = "pending_review";
+        locationData.requestedState = stateName;
+        locationData.requestedCity = cityName;
+      }
+    }
+
+    // Merge location data into vendor payload
+    const enrichedVendorData = {
+      ...vendorData,
+      stateId: locationData.stateId,
+      cityId: locationData.cityId,
+      locationStatus: locationData.locationStatus,
+      requestedState: locationData.requestedState,
+      requestedCity: locationData.requestedCity,
+      // Keep legacy string fields for backward compatibility
+      address: {
+        ...vendorData.address,
+        state: stateName || "",
+        city: cityName || "",
+      },
+    };
+
+    // ========================================
+    // CREATE VENDOR
+    // ========================================
+    const vendor = await vendorModel.create(enrichedVendorData);
 
     const wallet = await walletMode.create({
       ownerId: vendor._id,           // Link wallet to this vendor
@@ -26,14 +76,19 @@ export const createVendor = async (req, res) => {
     vendor.wallet = wallet._id;      // Link wallet ID to vendor
     await vendor.save();
 
-    await sendVendorAccountCreatedEmail(vendor);// Save vendor again to persist wallet ID
+    await sendVendorAccountCreatedEmail(vendor);
 
     // 5 Return success response with clean vendor profile
     // Using instance method getPublicProfile() to exclude sensitive data
+    const responseMessage = locationData.locationStatus === "pending_review"
+      ? "Vendor account created successfully. Your location is under review by our admin team. A confirmation email has been sent to your registered email address. Please check your inbox for details. Your account will be reviewed by our admin team, and you'll be notified within 24 hours once it's verified. You'll be able to log in to your dashboard after approval."
+      : "Vendor account created successfully. A confirmation email has been sent to your registered email address. Please check your inbox for details. Your account will be reviewed by our admin team, and you'll be notified within 24 hours once it's verified. You'll be able to log in to your dashboard after approval.";
+
     res.status(201).json({
       success: true,
-      message: "Vendor account created successfully. A confirmation email has been sent to your registered email address. Please check your inbox for details. Your account will be reviewed by our admin team, and you’ll be notified within 24 hours once it’s verified. You’ll be able to log in to your dashboard after approval.",
+      message: responseMessage,
       data: vendor.getPublicProfile(), // Return only public-facing data
+      locationPending: locationData.locationStatus === "pending_review",
     });
 
   } catch (error) {
