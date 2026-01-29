@@ -15,6 +15,7 @@ import vendorAuthRoutes from './routes/vendor/vendor.auth.routes.js';
 import adminRoutes from './routes/Admin/admin.routes.js';
 import userManagementRoutes from './routes/Admin/user_management_route/user.management.routes.js';
 import ReviewsRoutes from './routes/user/user.reviews.routes.js';
+import publicReviewsRoutes from './routes/user/public.reviews.routes.js';
 import searchFoodRoutes from './routes/vendor/food.search.routes.js';
 import orderRoutes from './routes/order/orderRoutes.js';
 import vendorOrderRoutes from './routes/vendor/vendorOrder.routes.js';
@@ -89,6 +90,7 @@ app.get("/", (req, res) => {
 // -----------------------------
 app.use('/api/user/auth', userRoutes);
 app.use('/api/user', userPublicRoutes); // Public user routes (e.g. location search)
+app.use('/api/public/reviews', publicReviewsRoutes); // Public reviews routes
 app.use('/api/search/food', searchFoodRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/wallet', walletRoutes);
