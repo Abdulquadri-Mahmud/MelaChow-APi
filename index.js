@@ -20,7 +20,7 @@ import orderRoutes from './routes/order/orderRoutes.js';
 import vendorOrderRoutes from './routes/vendor/vendorOrder.routes.js';
 import categoryRoutes from './routes/category.routes.js';
 import walletRoutes from './routes/wallet/wallet.routes.js';
-import adminLocationRoutes from './routes/admin/location.routes.js';
+import adminLocationRoutes from './routes/Admin/location.routes.js';
 import publicLocationRoutes from './routes/location/location.routes.js';
 import { seedCategories } from './config/categorySeed.js';
 
