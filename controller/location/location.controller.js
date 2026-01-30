@@ -3,23 +3,15 @@ import City from "../../model/location/City.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 
 /**
- * @desc Get all active states that have at least one approved restaurant
+ * @desc Get all active states (available for selection)
  * @route GET /api/locations/states
  * @access Public
  */
 export const getActiveStates = async (req, res) => {
     try {
-        // Find all approved vendors with valid stateId
-        const vendorsWithStates = await Vendor.distinct("stateId", {
-            verified: true,
-            active: true,
-            suspended: false,
-            stateId: { $exists: true, $ne: null },
-        });
-
-        // Get only states that are active AND have approved vendors
+        // Get all active states (not filtered by vendor presence)
+        // This allows users to select states during registration/address setup
         const states = await State.find({
-            _id: { $in: vendorsWithStates },
             isActive: true,
         }).sort({ name: 1 });
 
@@ -39,7 +31,7 @@ export const getActiveStates = async (req, res) => {
 };
 
 /**
- * @desc Get all active cities for a state that have at least one approved restaurant
+ * @desc Get all active cities for a state (available for selection)
  * @route GET /api/locations/cities?stateId=...
  * @access Public
  */
@@ -63,18 +55,8 @@ export const getActiveCities = async (req, res) => {
             });
         }
 
-        // Find all approved vendors in this state with valid cityId
-        const vendorsWithCities = await Vendor.distinct("cityId", {
-            stateId,
-            verified: true,
-            active: true,
-            suspended: false,
-            cityId: { $exists: true, $ne: null },
-        });
-
-        // Get only cities that are active AND have approved vendors
+        // Get all active cities for this state
         const cities = await City.find({
-            _id: { $in: vendorsWithCities },
             stateId,
             isActive: true,
         })
