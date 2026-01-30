@@ -31,26 +31,15 @@ export const getVendorLocations = async (req, res) => {
         const totalStates = await State.countDocuments();
         const activeStates = await State.countDocuments({ isActive: true });
 
-        // Get active states that have approved vendors
+        // Get ALL active states (pre-launch support)
         const states = await State.find({
-            _id: { $in: vendorsWithStates },
             isActive: true,
         }).sort({ name: 1 });
 
-        // For each state, get cities with approved vendors
+        // For each state, get ALL active cities
         const locationsWithCities = await Promise.all(
             states.map(async (state) => {
-                // Find cities in this state that have approved vendors
-                const vendorsWithCities = await Vendor.distinct("cityId", {
-                    stateId: state._id,
-                    verified: true,
-                    active: true,
-                    suspended: false,
-                    cityId: { $exists: true, $ne: null },
-                });
-
                 const cities = await City.find({
-                    _id: { $in: vendorsWithCities },
                     stateId: state._id,
                     isActive: true,
                 }).sort({ name: 1 });
@@ -129,11 +118,11 @@ export const getLegacyVendorLocations = async (req, res) => {
 
         // Group by state and collect unique cities
         const locationMap = {};
-        
+
         vendors.forEach(vendor => {
             const state = vendor.address?.state?.trim();
             const city = vendor.address?.city?.trim();
-            
+
             if (state) {
                 if (!locationMap[state]) {
                     locationMap[state] = new Set();
