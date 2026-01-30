@@ -38,14 +38,14 @@ export const verifyEmail = async (req, res) => {
           
           <!-- Header -->
           <div style="background-color: #1A73E8; padding: 20px; text-align: center;">
-            <h1 style="color: white; margin: 0; font-size: 24px;">MiaBank</h1>
+            <h1 style="color: white; margin: 0; font-size: 24px;">GrubDash</h1>
           </div>
 
           <!-- Body -->
           <div style="padding: 30px; text-align: center;">
             <h2 style="color: #222; margin-bottom: 10px;">Email Verification</h2>
             <p style="color: #555; font-size: 15px; line-height: 1.6;">
-              Use the OTP below to verify your email address and secure your MiaBank account:
+              Use the OTP below to verify your email address and secure your GrubDash account:
             </p>
 
             <div style="font-size: 32px; font-weight: bold; margin: 25px 0; color: #1A73E8; letter-spacing: 3px;">
@@ -62,7 +62,7 @@ export const verifyEmail = async (req, res) => {
           <hr style="border: none; border-top: 1px solid #eee; margin: 0;" />
           <div style="padding: 20px; text-align: center;">
             <p style="font-size: 12px; color: #aaa; margin: 0;">
-              &copy; ${new Date().getFullYear()} MiaBank. All rights reserved.  
+              &copy; ${new Date().getFullYear()} GrubDash. All rights reserved.  
               <br/>This is an automated message, please do not reply.
             </p>
           </div>

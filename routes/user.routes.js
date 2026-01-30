@@ -35,7 +35,6 @@ router.post("/address", auth, addAddress);
 router.get("/my-address", auth, getUserAddresses);
 
 router.patch("/address/update-address", auth, updateAddress);
-router.patch("/address/update-address", auth, updateAddress);
 router.delete("/address/delete-address", auth, deleteAddress);
 
 
