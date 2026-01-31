@@ -34,14 +34,28 @@ export const getNearbyVendorsForUser = async (req, res) => {
         const cityRegex = new RegExp(`^\\s*${city.trim()}\\s*$`, "i");
         const stateRegex = new RegExp(`^\\s*${state.trim()}\\s*$`, "i");
 
-        // 4. Find Active Vendors in that location
-        const vendors = await Vendor.find({
+        // Resolve IDs from State/City models (if possible)
+        const StateModel = (await import("../../model/location/State.js")).default;
+        const CityModel = (await import("../../model/location/City.js")).default;
+
+        const stateDoc = await StateModel.findOne({ name: stateRegex, isActive: true });
+        const cityDoc = stateDoc
+            ? await CityModel.findOne({ name: cityRegex, stateId: stateDoc._id, isActive: true })
+            : null;
+
+        // Build Query: Match EITHER String Address OR ID Location
+        const query = {
             active: true,
             suspended: false,
-            deletedAt: null, // Ensure they are not soft-deleted
-            "address.city": cityRegex,
-            "address.state": stateRegex
-        })
+            deletedAt: null,
+            $or: [
+                { "address.city": cityRegex, "address.state": stateRegex },
+                ...(stateDoc && cityDoc ? [{ stateId: stateDoc._id, cityId: cityDoc._id }] : [])
+            ]
+        };
+
+        // 4. Find Active Vendors in that location
+        const vendors = await Vendor.find(query)
             .select("storeName storeSlug storeDescription logo address fullAddress rating ratingCount cuisineTypes openingHours deliveryRadiusKm acceptsDelivery")
             .sort({ rating: -1, createdAt: -1 });
 

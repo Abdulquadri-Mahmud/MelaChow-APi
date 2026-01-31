@@ -38,7 +38,9 @@ const app = express();
 const allowedOrigins = [
   'https://grub-dash-frontend-xi.vercel.app',
   'http://localhost:3000',
-  'http://localhost:3001', // Add backend URL for local self-calls or testing
+  'http://localhost:3001', // Backend URL
+  'http://localhost:5173', // Vite default
+  process.env.CLIENT_URL, // Dynamic from env
 ];
 
 const corsOptions = {

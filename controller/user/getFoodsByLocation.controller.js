@@ -8,34 +8,43 @@ import Vendor from "../../model/vendor/vendor.model.js";
  */
 export const getFoodsByLocation = async (req, res) => {
     try {
-        const { city, state } = req.query;
+        const { city, state, cityId, stateId } = req.query;
 
-        // 1. Validation
-        if (!city || !state) {
+        // 1. Validation: Require either (city+state) OR (cityId+stateId)
+        if ((!city || !state) && (!cityId || !stateId)) {
             return res.status(400).json({
                 success: false,
-                message: "Please provide both city and state query parameters.",
+                message: "Please provide either city/state names or cityId/stateId parameters.",
             });
         }
 
-        // 2. Normalize inputs for case-insensitive search (Relaxed regex to handle whitespace in DB)
-        const cityRegex = new RegExp(`^\\s*${city.trim()}\\s*$`, "i");
-        const stateRegex = new RegExp(`^\\s*${state.trim()}\\s*$`, "i");
-
-        // 3. Find Vendors in the location
-        // Must be active and not suspended (and verified usually)
-        const vendors = await Vendor.find({
-            "address.city": cityRegex,
-            "address.state": stateRegex,
+        let query = {
             active: true,
             suspended: false,
-            deletedAt: null, // Ensure not soft-deleted
-        }).select("_id");
+            deletedAt: null,
+        };
+
+        // 2. Build Query
+        if (cityId && stateId) {
+            // New ID-based filtering
+            query.cityId = cityId;
+            query.stateId = stateId;
+        } else {
+            // Legacy String-based filtering
+            // Relaxed regex to handle whitespace in DB
+            const cityRegex = new RegExp(`^\\s*${city.trim()}\\s*$`, "i");
+            const stateRegex = new RegExp(`^\\s*${state.trim()}\\s*$`, "i");
+            query["address.city"] = cityRegex;
+            query["address.state"] = stateRegex;
+        }
+
+        // 3. Find Vendors in the location
+        const vendors = await Vendor.find(query).select("_id");
 
         if (!vendors.length) {
             return res.json({
                 success: true,
-                location: { city, state },
+                location: { city, state, cityId, stateId },
                 count: 0,
                 foods: [],
                 message: "No vendors found in this location.",
@@ -87,7 +96,7 @@ export const getFoodsByLocation = async (req, res) => {
                 },
             };
         });
-        
+
         return res.json({
             success: true,
             location: { city, state },
