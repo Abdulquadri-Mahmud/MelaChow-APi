@@ -53,9 +53,13 @@ const corsOptions = {
       callback(new Error('Not allowed by CORS'));
     }
   },
-  credentials: true,
+  credentials: true, // Allow cookies to be sent
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"]
+  allowedHeaders: ["Content-Type", "Authorization"],
+  // iOS Safari compatibility: Explicitly expose Set-Cookie header
+  exposedHeaders: ["Set-Cookie"],
+  // Increase preflight cache to reduce OPTIONS requests (iOS optimization)
+  maxAge: 86400, // 24 hours
 };
 
 app.use(cors(corsOptions));
@@ -63,7 +67,31 @@ app.use(cors(corsOptions));
 // -----------------------------
 // Security & System Middlewares
 // -----------------------------
-app.use(helmet()); // Security headers
+// Configure Helmet for iOS Safari compatibility & Security Hardening
+// 1. Enable CSP with targeted allowlist (Secure Hybrid Approach)
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "https://grub-dash-frontend-xi.vercel.app"],
+      styleSrc: ["'self'", "'unsafe-inline'"], // Required for inline styles
+      imgSrc: ["'self'", "data:", "https:"], // Allow external images
+      connectSrc: ["'self'", "https://grub-dash-frontend-xi.vercel.app"],
+      fontSrc: ["'self'", "data:"],
+      objectSrc: ["'none'"],
+      upgradeInsecureRequests: [],
+    },
+  },
+  crossOriginEmbedderPolicy: false, // Allow cross-origin cookies (Required for iOS)
+}));
+
+// 2. Additive Security Headers
+app.use((req, res, next) => {
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  next();
+});
 app.use(morgan('dev')); // Logging
 app.use(express.json()); // Parse JSON body
 app.use(cookieParser()); // Parse cookies

@@ -3,16 +3,7 @@ import jwt from "jsonwebtoken";
 import vendorModel from "../../model/vendor/vendor.model.js";
 import { sendVendorEmail } from "../../config/vendors.mailer.js";
 import { sendTokenCookie } from "../../utils/sendTokenCookie.js";
-// ============================
-// GENERATE JWT TOKEN
-// ============================
-const generateToken = (vendor) => {
-  return jwt.sign(
-    { id: vendor._id, role: "vendor" },
-    process.env.JWT_SECRET,
-    { expiresIn: "7d" }
-  );
-};
+import { generateAccessToken, generateRefreshToken } from "../../utils/generateTokens.js";
 
 // ============================
 // VENDOR LOGIN (EMAIL + OTP)
@@ -95,12 +86,16 @@ export const verifyVendorOTP = async (req, res) => {
     vendor.otpExpires = null;
     await vendor.save();
 
-    const token = generateToken(vendor);
-    sendTokenCookie(res, token, "vendorToken");
+    // Generate Tokens
+    const accessToken = generateAccessToken({ id: vendor._id, role: "vendor" });
+    const refreshToken = generateRefreshToken({ id: vendor._id, role: "vendor" });
+
+    sendTokenCookie(res, refreshToken, "vendorToken");
 
     res.status(200).json({
       success: true,
       message: "Vendor logged in successfully",
+      accessToken, // Short-lived token for Request Authorization
       vendor: vendor.getPublicProfile(),
     });
   } catch (error) {

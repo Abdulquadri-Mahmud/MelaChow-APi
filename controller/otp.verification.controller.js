@@ -1,6 +1,7 @@
 import jwt from 'jsonwebtoken';
 import User from '../model/user.model.js';
 import { sendTokenCookie } from '../utils/sendTokenCookie.js';
+import { generateAccessToken, generateRefreshToken } from '../utils/generateTokens.js';
 
 export const verifyOTP = async (req, res) => {
   const { email, otp } = req.body;
@@ -29,13 +30,12 @@ export const verifyOTP = async (req, res) => {
 
     await user.save();
 
-    // Generate JWT
-    const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
-      expiresIn: process.env.JWT_EXPIRES_IN,
-    });
+    // Generate Tokens
+    const accessToken = generateAccessToken({ id: user._id, role: user.role || 'user' });
+    const refreshToken = generateRefreshToken({ id: user._id, role: user.role || 'user' });
 
-    // Set HTTP-only Cookie
-    sendTokenCookie(res, token, "token");
+    // Set HTTP-only Cookie (Refresh Token - Primary Authority)
+    sendTokenCookie(res, refreshToken, "token");
 
     // Convert to plain JS object and remove sensitive data
     const userObj = user.toObject();
@@ -46,6 +46,7 @@ export const verifyOTP = async (req, res) => {
     res.status(200).json({
       success: true,
       message: 'Login successful! User verified.',
+      accessToken, // Short-lived token for Request Authorization
       user: userObj,
     });
 

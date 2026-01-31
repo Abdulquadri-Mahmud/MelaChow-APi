@@ -7,14 +7,7 @@ import Admin from "../../model/Admin/admin.model.js";
 import Wallet from "../../model/wallet/wallet.mode.js";
 import { sendTokenCookie } from "../../utils/sendTokenCookie.js";
 
-// Generate JWT
-const generateToken = (admin) => {
-  return jwt.sign(
-    { id: admin._id, role: admin.role },
-    process.env.JWT_SECRET,
-    { expiresIn: "7d" }
-  );
-};
+import { generateAccessToken, generateRefreshToken } from "../../utils/generateTokens.js";
 
 export const registerAdmin = async (req, res) => {
   try {
@@ -73,9 +66,16 @@ export const loginAdmin = async (req, res) => {
     const isMatch = await admin.comparePassword(password);
     if (!isMatch) return res.status(401).json({ success: false, message: "Invalid credentials" });
 
-    const token = generateToken(admin);
-    sendTokenCookie(res, token, "adminToken");
-    res.status(200).json({ success: true, message: "Login successful", admin: admin.getPublicProfile() });
+    const accessToken = generateAccessToken({ id: admin._id, role: admin.role });
+    const refreshToken = generateRefreshToken({ id: admin._id, role: admin.role });
+
+    sendTokenCookie(res, refreshToken, "adminToken");
+    res.status(200).json({
+      success: true,
+      message: "Login successful",
+      accessToken, // Short-lived token
+      admin: admin.getPublicProfile()
+    });
   } catch (err) {
     res.status(500).json({ success: false, message: "Login failed", error: err.message });
   }
