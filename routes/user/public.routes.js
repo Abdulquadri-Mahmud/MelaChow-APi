@@ -10,6 +10,7 @@ import {
 } from "../../controller/user/user.reviews.controller.js";
 import { getVendorLocations, getLegacyVendorLocations } from "../../controller/user/getVendorLocations.controller.js";
 import auth from "../../middleware/auth.middleware.js";
+import optionalAuth from "../../middleware/optionalAuth.middleware.js";
 
 const router = express.Router();
 
@@ -39,11 +40,11 @@ router.get("/vendors", getAllVendors);
 router.get("/vendors/nearby", auth, getNearbyVendorsForUser);
 
 /**
- * @description Get trending searches
+ * @description Get trending searches (location-aware if authenticated)
  * @route GET /api/user/trending
- * @access Public
+ * @access Public (with optional authentication for location filtering)
  */
-router.get("/trending", getTrendingSearch);
+router.get("/trending", optionalAuth, getTrendingSearch);
 
 /**
  * @description Create a review (for food or restaurant)

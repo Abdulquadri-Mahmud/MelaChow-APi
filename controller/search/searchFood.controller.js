@@ -14,11 +14,46 @@ export const autocompleteFoods = async (req, res) => {
     if (!q || q.trim().length < 2)
       return res.status(200).json({ success: true, suggestions: [] });
 
-    // Match vendors by name
+    // Get user's location from their default address
+    let userCity = null;
+    let userState = null;
+
+    if (req.user?._id) {
+      const user = await User.findById(req.user._id).select("addresses");
+
+      if (user?.addresses?.length > 0) {
+        const defaultAddress = user.addresses.find(a => a.isDefault) || user.addresses[0];
+        userCity = defaultAddress.city?.trim() || null;
+        userState = defaultAddress.state?.trim() || null;
+      }
+    }
+
+    // Build vendor query with location filter
+    const vendorQuery = {
+      storeName: { $regex: q, $options: "i" }
+    };
+
+    // Filter vendors by user's location
+    if (userCity || userState) {
+      if (userCity) vendorQuery["address.city"] = { $regex: userCity, $options: "i" };
+      if (userState) vendorQuery["address.state"] = { $regex: userState, $options: "i" };
+    }
+
+    // Match vendors by name within user's location
     const vendors = await vendorModel
-      .find({ storeName: { $regex: q, $options: "i" } })
+      .find(vendorQuery)
       .select("_id storeName")
       .limit(5);
+
+    // If no vendors in location, return empty
+    if (vendors.length === 0 && (userCity || userState)) {
+      return res.status(200).json({
+        success: true,
+        count: 0,
+        suggestions: [],
+        message: `No results found in ${userCity || ""} ${userState || ""}`.trim()
+      });
+    }
 
     // Match foods
     const foods = await Food.find({
@@ -55,6 +90,7 @@ export const autocompleteFoods = async (req, res) => {
       success: true,
       count: suggestions.length,
       suggestions,
+      location: { city: userCity, state: userState }
     });
   } catch (err) {
     console.error("Autocomplete Error:", err);
@@ -106,6 +142,10 @@ export const searchFoods = async (req, res) => {
     // Slug search
     if (slug) query.slug = slug;
 
+    // --- DETERMINE EFFECTIVE LOCATION ---
+    const effectiveCity = city || userCity;
+    const effectiveState = state || userState;
+
     // --- TEXT SEARCH & TRENDING ---
     if (q && q.trim() !== "") {
       // Track trending searches
@@ -121,14 +161,23 @@ export const searchFoods = async (req, res) => {
         { upsert: true }
       );
 
-      // Match vendors by name/description
-      const vendorMatches = await vendorModel.find({
+      // Build vendor match query with location filter
+      const vendorMatchQuery = {
         $or: [
           { storeName: { $regex: q, $options: "i" } },
           { storeSlug: { $regex: q, $options: "i" } },
           { storeDescription: { $regex: q, $options: "i" } },
         ],
-      });
+      };
+
+      // Add location filter to vendor search
+      if (effectiveCity || effectiveState) {
+        if (effectiveCity) vendorMatchQuery["address.city"] = { $regex: effectiveCity, $options: "i" };
+        if (effectiveState) vendorMatchQuery["address.state"] = { $regex: effectiveState, $options: "i" };
+      }
+
+      // Match vendors by name/description within location
+      const vendorMatches = await vendorModel.find(vendorMatchQuery);
       vendors = vendorMatches;
 
       query.$or = [
@@ -138,9 +187,6 @@ export const searchFoods = async (req, res) => {
     }
 
     // --- CITY / STATE FILTER ---
-    const effectiveCity = city || userCity;
-    const effectiveState = state || userState;
-
     if (effectiveCity || effectiveState) {
       const cityStateVendors = await vendorModel.find({
         ...(effectiveCity ? { "address.city": { $regex: effectiveCity, $options: "i" } } : {}),

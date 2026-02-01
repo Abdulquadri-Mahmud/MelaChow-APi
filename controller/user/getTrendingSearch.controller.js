@@ -1,4 +1,6 @@
 import Food from "../../model/vendor/food.model.js";
+import User from "../../model/user.model.js";
+import Vendor from "../../model/vendor/vendor.model.js";
 
 /**
  * @desc    Get trending food searches/items
@@ -7,10 +9,53 @@ import Food from "../../model/vendor/food.model.js";
  */
 export const getTrendingSearch = async (req, res) => {
     try {
+        // Get user's location from their default address
+        let userCity = null;
+        let userState = null;
+
+        if (req.user?._id) {
+            const user = await User.findById(req.user._id).select("addresses");
+
+            if (user?.addresses?.length > 0) {
+                const defaultAddress = user.addresses.find(a => a.isDefault) || user.addresses[0];
+                userCity = defaultAddress.city?.trim() || null;
+                userState = defaultAddress.state?.trim() || null;
+            }
+        }
+
+        // Build vendor query with location filter
+        let vendorQuery = {
+            active: true,
+            suspended: false,
+            deletedAt: null,
+        };
+
+        // Filter vendors by user's location
+        if (userCity || userState) {
+            if (userCity) vendorQuery["address.city"] = { $regex: userCity, $options: "i" };
+            if (userState) vendorQuery["address.state"] = { $regex: userState, $options: "i" };
+        }
+
+        // Find vendors in the user's location
+        const vendors = await Vendor.find(vendorQuery).select("_id");
+
+        if (vendors.length === 0 && (userCity || userState)) {
+            return res.json({
+                success: true,
+                count: 0,
+                trending: [],
+                location: { city: userCity, state: userState },
+                message: `No vendors found in ${userCity || ""} ${userState || ""}`.trim()
+            });
+        }
+
+        const vendorIds = vendors.map(v => v._id);
+
         // Trending logic: High rating + High rating count + Available
         // Sorting by ratingCount and rating to find "popular" items
         const trendingFoods = await Food.find({
             available: true,
+            ...(vendorIds.length > 0 ? { vendor: { $in: vendorIds } } : {})
         })
             .populate({
                 path: "vendor",
@@ -47,6 +92,7 @@ export const getTrendingSearch = async (req, res) => {
             success: true,
             count: formattedFoods.length,
             trending: formattedFoods,
+            location: { city: userCity, state: userState }
         });
     } catch (error) {
         console.error("GetTrendingSearch Error:", error);
@@ -56,3 +102,4 @@ export const getTrendingSearch = async (req, res) => {
         });
     }
 };
+
