@@ -38,7 +38,7 @@ router.patch("/address/update-address", auth, updateAddress);
 router.delete("/address/delete-address", auth, deleteAddress);
 
 
-router.post('/logout', auth, logoutUser)
+router.post('/logout', logoutUser)
 router.get('/reviews', auth, getUserReviews)
 router.delete('/delete', auth, deleteAccount)
 
