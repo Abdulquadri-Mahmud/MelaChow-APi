@@ -11,6 +11,7 @@ import {
 import { getVendorLocations, getLegacyVendorLocations } from "../../controller/user/getVendorLocations.controller.js";
 import auth from "../../middleware/auth.middleware.js";
 import optionalAuth from "../../middleware/optionalAuth.middleware.js";
+import { getUserWallet } from "../../controller/user/wallet.controller.js";
 
 const router = express.Router();
 
@@ -61,5 +62,6 @@ router.post("/reviews", auth, createReview);
  * @access Private
  */
 router.get("/my-reviews", auth, getUserReviews);
+router.get("/my-wallet", auth, getUserWallet);
 
 export default router;
