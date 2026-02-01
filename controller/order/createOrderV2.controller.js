@@ -6,6 +6,8 @@ import Food from "../../model/vendor/food.model.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 import Wallet from "../../model/wallet/wallet.mode.js";
 import Admin from "../../model/Admin/admin.model.js";
+import discountService from "../../services/discount.service.js";
+import Discount from "../../model/discount/Discount.js";
 
 /**
  * ========================================
@@ -258,6 +260,7 @@ export const createOrderV2 = async ({
     vendorDeliveryFees,
     deliveryAddress,
     phone,
+    discountCode = null, // Optional discount code
     paymentReference = null,
     paymentStatus = "pending",
     orderId = null
@@ -410,7 +413,44 @@ export const createOrderV2 = async ({
             }
         }
 
-        const total = Number((subtotal + totalDeliveryFee).toFixed(2));
+        // --- DISCOUNT LOGIC ---
+        let finalTotal = Number((subtotal + totalDeliveryFee).toFixed(2));
+        let appliedDiscount = null;
+
+        if (discountCode) {
+            // Determine vendor context (if single vendor order)
+            const uniqueVendorIds = [...new Set(normalizedItems.map(i => String(i.restaurantId)))];
+            const vendorIdContext = uniqueVendorIds.length === 1 ? uniqueVendorIds[0] : null;
+
+            // Validate
+            const validation = await discountService.validateDiscount(discountCode, {
+                userId,
+                vendorId: vendorIdContext,
+                subtotal: subtotal,
+                items: normalizedItems
+            });
+
+            if (!validation.valid) {
+                 throw new Error(`Discount Error: ${validation.error}`);
+            }
+
+            // Calculate
+            const calculation = discountService.calculateFinalPrice(
+                { subtotal, deliveryFee: totalDeliveryFee, items: normalizedItems },
+                validation.discount
+            );
+
+            finalTotal = calculation.total;
+            appliedDiscount = calculation.appliedDiscount;
+
+            // Increment discount usage
+            await Discount.updateOne(
+                { code: validation.discount.code },
+                { $inc: { usageCount: 1 } }
+            ).session(session);
+        }
+
+        const total = finalTotal;
 
         /* ========================================
          * 5️⃣ CREATE ORDER (ALWAYS PENDING FIRST)
@@ -434,6 +474,7 @@ export const createOrderV2 = async ({
                     subtotal: Number(subtotal.toFixed(2)),
                     deliveryFee: Number(totalDeliveryFee.toFixed(2)),
                     total,
+                    appliedDiscount, // Persist discount snapshot
                     paymentReference,
                     paymentStatus: "pending", // ✅ Always start as pending
                     orderStatus: "pending"
@@ -671,7 +712,7 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
  */
 export const createOrderController = async (req, res) => {
     try {
-        const { items, vendorDeliveryFees, deliveryAddress, phone } = req.body;
+        const { items, vendorDeliveryFees, deliveryAddress, phone, discountCode } = req.body;
         const userId = req.userId; // From auth middleware
 
         const order = await createOrderV2({
@@ -680,6 +721,7 @@ export const createOrderController = async (req, res) => {
             vendorDeliveryFees,
             deliveryAddress,
             phone,
+            discountCode, // Pass discount code
             paymentStatus: "pending" // Will be updated after payment
         });
 

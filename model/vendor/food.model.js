@@ -67,13 +67,22 @@ const foodSchema = new mongoose.Schema(
     // 4️⃣ Stock Control (Global)
     stock: { type: Number, default: Infinity },
 
-    // 5️⃣ Discounts
+    // 5️⃣ Discounts (Legacy - Simple Price Reduction)
     discount: {
       active: { type: Boolean, default: false },
       percentage: { type: Number, default: 0 },
       flatAmount: { type: Number, default: 0 },
       expiresAt: { type: Date },
     },
+
+    // 🆕 Advanced Discounts (Linked to Discount Model)
+    // Vendors can link robust coupons/campaigns here for visibility
+    activePromotions: [
+      {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Discount",
+      }
+    ],
 
     // 6️⃣ Order Popularity
     orderCount: { type: Number, default: 0 },

@@ -93,6 +93,16 @@ const orderSchema = new mongoose.Schema(
       required: true, // sum of vendorDeliveryFees
     },
 
+    // 🏷️ Discount Snapshot (Added for Discount System)
+    appliedDiscount: {
+      code: String,
+      type: String, // FIXED / PERCENTAGE
+      amount: Number,
+      scope: String,
+      label: String,
+      _id: false // No ID needed for subdocument
+    },
+
     total: { type: Number, required: true },
 
     orderId: {
