@@ -94,7 +94,7 @@ export const getRecommendations = async (req, res) => {
 
         promises.timeOfDay = Food.find(timeQuery)
             .select("name slug price images vendor rating ratingCount tags")
-            .populate("vendor", "storeName logo address")
+            .populate("vendor", "storeName logo address openingHours flatRateDeliveryFee")
             .sort({ ratingCount: -1 }) // simple popularity sort
             .limit(6)
             .lean();
@@ -112,7 +112,7 @@ export const getRecommendations = async (req, res) => {
         }
         promises.underrated = Food.find(underratedQuery)
             .select("name slug price images vendor rating ratingCount")
-            .populate("vendor", "storeName logo address")
+            .populate("vendor", "storeName logo address openingHours flatRateDeliveryFee")
             .sort({ rating: -1 }) // Sort by quality, even if few ratings
             .limit(6)
             .lean();
@@ -130,7 +130,7 @@ export const getRecommendations = async (req, res) => {
             }
             promises.weatherBased = Food.find(weatherQuery)
                 .select("name slug price images vendor")
-                .populate("vendor", "storeName logo address")
+                .populate("vendor", "storeName logo address openingHours flatRateDeliveryFee")
                 .limit(6)
                 .lean();
         } else {
@@ -195,7 +195,9 @@ export const getRecommendations = async (req, res) => {
                         vendor: {
                             storeName: "$vendor.storeName",
                             logo: "$vendor.logo",
-                            address: "$vendor.address"
+                            address: "$vendor.address",
+                            openingHours: "$vendor.openingHours",
+                            flatRateDeliveryFee: "$vendor.flatRateDeliveryFee"
                         }
                     }
                 }
@@ -218,7 +220,7 @@ export const getRecommendations = async (req, res) => {
         }
         promises.budgetFriendly = Food.find(budgetQuery)
             .select("name slug price images vendor")
-            .populate("vendor", "storeName logo address")
+            .populate("vendor", "storeName logo address openingHours flatRateDeliveryFee")
             .sort({ price: 1 }) // Cheapest first
             .limit(8)
             .lean();

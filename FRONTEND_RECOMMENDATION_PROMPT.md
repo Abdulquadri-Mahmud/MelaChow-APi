@@ -88,4 +88,5 @@ I need you to integrate the new personalized recommendations API onto the homepa
 
 **Data Shape**:
 The API returns a `meta` object with labels/location and a `data` object with the arrays. Use `meta.timeOfDayLabel` to customize the greeting.
+**Note**: Each food item's `vendor` object now includes `openingHours` and `flatRateDeliveryFee`. Use these to display delivery cost and open/closed status.
 ```
