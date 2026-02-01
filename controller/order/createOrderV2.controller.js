@@ -261,6 +261,7 @@ export const createOrderV2 = async ({
     deliveryAddress,
     phone,
     discountCode = null, // Optional discount code
+    useWallet = false,   // Optional wallet payment
     paymentReference = null,
     paymentStatus = "pending",
     orderId = null
@@ -431,7 +432,7 @@ export const createOrderV2 = async ({
             });
 
             if (!validation.valid) {
-                 throw new Error(`Discount Error: ${validation.error}`);
+                throw new Error(`Discount Error: ${validation.error}`);
             }
 
             // Calculate
@@ -453,15 +454,42 @@ export const createOrderV2 = async ({
         const total = finalTotal;
 
         /* ========================================
-         * 5️⃣ CREATE ORDER (ALWAYS PENDING FIRST)
-         * ========================================
-         * ✅ CORRECT FLOW: Order created BEFORE payment verification
-         * - paymentStatus starts as "pending"
-         * - Will be updated to "paid" after payment verification
-         * - VendorOrders created AFTER payment (in updateOrderAfterPayment)
+         * 5️⃣ WALLET PAYMENT (OPTIONAL)
          * ======================================== */
+        // Calculate Order ID early for reference
         const finalOrderId = orderId || generateOrderId();
+        let finalPaymentStatus = paymentStatus; // "pending" by default
+        let finalPaymentRef = paymentReference;
 
+        if (useWallet) {
+            const userWallet = await Wallet.findOne({ ownerId: userId, ownerModel: "User" }).session(session);
+
+            if (!userWallet) {
+                throw new Error("Wallet not found. Please fund your wallet first.");
+            }
+
+            if (userWallet.balance < total) {
+                throw new Error(`Insufficient wallet balance (₦${userWallet.balance}) for total ₦${total}`);
+            }
+
+            // Deduct from wallet
+            userWallet.balance -= total;
+            userWallet.transactions.push({
+                type: "debit",
+                amount: total,
+                description: `Payment for order ${finalOrderId}`,
+                date: new Date()
+            });
+            await userWallet.save({ session });
+
+            // Mark as successful payment
+            finalPaymentStatus = "paid";
+            finalPaymentRef = `WALLET_${finalOrderId}`;
+        }
+
+        /* ========================================
+         * 6️⃣ CREATE ORDER
+         * ======================================== */
         const [order] = await Order.create(
             [
                 {
@@ -475,8 +503,8 @@ export const createOrderV2 = async ({
                     deliveryFee: Number(totalDeliveryFee.toFixed(2)),
                     total,
                     appliedDiscount, // Persist discount snapshot
-                    paymentReference,
-                    paymentStatus: "pending", // ✅ Always start as pending
+                    paymentReference: finalPaymentRef,
+                    paymentStatus: finalPaymentStatus, // "paid" if wallet used
                     orderStatus: "pending"
                 }
             ],
@@ -712,7 +740,7 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
  */
 export const createOrderController = async (req, res) => {
     try {
-        const { items, vendorDeliveryFees, deliveryAddress, phone, discountCode } = req.body;
+        const { items, vendorDeliveryFees, deliveryAddress, phone, discountCode, useWallet } = req.body;
         const userId = req.userId; // From auth middleware
 
         const order = await createOrderV2({
@@ -721,9 +749,20 @@ export const createOrderController = async (req, res) => {
             vendorDeliveryFees,
             deliveryAddress,
             phone,
-            discountCode, // Pass discount code
-            paymentStatus: "pending" // Will be updated after payment
+            discountCode,
+            useWallet, // Pass wallet flag
+            paymentStatus: "pending" // Will be updated if wallet used
         });
+
+        // 🔄 If paid via wallet, fulfill immediately (Vendor Orders, Wallets)
+        if (order.paymentStatus === "paid") {
+            const fulfilledOrder = await updateOrderAfterPayment(order._id);
+            return res.status(201).json({
+                success: true,
+                message: "Order created and paid successfully",
+                order: fulfilledOrder
+            });
+        }
 
         return res.status(201).json({
             success: true,

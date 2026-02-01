@@ -55,7 +55,6 @@ router.get("/trending", optionalAuth, getTrendingSearch);
 router.post("/reviews", auth, createReview);
 
 
-
 /**
  * @description Get all reviews by the logged-in user
  * @route GET /api/user/my-reviews
