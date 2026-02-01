@@ -52,7 +52,7 @@ export const initiateWalletFunding = async (req, res) => {
                 email: email || req.user?.email, // Fallback to authenticated user email
                 amount: Math.round(amount * 100), // Kobo
                 reference,
-                callback_url: process.env.CALL_BACK_URL,
+                callback_url: process.env.FUND_WALLET_CALL_BACK_URL,
                 metadata: {
                     userId,
                     type: "wallet_funding"
