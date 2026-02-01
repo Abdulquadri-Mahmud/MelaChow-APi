@@ -81,7 +81,7 @@ app.use(helmet({
       scriptSrc: ["'self'", "https://grub-dash-frontend-xi.vercel.app"],
       styleSrc: ["'self'", "'unsafe-inline'"], // Required for inline styles
       imgSrc: ["'self'", "data:", "https:"], // Allow external images
-      connectSrc: ["'self'", "https://grub-dash-frontend-xi.vercel.app"],
+      connectSrc: ["'self'", "https://grub-dash-frontend-xi.vercel.app", "https://grub-dash-api.vercel.app"],
       fontSrc: ["'self'", "data:"],
       objectSrc: ["'none'"],
       upgradeInsecureRequests: [],
