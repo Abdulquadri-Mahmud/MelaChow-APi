@@ -11,7 +11,7 @@ import {
 import { getVendorLocations, getLegacyVendorLocations } from "../../controller/user/getVendorLocations.controller.js";
 import auth from "../../middleware/auth.middleware.js";
 import optionalAuth from "../../middleware/optionalAuth.middleware.js";
-import { getUserWallet } from "../../controller/user/wallet.controller.js";
+import { getUserWallet, initiateWalletFunding, verifyWalletFunding } from "../../controller/user/wallet.controller.js";
 
 const router = express.Router();
 
@@ -62,5 +62,7 @@ router.post("/reviews", auth, createReview);
  */
 router.get("/my-reviews", auth, getUserReviews);
 router.get("/my-wallet", auth, getUserWallet);
+router.post("/wallet/fund", auth, initiateWalletFunding);
+router.get("/wallet/verify/:reference", auth, verifyWalletFunding);
 
 export default router;
