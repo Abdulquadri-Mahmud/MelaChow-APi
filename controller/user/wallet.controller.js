@@ -49,9 +49,10 @@ export const initiateWalletFunding = async (req, res) => {
         const response = await axios.post(
             "https://api.paystack.co/transaction/initialize",
             {
-                email: email || req.userEmail, // Assuming middleware adds userEmail or passed from body
+                email: email || req.user?.email, // Fallback to authenticated user email
                 amount: Math.round(amount * 100), // Kobo
                 reference,
+                callback_url: process.env.CALL_BACK_URL,
                 metadata: {
                     userId,
                     type: "wallet_funding"
