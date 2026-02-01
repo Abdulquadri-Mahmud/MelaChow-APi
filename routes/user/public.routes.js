@@ -12,6 +12,10 @@ import { getVendorLocations, getLegacyVendorLocations } from "../../controller/u
 import auth from "../../middleware/auth.middleware.js";
 import optionalAuth from "../../middleware/optionalAuth.middleware.js";
 import { getUserWallet, initiateWalletFunding, verifyWalletFunding } from "../../controller/user/wallet.controller.js";
+import {
+    getProfile, updateProfile,
+    addAddress, getUserAddresses, updateAddress, deleteAddress
+} from "../../controller/user/user.controller.js";
 
 const router = express.Router();
 
@@ -64,5 +68,13 @@ router.get("/my-reviews", auth, getUserReviews);
 router.get("/my-wallet", auth, getUserWallet);
 router.post("/wallet/fund", auth, initiateWalletFunding);
 router.get("/wallet/verify/:reference", auth, verifyWalletFunding);
+
+// Profile & Address Aliases (Cleaner URLs)
+router.get("/profile", auth, getProfile);
+router.patch("/profile", auth, updateProfile);
+router.get("/address", auth, getUserAddresses); // or /my-address
+router.post("/address", auth, addAddress);
+router.patch("/address", auth, updateAddress);
+router.delete("/address", auth, deleteAddress);
 
 export default router;
