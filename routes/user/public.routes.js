@@ -8,6 +8,7 @@ import {
     getVendorReviews,
     getUserReviews
 } from "../../controller/user/user.reviews.controller.js";
+import { getVendorForUserDisplay } from "../../controller/vendor/vendor.controller.js";
 import { getVendorLocations, getLegacyVendorLocations } from "../../controller/user/getVendorLocations.controller.js";
 import auth from "../../middleware/auth.middleware.js";
 import optionalAuth from "../../middleware/optionalAuth.middleware.js";
@@ -43,6 +44,13 @@ router.get("/vendors", getAllVendors);
  * @access Private
  */
 router.get("/vendors/nearby", auth, getNearbyVendorsForUser);
+
+/**
+ * @description Get vendor by ID or Slug
+ * @route GET /api/user/vendors/:id
+ * @access Public
+ */
+router.get("/vendors/:id", getVendorForUserDisplay);
 
 /**
  * @description Get trending searches (location-aware if authenticated)

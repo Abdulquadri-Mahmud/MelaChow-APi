@@ -34,8 +34,6 @@ const validateChoiceGroups = (food, selectedChoices) => {
             );
         }
 
-
-
         // Validate each choice exists and get price
         for (const selection of groupSelections) {
             const option = group.options.find(o => o.name === selection.name);

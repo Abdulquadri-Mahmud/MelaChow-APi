@@ -1,34 +1,40 @@
 /**
  * ========================================
- * iOS-Safe Cookie Configuration
+ * Cross-Domain Cookie Configuration (iOS-Compatible)
  * ========================================
  * 
- * Context:
- * - Backend: https://grub-dash-api.vercel.app
- * - Frontend: Proxies requests through its own domain (e.g., /api/*)
- * - iOS Safari/PWAs: Block third-party cookies aggressively
+ * Critical for iOS Safari when:
+ * - Backend domain ≠ Frontend domain
+ * - Using CORS for cross-origin requests
  * 
- * Solution:
- * - Use SameSite=Lax (first-party cookies)
- * - Cookies are set through frontend proxy, making them same-site
- * - No cross-site restrictions needed
- * 
- * Why this works:
- * 1. Frontend proxies all API requests through its domain
- * 2. Browser sees cookie as first-party (same domain as page)
- * 3. iOS Safari allows first-party cookies
- * 4. Secure + HttpOnly ensures security
- * 
+ * Requirements:
+ * 1. SameSite=None (allows cross-site cookies)
+ * 2. Secure=true (REQUIRED with SameSite=None)
+ * 3. Proper CORS credentials configuration
  * ========================================
  */
 export const sendTokenCookie = (res, token, cookieName = "token") => {
   const isProduction = process.env.NODE_ENV === "production";
 
   res.cookie(cookieName, token, {
-    httpOnly: true,           // ✅ Prevents XSS attacks
-    secure: isProduction,     // ✅ HTTPS only in production
-    sameSite: "lax",          // ✅ First-party cookie (iOS-safe)
-    maxAge: 7 * 24 * 60 * 60 * 1000, // ✅ 7 days
-    path: "/",                // ✅ Available across all routes
+    httpOnly: true,           
+    secure: true,             // ✅ MUST be true for SameSite=None (even in dev!)
+    sameSite: "none",         // ✅ Required for cross-domain cookies
+    maxAge: 7 * 24 * 60 * 60 * 1000, 
+    path: "/",
+    // Optional but recommended for cross-domain:
+    domain: isProduction ? ".vercel.app" : undefined, // Allows subdomains
   });
 };
+
+// **IMPORTANT:** With `SameSite=None`, you **must** use HTTPS even in development, or use a tool like `ngrok` for testing.
+
+// ---
+
+// ### **Solution B: True Same-Site Setup (Requires Infrastructure Change)**
+
+// If you want to keep `SameSite=Lax`, you need BOTH frontend and backend on the same root domain:
+
+// Frontend: https://app.yourdomain.com
+// Backend:  https://api.yourdomain.com
+// Cookie domain: .yourdomain.com

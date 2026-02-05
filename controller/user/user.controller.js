@@ -599,7 +599,6 @@ export const logoutUser = async (req, res) => {
   }
 };
 
-
 export const deleteAccount = async (req, res) => {
   try {
     const userId = req.userId; // set by auth middleware

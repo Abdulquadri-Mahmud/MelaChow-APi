@@ -159,7 +159,7 @@ export const getVendorById = async (req, res) => {
 // ✅ Get vendor and its foods for user display
 export const getVendorForUserDisplay = async (req, res) => {
   try {
-    const { id } = req.query;
+    const id = req.params.id || req.query.id;
 
     // Find vendor by ObjectId or slug
     const vendor = await vendorModel
