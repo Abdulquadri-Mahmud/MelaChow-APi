@@ -582,7 +582,7 @@ export const logoutUser = async (req, res) => {
     res.clearCookie("token", {
       httpOnly: true,
       secure: isProduction,
-      sameSite: isProduction ? "none" : "lax",
+      sameSite: "lax", // ✅ Match sendTokenCookie (iOS-safe)
       path: "/",
     });
 

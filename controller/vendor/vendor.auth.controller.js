@@ -208,7 +208,7 @@ export const vendorLogout = async (req, res) => {
     res.clearCookie("vendorToken", {
       httpOnly: true,
       secure: isProduction,
-      sameSite: isProduction ? "none" : "lax",
+      sameSite: "lax", // ✅ Match sendTokenCookie (iOS-safe)
       path: "/",
     });
 

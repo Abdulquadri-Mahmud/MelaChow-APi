@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import axios from "axios";
 import crypto from "crypto";
 import Order from "../../model/order/Order.js";
 import VendorOrder from "../../model/vendor/VendorOrder.js";
@@ -764,9 +765,45 @@ export const createOrderController = async (req, res) => {
             });
         }
 
+
+
+        // 🔄 PAYSTACK FLOW (Default)
+        // If not paid by wallet, initialize Paystack
+        const reference = `PSK_${order.orderId}_${Date.now()}`;
+        order.paymentReference = reference;
+        await order.save();
+
+        const userEmail = req.user?.email || req.body.email;
+        if (!userEmail) throw new Error("Email required for payment initialization");
+
+        // Initialize Paystack
+        const paystackResponse = await axios.post(
+            "https://api.paystack.co/transaction/initialize",
+            {
+                email: userEmail,
+                amount: Math.round(order.total * 100),
+                reference,
+                callback_url: process.env.CALL_BACK_URL,
+                metadata: {
+                    orderId: order.orderId,
+                    userId: String(userId)
+                }
+            },
+            {
+                headers: {
+                    Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+                    "Content-Type": "application/json"
+                }
+            }
+        );
+
+        const data = paystackResponse.data?.data;
+
         return res.status(201).json({
             success: true,
-            message: "Order created successfully",
+            message: "Order created successfully. Proceed to payment.",
+            authorization_url: data.authorization_url,
+            reference: data.reference,
             order
         });
 
@@ -774,7 +811,7 @@ export const createOrderController = async (req, res) => {
         console.error("Create Order Controller Error:", error);
         return res.status(400).json({
             success: false,
-            message: error.message || "Failed to create order"
+            message: error.response?.data?.message || error.message || "Failed to create order"
         });
     }
 };
