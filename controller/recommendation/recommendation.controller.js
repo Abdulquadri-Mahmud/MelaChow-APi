@@ -93,7 +93,7 @@ export const getRecommendations = async (req, res) => {
         }
 
         promises.timeOfDay = Food.find(timeQuery)
-            .select("name slug price images vendor rating ratingCount tags")
+            .select("name slug price deliveryFee images vendor rating ratingCount tags")
             .populate("vendor", "storeName logo address openingHours flatRateDeliveryFee")
             .sort({ ratingCount: -1 }) // simple popularity sort
             .limit(6)
@@ -111,7 +111,7 @@ export const getRecommendations = async (req, res) => {
             underratedQuery.vendor = { $in: locationVendorIds };
         }
         promises.underrated = Food.find(underratedQuery)
-            .select("name slug price images vendor rating ratingCount")
+            .select("name slug price deliveryFee images vendor rating ratingCount")
             .populate("vendor", "storeName logo address openingHours flatRateDeliveryFee")
             .sort({ rating: -1 }) // Sort by quality, even if few ratings
             .limit(6)
@@ -129,7 +129,7 @@ export const getRecommendations = async (req, res) => {
                 weatherQuery.vendor = { $in: locationVendorIds };
             }
             promises.weatherBased = Food.find(weatherQuery)
-                .select("name slug price images vendor")
+                .select("name slug price deliveryFee images vendor rating ratingCount")
                 .populate("vendor", "storeName logo address openingHours flatRateDeliveryFee")
                 .limit(6)
                 .lean();
@@ -189,6 +189,7 @@ export const getRecommendations = async (req, res) => {
                         name: "$food.name",
                         slug: "$food.slug",
                         price: "$food.price",
+                        deliveryFee: "$food.deliveryFee",
                         images: "$food.images",
                         rating: "$food.rating",
                         ratingCount: "$food.ratingCount",
@@ -219,7 +220,7 @@ export const getRecommendations = async (req, res) => {
             budgetQuery.vendor = { $in: locationVendorIds };
         }
         promises.budgetFriendly = Food.find(budgetQuery)
-            .select("name slug price images vendor")
+            .select("name slug price deliveryFee images vendor")
             .populate("vendor", "storeName logo address openingHours flatRateDeliveryFee")
             .sort({ price: 1 }) // Cheapest first
             .limit(8)
