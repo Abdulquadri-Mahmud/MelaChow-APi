@@ -34,11 +34,7 @@ const validateChoiceGroups = (food, selectedChoices) => {
             );
         }
 
-        if (groupSelections.length > group.maxSelect) {
-            throw new Error(
-                `${food.name}: "${group.name}" allows maximum ${group.maxSelect} selection(s)`
-            );
-        }
+
 
         // Validate each choice exists and get price
         for (const selection of groupSelections) {
