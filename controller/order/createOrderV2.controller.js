@@ -506,6 +506,12 @@ export const createOrderV2 = async ({
             { session }
         );
 
+        // 7️⃣ ATOMIC FULFILLMENT (For Wallet Payments)
+        // If paid by wallet, we MUST fulfill (distribute funds) immediately within the same transaction
+        if (useWallet) {
+            await createVendorOrdersAndUpdateWallets(order, session);
+        }
+
         await session.commitTransaction();
         session.endSession();
 
@@ -750,12 +756,12 @@ export const createOrderController = async (req, res) => {
         });
 
         // 🔄 If paid via wallet, fulfill immediately (Vendor Orders, Wallets)
+        // 🔄 If paid via wallet, it's already fulfilled atomically in createOrderV2
         if (order.paymentStatus === "paid") {
-            const fulfilledOrder = await updateOrderAfterPayment(order._id);
             return res.status(201).json({
                 success: true,
                 message: "Order created and paid successfully",
-                order: fulfilledOrder
+                order: order
             });
         }
 
