@@ -42,7 +42,6 @@ const allowedOrigins = [
   'https://grub-dash-frontend-xi.vercel.app',
   'http://localhost:3000',
   'http://localhost:3001', // Backend URL
-  'http://localhost:5173', // Vite default
   process.env.CLIENT_URL, // Dynamic from env
 ];
 
@@ -53,7 +52,7 @@ const corsOptions = {
 
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
-    } else {
+    } else {-
       console.log('⚠️ Blocked by CORS:', origin);
       callback(new Error('Not allowed by CORS'));
     }
