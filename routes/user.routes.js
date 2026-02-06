@@ -1,3 +1,4 @@
+import express from 'express';
 import {
     forgotPassword, getProfile,
     login, resetPassword, signup,
