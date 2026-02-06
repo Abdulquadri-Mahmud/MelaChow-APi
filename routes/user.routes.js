@@ -1,8 +1,6 @@
-// routes/user.routes.js
-import express from 'express';
 import {
     forgotPassword, getProfile,
-    login, logoutUser, resetPassword, signup,
+    login, resetPassword, signup,
     updateProfile, resendOtp,
     addAddress,
     updateAddress,
@@ -10,6 +8,7 @@ import {
     deleteAccount,
     getUserAddresses,
 } from '../controller/user/user.controller.js';
+import { logout } from '../controller/auth.controller.js';
 import { getUserReviews } from '../controller/user/user.reviews.controller.js';
 import auth from '../middleware/auth.middleware.js';
 import { verifyOTP } from '../controller/otp.verification.controller.js';
@@ -38,7 +37,7 @@ router.patch("/address/update-address", auth, updateAddress);
 router.delete("/address/delete-address", auth, deleteAddress);
 
 
-router.post('/logout', logoutUser)
+router.post('/logout', logout)
 router.get('/reviews', auth, getUserReviews)
 router.delete('/delete', auth, deleteAccount)
 

@@ -3,38 +3,40 @@
  * Cross-Domain Cookie Configuration (iOS-Compatible)
  * ========================================
  * 
- * Critical for iOS Safari when:
- * - Backend domain ≠ Frontend domain
- * - Using CORS for cross-origin requests
+ * Setup for cross-origin deployments:
+ * - Frontend: grub-dash-frontend-xi.vercel.app
+ * - Backend: grub-dash-api.vercel.app
  * 
- * Requirements:
+ * Requirements for iOS Safari:
  * 1. SameSite=None (allows cross-site cookies)
  * 2. Secure=true (REQUIRED with SameSite=None)
- * 3. Proper CORS credentials configuration
+ * 3. NO domain attribute (let browser handle it)
+ * 4. HttpOnly=true (prevents XSS)
+ * 
  * ========================================
  */
 export const sendTokenCookie = (res, token, cookieName = "token") => {
   const isProduction = process.env.NODE_ENV === "production";
 
-  res.cookie(cookieName, token, {
-    httpOnly: true,           
-    secure: true,             // ✅ MUST be true for SameSite=None (even in dev!)
-    sameSite: "none",         // ✅ Required for cross-domain cookies
-    maxAge: 7 * 24 * 60 * 60 * 1000, 
-    path: "/",
-    // Optional but recommended for cross-domain:
-    domain: isProduction ? ".vercel.app" : undefined, // Allows subdomains
-  });
+  const cookieOptions = {
+    httpOnly: true,              // ✅ Prevents XSS attacks
+    secure: true,                // ✅ HTTPS only (required for SameSite=None)
+    sameSite: "none",            // ✅ Required for cross-domain cookies
+    maxAge: 7 * 24 * 60 * 60 * 1000, // ✅ 7 days
+    path: "/",                   // ✅ Available across all routes
+    // ❌ NO domain attribute - let the browser set it automatically
+    // Setting domain to ".vercel.app" is rejected by browsers for security
+  };
+
+  res.cookie(cookieName, token, cookieOptions);
+
+  // ✅ Debug logging (development only)
+  if (!isProduction) {
+    console.log('[sendTokenCookie] Cookie set:', {
+      cookieName,
+      tokenLength: token?.length,
+      options: cookieOptions,
+      willExpireAt: new Date(Date.now() + cookieOptions.maxAge).toISOString(),
+    });
+  }
 };
-
-// **IMPORTANT:** With `SameSite=None`, you **must** use HTTPS even in development, or use a tool like `ngrok` for testing.
-
-// ---
-
-// ### **Solution B: True Same-Site Setup (Requires Infrastructure Change)**
-
-// If you want to keep `SameSite=Lax`, you need BOTH frontend and backend on the same root domain:
-
-// Frontend: https://app.yourdomain.com
-// Backend:  https://api.yourdomain.com
-// Cookie domain: .yourdomain.com
