@@ -54,18 +54,16 @@ const corsOptions = {
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
-      console.log('Blocked by CORS:', origin); // Log blocked origins for debugging
+      console.log('⚠️ Blocked by CORS:', origin);
       callback(new Error('Not allowed by CORS'));
     }
   },
-  optionsSuccessStatus: 200,
-  credentials: true, // Allow cookies to be sent
+  credentials: true,               // ✅ CRITICAL: Allow cookies
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
-  // iOS Safari compatibility: Explicitly expose Set-Cookie header
-  exposedHeaders: ["Set-Cookie"],
-  // Increase preflight cache to reduce OPTIONS requests (iOS optimization)
-  maxAge: 86400, // 24 hours
+  optionsSuccessStatus: 200,
+  maxAge: 86400,                   // 24 hours preflight cache
+  // ❌ NO exposedHeaders - Set-Cookie is automatically handled
 };
 
 app.use(cors(corsOptions));
@@ -101,6 +99,26 @@ app.use((req, res, next) => {
 app.use(morgan('dev')); // Logging
 app.use(express.json()); // Parse JSON body
 app.use(cookieParser()); // Parse cookies
+
+// -----------------------------
+// Cookie & Auth Debug Middleware (Development Only)
+// -----------------------------
+if (process.env.NODE_ENV !== 'production') {
+  app.use((req, res, next) => {
+    // Only log auth-related requests to reduce noise
+    if (req.path.includes('/auth/') || req.path.includes('/profile')) {
+      console.log('\n[Request Debug]', {
+        method: req.method,
+        path: req.path,
+        origin: req.headers.origin,
+        hasCookies: !!req.cookies && Object.keys(req.cookies).length > 0,
+        cookies: req.cookies,
+        hasAuthHeader: !!req.headers.authorization,
+      });
+    }
+    next();
+  });
+}
 
 // Rate limiting
 app.use(rateLimit({

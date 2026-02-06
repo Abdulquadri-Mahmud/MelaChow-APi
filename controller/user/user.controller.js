@@ -385,13 +385,34 @@ export const resendOtp = async (req, res, next) => {
 
 // Assumes you have an errorHandler() middleware/util to forward errors, or just res.status(...)
 export const getProfile = async (req, res) => {
+  // ✅ Debug logging
+  if (process.env.NODE_ENV !== 'production') {
+    console.log('[getProfile] Request received:', {
+      hasCookie: !!req.cookies?.token,
+      hasAuthHeader: !!req.headers.authorization,
+      userId: req.userId, // Note: middleware sets userId, not user object usually in this codebase
+    });
+  }
+
   try {
     const userId = req.userId;
     const user = await User.findById(userId).select("-password -otp -otpExpires");
-    if (!user) return res.status(404).json({ status: false, message: "User not found" });
+
+    if (!user) {
+      return res.status(404).json({ status: false, message: "User not found" });
+    }
+
+    // ✅ Debug logging before sending response
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('[getProfile] Sending user data:', {
+        userId: user._id,
+        email: user.email,
+      });
+    }
+
     res.json({ status: true, user });
   } catch (err) {
-    console.error(err);
+    console.error('[getProfile] Error:', err);
     res.status(500).json({ status: false, message: "Failed to fetch profile", error: err.message });
   }
 };
