@@ -171,6 +171,24 @@ app.use("/api/transactions", transactionRoutes);
 // Orders
 app.use("/api/orders", orderRoutes);
 
+// ✅ DEBUG: Log registered auth routes (dev only)
+if (process.env.NODE_ENV !== 'production') {
+  console.log('\n🔍 Registered User Auth Routes (/api/user/auth):');
+  // Note: userRoutes is a router, so we can inspect its stack
+  // Since it's mounted, we can only see paths relative to mount point
+  userRoutes.stack.forEach(layer => {
+    if (layer.route) {
+      Object.keys(layer.route.methods).forEach(method => {
+        console.log(`   ${method.toUpperCase()} ${layer.route.path}`);
+      });
+    } else if (layer.name === 'router') { // Sub-router (userAuthRoutes)
+      console.log('   (Sub-router mounted)');
+      // We can't easily iterate sub-router stack here without direct reference, 
+      // but basic routes show up.
+    }
+  });
+}
+
 // -----------------------------
 // Global Error Handler
 // -----------------------------
