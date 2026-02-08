@@ -16,9 +16,27 @@ const vendorSchema = new Schema(
     phone: { type: String, required: true, index: true }, // Vendor phone number
 
     // Auth details
-    password: { type: String, required: false, select: false }, // Hidden (not returned by default)
-    otp: { type: String },
-    otpExpires: { type: Date },
+    // ✅ Enhanced password field with select: false (don't return in queries by default)
+    password: {
+      type: String,
+      required: false,  // Optional during migration
+      minlength: 8,
+      select: false     // Don't return password in queries by default
+    },
+
+    // ✅ NEW: Password reset fields
+    resetPasswordToken: { type: String, select: false },
+    resetPasswordExpires: { type: Date, select: false },
+
+    // ✅ NEW: Login security fields
+    loginAttempts: { type: Number, default: 0 },
+    lockUntil: { type: Date },
+    lastLogin: { type: Date },
+
+    // ✅ OTP fields (keep for registration/reset) - also hidden by default
+    otp: { type: String, select: false },
+    otpExpires: { type: Date, select: false },
+
     // Store info
     storeName: { type: String, required: true, trim: true, index: true }, // Vendor shop name
     storeSlug: { type: String, unique: true, sparse: true }, // Auto-generated URL slug from storeName
@@ -150,8 +168,12 @@ vendorSchema.virtual("fullAddress").get(function () {
 // 1️⃣ Hash password before saving (only when changed)
 vendorSchema.pre("save", async function (next) {
   if (!this.isModified("password")) return next(); // Skip if password not changed
+
+  // Don't hash if password is being cleared
+  if (!this.password) return next();
+
   try {
-    const salt = await bcrypt.genSalt(10);
+    const salt = await bcrypt.genSalt(12); // Strength 12 to match User model
     this.password = await bcrypt.hash(this.password, salt); // Hash password
     next();
   } catch (err) {
@@ -176,7 +198,59 @@ vendorSchema.pre("save", function (next) {
 
 // Compare plain password with hashed one
 vendorSchema.methods.comparePassword = async function (candidatePassword) {
-  return bcrypt.compare(candidatePassword, this.password);
+  try {
+    if (!this.password) {
+      throw new Error('No password set for this vendor');
+    }
+    return await bcrypt.compare(candidatePassword, this.password);
+  } catch (error) {
+    throw new Error('Password comparison failed: ' + error.message);
+  }
+};
+
+/**
+ * Check if account is currently locked
+ * @returns {boolean} - True if account is locked
+ */
+vendorSchema.methods.isLocked = function () {
+  return !!(this.lockUntil && this.lockUntil > Date.now());
+};
+
+/**
+ * Increment login attempts and lock account if threshold reached
+ * @returns {Promise} - Update promise
+ */
+vendorSchema.methods.incLoginAttempts = async function () {
+  // Reset attempts if lock has expired
+  if (this.lockUntil && this.lockUntil < Date.now()) {
+    return this.updateOne({
+      $set: { loginAttempts: 1 },
+      $unset: { lockUntil: 1 }
+    });
+  }
+
+  const updates = { $inc: { loginAttempts: 1 } };
+
+  // Lock account after 5 failed attempts (15 minutes lockout)
+  const maxAttempts = 5;
+  const lockTime = 15 * 60 * 1000; // 15 minutes
+
+  if (this.loginAttempts + 1 >= maxAttempts) {
+    updates.$set = { lockUntil: Date.now() + lockTime };
+  }
+
+  return this.updateOne(updates);
+};
+
+/**
+ * Reset login attempts on successful login
+ * @returns {Promise} - Update promise
+ */
+vendorSchema.methods.resetLoginAttempts = async function () {
+  return this.updateOne({
+    $set: { loginAttempts: 0, lastLogin: Date.now() },
+    $unset: { lockUntil: 1 }
+  });
 };
 
 // Return public profile (hides sensitive data)

@@ -13,9 +13,18 @@ import { logout } from '../controller/auth.controller.js';
 import { getUserReviews } from '../controller/user/user.reviews.controller.js';
 import auth from '../middleware/auth.middleware.js';
 import { verifyOTP } from '../controller/otp.verification.controller.js';
+import userAuthRoutes from './user/user.auth.routes.js'; // ✅ NEW: Password-based auth routes
 
 const router = express.Router();
 
+// ============================================
+// ✅ NEW: Password-Based Authentication Routes
+// ============================================
+router.use('/auth', userAuthRoutes);
+
+// ============================================
+// LEGACY: OTP-Based Authentication (Keep for migration)
+// ============================================
 router.post('/signup', signup);
 // router.post('/verify-email', verifyEmail);
 // router.post('/verify-otp', verifyOtp);

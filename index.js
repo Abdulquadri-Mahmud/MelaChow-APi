@@ -13,6 +13,7 @@ import vendorRoutes from './routes/vendor/vendor.routes.js';
 import foodRoutes from './routes/vendor/food.routes.js';
 import vendorAuthRoutes from './routes/vendor/vendor.auth.routes.js';
 import adminRoutes from './routes/Admin/admin.routes.js';
+import adminAuthRoutes from './routes/Admin/admin.auth.routes.js'; // ✅ NEW: Admin Auth Routes
 import userManagementRoutes from './routes/Admin/user_management_route/user.management.routes.js';
 import ReviewsRoutes from './routes/user/user.reviews.routes.js';
 import publicReviewsRoutes from './routes/user/public.reviews.routes.js';
@@ -52,8 +53,9 @@ const corsOptions = {
 
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
-    } else {-
-      console.log('⚠️ Blocked by CORS:', origin);
+    } else {
+      -
+        console.log('⚠️ Blocked by CORS:', origin);
       callback(new Error('Not allowed by CORS'));
     }
   },
@@ -157,6 +159,7 @@ app.use("/api/orders", vendorOrderRoutes);
 
 // Admin routes
 app.use('/api/admin', adminRoutes);
+app.use('/api/admin/auth', adminAuthRoutes); // ✅ NEW: Admin Auth
 app.use('/api/admin/discounts', adminDiscountRoutes); // Discount Management
 app.use('/api/admin/user', userManagementRoutes);
 app.use('/api/admin/user/reviews', ReviewsRoutes);
