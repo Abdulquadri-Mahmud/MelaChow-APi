@@ -20,7 +20,7 @@ const router = express.Router();
 // ============================================
 // ✅ NEW: Password-Based Authentication Routes
 // ============================================
-router.use('/auth', userAuthRoutes);
+router.use('/', userAuthRoutes);
 
 // ============================================
 // LEGACY: OTP-Based Authentication (Keep for migration)
