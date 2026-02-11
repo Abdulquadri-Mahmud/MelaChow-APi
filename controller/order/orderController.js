@@ -9,6 +9,7 @@ import Food from "../../model/vendor/food.model.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 import Admin from "../../model/Admin/admin.model.js";
 import { createOrderV2, updateOrderAfterPayment } from "./createOrderV2.controller.js";
+import pushNotificationService from "../../services/pushNotificationService.js";
 
 // Helper function to normalize metadata from Paystack (Object or String)
 // Kept for backward compatibility if needed, though pendingOrder strategy supercedes it.
@@ -1073,6 +1074,25 @@ export const updateVendorOrderStatus = async (req, res) => {
     vendorOrder.orderStatus = status;
     await vendorOrder.save();
 
+    // Send push notification to user (non-blocking)
+    const populatedOrder = await VendorOrder.findById(vendorOrderId)
+      .populate({
+        path: 'userOrderId',
+        select: 'userId orderId'
+      })
+      .populate('restaurantId', 'storeName');
+
+    if (populatedOrder && populatedOrder.userOrderId && populatedOrder.userOrderId.userId) {
+      pushNotificationService.sendOrderStatusUpdate(
+        populatedOrder.userOrderId.userId,
+        {
+          orderId: populatedOrder.userOrderId.orderId,
+          status: status,
+          restaurantName: populatedOrder.restaurantId.storeName
+        }
+      ).catch(err => console.error('Push notification error:', err));
+    }
+
     return res.json({
       message: "Vendor order status updated",
       vendorOrder,
@@ -1099,6 +1119,25 @@ export const completeVendorOrder = async (req, res) => {
 
     vendorOrder.orderStatus = "completed";
     await vendorOrder.save();
+
+    // Send push notification to user (completed)
+    const populatedOrder = await VendorOrder.findById(vendorOrderId)
+      .populate({
+        path: 'userOrderId',
+        select: 'userId orderId'
+      })
+      .populate('restaurantId', 'storeName');
+
+    if (populatedOrder && populatedOrder.userOrderId && populatedOrder.userOrderId.userId) {
+      pushNotificationService.sendOrderStatusUpdate(
+        populatedOrder.userOrderId.userId,
+        {
+          orderId: populatedOrder.userOrderId.orderId,
+          status: "completed",
+          restaurantName: populatedOrder.restaurantId.storeName
+        }
+      ).catch(err => console.error('Push notification error:', err));
+    }
 
     // check if ALL vendor orders for this user order are completed
     const relatedVendorOrders = await VendorOrder.find({

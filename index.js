@@ -28,6 +28,7 @@ import publicLocationRoutes from './routes/location/location.routes.js';
 import { seedCategories } from './config/categorySeed.js';
 import discountRoutes from './routes/user/discount.routes.js';
 import adminDiscountRoutes from './routes/Admin/discount.routes.js';
+import notificationRoutes from './routes/notification.routes.js';
 
 dotenv.config();
 
@@ -150,6 +151,7 @@ app.use('/api/search/food', searchFoodRoutes);
 app.use('/api/categories', categoryRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/locations', publicLocationRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Vendors routes
 app.use("/api/vendors", vendorRoutes);
