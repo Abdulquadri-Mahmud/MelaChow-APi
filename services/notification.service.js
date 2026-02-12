@@ -89,11 +89,13 @@ const NOTIFICATION_CONFIGS = {
  */
 export async function sendNotification(userId, type, data = {}) {
     try {
+        console.log(`📨 Preparing notification for user ${userId}, type: ${type}`);
+
         const config = NOTIFICATION_CONFIGS[type];
 
         if (!config) {
-            console.error(`Unknown notification type: ${type}`);
-            return;
+            console.error(`❌ Unknown notification type: ${type}`);
+            throw new Error(`Unknown notification type: ${type}`);
         }
 
         // Build notification payload
@@ -110,9 +112,23 @@ export async function sendNotification(userId, type, data = {}) {
             data: data.additionalData || {}
         };
 
-        // 1. Save to database
-        const savedNotification = await Notification.create(notificationData);
-        console.log(`✅ Notification saved to database: ${savedNotification._id}`);
+        console.log(`💾 Saving notification to database:`, {
+            userId: notificationData.userId,
+            type: notificationData.type,
+            title: notificationData.title,
+            orderId: notificationData.orderId
+        });
+
+        // 1. Save to database with explicit error handling
+        let savedNotification;
+        try {
+            savedNotification = await Notification.create(notificationData);
+            console.log(`✅ Notification saved successfully: ID ${savedNotification._id}`);
+        } catch (dbError) {
+            console.error('❌ Database save error:', dbError.message);
+            if (dbError.errors) console.error('❌ Validation errors:', dbError.errors);
+            throw new Error(`Failed to save notification: ${dbError.message}`);
+        }
 
         // 2. Emit via WebSocket (Real-time in-app notification)
         try {
@@ -128,6 +144,7 @@ export async function sendNotification(userId, type, data = {}) {
                 createdAt: savedNotification.createdAt,
                 read: false
             });
+            console.log(`✅ WebSocket notification emitted to user ${userId}`);
 
             // 3. Emit unread count update
             const unreadCount = await Notification.countDocuments({
@@ -135,64 +152,71 @@ export async function sendNotification(userId, type, data = {}) {
                 read: false
             });
             emitToUser(userId, 'notification_count_update', { count: unreadCount });
+            console.log(`✅ Unread count updated: ${unreadCount}`);
         } catch (socketError) {
-            console.error('Socket.IO emission error:', socketError.message);
+            console.error('❌ Socket.IO emission error:', socketError.message);
             // Don't fail the notification if Socket.IO fails
         }
 
         // 4. Send push notification to all user's devices
-        const subscriptions = await PushSubscription.find({ userId });
+        try {
+            const subscriptions = await PushSubscription.find({ userId });
 
-        if (subscriptions.length > 0) {
-            const pushPayload = {
-                title: notificationData.title,
-                body: notificationData.body,
-                icon: notificationData.icon,
-                image: notificationData.image,
-                badge: '/icons/badge-72x72.png',
-                type: notificationData.type,
-                orderId: notificationData.orderId,
-                url: notificationData.url,
-                tag: data.orderId ? `order-${data.orderId}` : `notification-${Date.now()}`,
-                requireInteraction: config.requireInteraction,
-                vibrate: config.vibrate || [200, 100, 200],
-                timestamp: Date.now(),
-                data: {
-                    url: notificationData.url,
-                    orderId: notificationData.orderId,
+            if (subscriptions.length > 0) {
+                console.log(`📱 Sending push to ${subscriptions.length} device(s)`);
+
+                const pushPayload = {
+                    title: notificationData.title,
+                    body: notificationData.body,
+                    icon: notificationData.icon,
+                    image: notificationData.image,
+                    badge: '/icons/badge-72x72.png',
                     type: notificationData.type,
-                    ...data.additionalData
-                }
-            };
-
-            // Send to all devices
-            const pushPromises = subscriptions.map(async (sub) => {
-                try {
-                    await webpush.sendNotification(
-                        sub.subscription,
-                        JSON.stringify(pushPayload)
-                    );
-                    console.log(`✅ Push sent to device: ${sub.deviceType}`);
-                } catch (error) {
-                    console.error(`❌ Failed to send push to ${sub.deviceType}:`, error.message);
-
-                    // If subscription is invalid/expired, remove it
-                    if (error.statusCode === 410 || error.statusCode === 404) {
-                        await PushSubscription.findByIdAndDelete(sub._id);
-                        console.log(`🗑️ Removed expired subscription for ${sub.deviceType}`);
+                    orderId: notificationData.orderId,
+                    url: notificationData.url,
+                    tag: data.orderId ? `order-${data.orderId}` : `notification-${Date.now()}`,
+                    requireInteraction: config.requireInteraction,
+                    vibrate: config.vibrate || [200, 100, 200],
+                    timestamp: Date.now(),
+                    data: {
+                        url: notificationData.url,
+                        orderId: notificationData.orderId,
+                        type: notificationData.type,
+                        ...data.additionalData
                     }
-                }
-            });
+                };
 
-            await Promise.allSettled(pushPromises);
-        } else {
-            console.log(`ℹ️ No push subscriptions found for user: ${userId}`);
+                const pushPromises = subscriptions.map(async (sub) => {
+                    try {
+                        await webpush.sendNotification(
+                            sub.subscription,
+                            JSON.stringify(pushPayload)
+                        );
+                        console.log(`✅ Push sent to device: ${sub.deviceType}`);
+                    } catch (error) {
+                        console.error(`❌ Failed to send push to ${sub.deviceType}:`, error.message);
+
+                        if (error.statusCode === 410 || error.statusCode === 404) {
+                            await PushSubscription.findByIdAndDelete(sub._id);
+                            console.log(`🗑️ Removed expired subscription for ${sub.deviceType}`);
+                        }
+                    }
+                });
+
+                await Promise.allSettled(pushPromises);
+            } else {
+                console.log(`ℹ️ No push subscriptions found for user: ${userId}`);
+            }
+        } catch (pushError) {
+            console.error('❌ Push notification error:', pushError.message);
+            // Don't fail if push fails
         }
 
         return savedNotification;
 
     } catch (error) {
-        console.error('Notification service error:', error);
+        console.error('❌ Notification service critical error:', error.message);
+        console.error('❌ Stack:', error.stack);
         throw error;
     }
 }
@@ -202,6 +226,8 @@ export async function sendNotification(userId, type, data = {}) {
  * Convenience wrapper for order-related notifications
  */
 export async function sendOrderNotification(userId, orderId, status, orderDetails = {}) {
+    console.log(`📦 Sending order notification: User ${userId}, Order ${orderId}, Status: ${status}`);
+
     const typeMap = {
         'placed': 'order_placed',
         'pending': 'order_placed',
@@ -223,9 +249,11 @@ export async function sendOrderNotification(userId, orderId, status, orderDetail
     const type = typeMap[status.toLowerCase()];
 
     if (!type) {
-        console.error(`Unknown order status: ${status}`);
-        return;
+        console.error(`❌ Unknown order status: ${status}`);
+        throw new Error(`Unknown order status: ${status}`);
     }
+
+    console.log(`✅ Mapped status "${status}" to notification type "${type}"`);
 
     return sendNotification(userId, type, {
         orderId,

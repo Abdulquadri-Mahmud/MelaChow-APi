@@ -516,6 +516,32 @@ export const createOrderV2 = async ({
         session.endSession();
 
         console.log(`✅ Order created successfully: ${finalOrderId} (status: pending)`);
+
+        // 🔔 Send order placed notification AFTER transaction commits
+        try {
+            const { sendOrderNotification } = await import('../../services/notification.service.js');
+
+            // Get restaurant names for the notification
+            const restaurantIds = [...new Set(normalizedItems.map(item => String(item.restaurantId)))];
+            const vendors = await Vendor.find({ _id: { $in: restaurantIds } }).select('storeName');
+            const restaurantNames = vendors.map(v => v.storeName).join(', ');
+
+            await sendOrderNotification(userId, finalOrderId, 'pending', {
+                restaurantName: restaurantNames,
+                totalAmount: total,
+                itemCount: normalizedItems.length,
+                items: normalizedItems.map(item => ({
+                    name: item.variant.name,
+                    quantity: item.quantity
+                }))
+            });
+
+            console.log(`✅ Order placed notification sent for ${finalOrderId}`);
+        } catch (notifError) {
+            console.error('❌ Failed to send order placed notification:', notifError.message);
+            // Don't throw - notification failure shouldn't block order creation
+        }
+
         return order;
 
     } catch (error) {
@@ -754,6 +780,23 @@ export const createOrderController = async (req, res) => {
             useWallet, // Pass wallet flag
             paymentStatus: "pending" // Will be updated if wallet used
         });
+
+        // 🔔 Send notification for all new orders
+        try {
+            const { sendOrderNotification } = await import('../../services/notification.service.js');
+
+            const restaurantIds = [...new Set(order.items.map(item => String(item.restaurantId)))];
+            const vendors = await Vendor.find({ _id: { $in: restaurantIds } }).select('storeName');
+            const restaurantNames = vendors.map(v => v.storeName).join(', ');
+
+            await sendOrderNotification(userId, order.orderId, order.paymentStatus === 'paid' ? 'confirmed' : 'pending', {
+                restaurantName: restaurantNames,
+                totalAmount: order.total,
+                itemCount: order.items.length
+            });
+        } catch (notifError) {
+            console.error('❌ Notification error:', notifError.message);
+        }
 
         // 🔄 If paid via wallet, fulfill immediately (Vendor Orders, Wallets)
         // 🔄 If paid via wallet, it's already fulfilled atomically in createOrderV2
