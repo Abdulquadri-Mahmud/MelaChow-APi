@@ -210,10 +210,13 @@ export async function sendOrderNotification(userId, orderId, status, orderDetail
         'preparing': 'order_preparing',
         'ready': 'order_ready',
         'ready_for_pickup': 'order_ready',
+        'rider_assigned': 'order_dispatched',
         'dispatched': 'order_dispatched',
         'out_for_delivery': 'order_dispatched',
         'delivered': 'order_delivered',
         'cancelled': 'order_cancelled',
+        'failed': 'order_cancelled',
+        'refunded': 'order_cancelled',
         'completed': 'order_delivered'
     };
 
