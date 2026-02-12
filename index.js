@@ -29,6 +29,9 @@ import { seedCategories } from './config/categorySeed.js';
 import discountRoutes from './routes/user/discount.routes.js';
 import adminDiscountRoutes from './routes/Admin/discount.routes.js';
 import notificationRoutes from './routes/notification.routes.js';
+import socketHealthRoutes from './routes/socket.routes.js';
+import http from 'http';
+import { initializeSocket } from './socket/socketServer.js';
 
 dotenv.config();
 
@@ -152,6 +155,7 @@ app.use('/api/categories', categoryRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/locations', publicLocationRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/socket', socketHealthRoutes);
 
 // Vendors routes
 app.use("/api/vendors", vendorRoutes);
@@ -238,9 +242,26 @@ if (!process.env.VERCEL) {
       // Run seeders (only locally/VPS, avoid on serverless requests)
       await seedCategories();
 
-      app.listen(PORT, () => {
+      // Create HTTP server (CRITICAL: Don't use app.listen directly for Socket.IO)
+      const server = http.createServer(app);
+
+      // Initialize Socket.IO
+      initializeSocket(server);
+
+      server.listen(PORT, () => {
         console.log(`🚀 Server running at http://localhost:${PORT}`);
+        console.log(`🔌 Socket.IO ready for connections`);
       });
+
+      // Graceful shutdown
+      process.on('SIGTERM', () => {
+        console.log('SIGTERM received, closing server...');
+        server.close(() => {
+          console.log('Server closed');
+          process.exit(0);
+        });
+      });
+
     } catch (error) {
       console.error('Failed to connect to MongoDB:', error.message);
       process.exit(1);

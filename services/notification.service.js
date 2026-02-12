@@ -1,6 +1,7 @@
 import Notification from '../model/notification/notification.model.js';
 import webpush from 'web-push';
 import PushSubscription from '../model/notification/pushSubscription.model.js';
+import { emitToUser } from '../socket/socketServer.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -113,7 +114,33 @@ export async function sendNotification(userId, type, data = {}) {
         const savedNotification = await Notification.create(notificationData);
         console.log(`✅ Notification saved to database: ${savedNotification._id}`);
 
-        // 2. Send push notification to all user's devices
+        // 2. Emit via WebSocket (Real-time in-app notification)
+        try {
+            emitToUser(userId, 'new_notification', {
+                _id: savedNotification._id,
+                title: notificationData.title,
+                body: notificationData.body,
+                type: notificationData.type,
+                orderId: notificationData.orderId,
+                url: notificationData.url,
+                icon: notificationData.icon,
+                image: notificationData.image,
+                createdAt: savedNotification.createdAt,
+                read: false
+            });
+
+            // 3. Emit unread count update
+            const unreadCount = await Notification.countDocuments({
+                userId,
+                read: false
+            });
+            emitToUser(userId, 'notification_count_update', { count: unreadCount });
+        } catch (socketError) {
+            console.error('Socket.IO emission error:', socketError.message);
+            // Don't fail the notification if Socket.IO fails
+        }
+
+        // 4. Send push notification to all user's devices
         const subscriptions = await PushSubscription.find({ userId });
 
         if (subscriptions.length > 0) {

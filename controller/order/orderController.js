@@ -10,6 +10,7 @@ import Vendor from "../../model/vendor/vendor.model.js";
 import Admin from "../../model/Admin/admin.model.js";
 import { createOrderV2, updateOrderAfterPayment } from "./createOrderV2.controller.js";
 import { sendOrderNotification } from "../../services/notification.service.js";
+import { emitOrderStatusUpdate } from "../../socket/events/orderEvents.js";
 
 // Helper function to normalize metadata from Paystack (Object or String)
 // Kept for backward compatibility if needed, though pendingOrder strategy supercedes it.
@@ -1074,7 +1075,7 @@ export const updateVendorOrderStatus = async (req, res) => {
     vendorOrder.orderStatus = status;
     await vendorOrder.save();
 
-    // Send push notification to user (non-blocking)
+    // Emit real-time Socket.IO event
     const populatedOrder = await VendorOrder.findById(vendorOrderId)
       .populate({
         path: 'userOrderId',
@@ -1083,6 +1084,24 @@ export const updateVendorOrderStatus = async (req, res) => {
       .populate('restaurantId', 'storeName');
 
     if (populatedOrder && populatedOrder.userOrderId && populatedOrder.userOrderId.userId) {
+      // Emit Socket.IO event for real-time updates
+      try {
+        emitOrderStatusUpdate(
+          {
+            userId: populatedOrder.userOrderId.userId,
+            orderId: populatedOrder.userOrderId.orderId,
+            status: status,
+            restaurantName: populatedOrder.restaurantId.storeName,
+            totalAmount: populatedOrder.userOrderId.total,
+            restaurantId: populatedOrder.restaurantId._id
+          },
+          vendorOrder.orderStatus // previous status
+        );
+      } catch (socketError) {
+        console.error('Socket.IO emission error:', socketError.message);
+      }
+
+      // Send notification (saves to DB + sends push + emits WebSocket notification)
       sendOrderNotification(
         populatedOrder.userOrderId.userId,
         populatedOrder.userOrderId.orderId,
@@ -1122,7 +1141,7 @@ export const completeVendorOrder = async (req, res) => {
     vendorOrder.orderStatus = "completed";
     await vendorOrder.save();
 
-    // Send push notification to user (completed)
+    // Emit real-time Socket.IO event
     const populatedOrder = await VendorOrder.findById(vendorOrderId)
       .populate({
         path: 'userOrderId',
@@ -1131,6 +1150,24 @@ export const completeVendorOrder = async (req, res) => {
       .populate('restaurantId', 'storeName');
 
     if (populatedOrder && populatedOrder.userOrderId && populatedOrder.userOrderId.userId) {
+      // Emit Socket.IO event for real-time updates
+      try {
+        emitOrderStatusUpdate(
+          {
+            userId: populatedOrder.userOrderId.userId,
+            orderId: populatedOrder.userOrderId.orderId,
+            status: "completed",
+            restaurantName: populatedOrder.restaurantId.storeName,
+            totalAmount: populatedOrder.userOrderId.total,
+            restaurantId: populatedOrder.restaurantId._id
+          },
+          vendorOrder.orderStatus // previous status
+        );
+      } catch (socketError) {
+        console.error('Socket.IO emission error:', socketError.message);
+      }
+
+      // Send notification (saves to DB + sends push + emits WebSocket notification)
       sendOrderNotification(
         populatedOrder.userOrderId.userId,
         populatedOrder.userOrderId.orderId,
