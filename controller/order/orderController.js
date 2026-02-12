@@ -1084,34 +1084,45 @@ export const updateVendorOrderStatus = async (req, res) => {
       .populate('restaurantId', 'storeName');
 
     if (populatedOrder && populatedOrder.userOrderId && populatedOrder.userOrderId.userId) {
+      const userId = populatedOrder.userOrderId.userId;
+      const orderId = populatedOrder.userOrderId.orderId;
+      const restaurantName = populatedOrder.restaurantId.storeName;
+
       // Emit Socket.IO event for real-time updates
       try {
         emitOrderStatusUpdate(
           {
-            userId: populatedOrder.userOrderId.userId,
-            orderId: populatedOrder.userOrderId.orderId,
+            userId: userId,
+            orderId: orderId,
             status: status,
-            restaurantName: populatedOrder.restaurantId.storeName,
+            restaurantName: restaurantName,
             totalAmount: populatedOrder.userOrderId.total,
             restaurantId: populatedOrder.restaurantId._id
           },
           vendorOrder.orderStatus // previous status
         );
+        console.log(`✅ Socket.IO event emitted for order ${orderId}`);
       } catch (socketError) {
-        console.error('Socket.IO emission error:', socketError.message);
+        console.error('❌ Socket.IO emission error:', socketError.message);
       }
 
       // Send notification (saves to DB + sends push + emits WebSocket notification)
-      sendOrderNotification(
-        populatedOrder.userOrderId.userId,
-        populatedOrder.userOrderId.orderId,
-        status,
-        {
-          restaurantName: populatedOrder.restaurantId.storeName,
-          totalAmount: populatedOrder.userOrderId.total,
-          items: populatedOrder.items
-        }
-      ).catch(err => console.error('Notification error:', err));
+      try {
+        await sendOrderNotification(
+          userId,
+          orderId,
+          status, // Use the new status
+          {
+            restaurantName: restaurantName,
+            totalAmount: populatedOrder.userOrderId.total,
+            items: populatedOrder.items
+          }
+        );
+        console.log(`✅ Order notification sent successfully for ${orderId} - Status: ${status}`);
+      } catch (notifError) {
+        console.error('❌ Notification send error:', notifError.message);
+        if (notifError.stack) console.error('❌ Stack:', notifError.stack);
+      }
     }
 
     return res.json({
