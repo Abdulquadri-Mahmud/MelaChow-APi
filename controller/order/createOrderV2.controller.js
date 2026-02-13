@@ -781,25 +781,7 @@ export const createOrderController = async (req, res) => {
             paymentStatus: "pending" // Will be updated if wallet used
         });
 
-        // 🔔 Send notification for all new orders
-        try {
-            const { sendOrderNotification } = await import('../../services/notification.service.js');
-
-            const restaurantIds = [...new Set(order.items.map(item => String(item.restaurantId)))];
-            const vendors = await Vendor.find({ _id: { $in: restaurantIds } }).select('storeName');
-            const restaurantNames = vendors.map(v => v.storeName).join(', ');
-
-            await sendOrderNotification(userId, order.orderId, order.paymentStatus === 'paid' ? 'confirmed' : 'pending', {
-                restaurantName: restaurantNames,
-                totalAmount: order.total,
-                itemCount: order.items.length
-            });
-        } catch (notifError) {
-            console.error('❌ Notification error:', notifError.message);
-        }
-
-        // 🔄 If paid via wallet, fulfill immediately (Vendor Orders, Wallets)
-        // 🔄 If paid via wallet, it's already fulfilled atomically in createOrderV2
+        // If paid via wallet, it's already fulfilled atomically in createOrderV2
         if (order.paymentStatus === "paid") {
             return res.status(201).json({
                 success: true,

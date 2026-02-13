@@ -1084,9 +1084,12 @@ export const updateVendorOrderStatus = async (req, res) => {
       .populate('restaurantId', 'storeName');
 
     if (populatedOrder && populatedOrder.userOrderId && populatedOrder.userOrderId.userId) {
-      const userId = populatedOrder.userOrderId.userId;
+      // ✅ CRITICAL FIX: Convert ObjectId to String
+      const userId = String(populatedOrder.userOrderId.userId);
       const orderId = populatedOrder.userOrderId.orderId;
       const restaurantName = populatedOrder.restaurantId.storeName;
+
+      console.log(`🔔 Preparing notification for user ${userId}, order ${orderId}, status: ${status}`);
 
       // Emit Socket.IO event for real-time updates
       try {
@@ -1109,9 +1112,9 @@ export const updateVendorOrderStatus = async (req, res) => {
       // Send notification (saves to DB + sends push + emits WebSocket notification)
       try {
         await sendOrderNotification(
-          userId,
+          userId, // ✅ Now guaranteed to be a String
           orderId,
-          status, // Use the new status
+          status,
           {
             restaurantName: restaurantName,
             totalAmount: populatedOrder.userOrderId.total,
@@ -1121,8 +1124,23 @@ export const updateVendorOrderStatus = async (req, res) => {
         console.log(`✅ Order notification sent successfully for ${orderId} - Status: ${status}`);
       } catch (notifError) {
         console.error('❌ Notification send error:', notifError.message);
-        if (notifError.stack) console.error('❌ Stack:', notifError.stack);
+        console.error('❌ Notification error details:', {
+          userId,
+          orderId,
+          status,
+          error: notifError.stack
+        });
+        // ✅ IMPROVEMENT: Alert admin/monitoring system
+        // TODO: Send alert to monitoring service (e.g., Sentry, Datadog)
       }
+    } else {
+      console.warn(`⚠️ Unable to send notification - missing data for vendorOrderId ${vendorOrderId}`);
+      console.warn(`⚠️ Debug info:`, {
+        hasPopulatedOrder: !!populatedOrder,
+        hasUserOrderId: !!populatedOrder?.userOrderId,
+        hasUserId: !!populatedOrder?.userOrderId?.userId,
+        populatedOrder: JSON.stringify(populatedOrder, null, 2)
+      });
     }
 
     return res.json({
