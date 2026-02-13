@@ -89,6 +89,12 @@ const NOTIFICATION_CONFIGS = {
  */
 export async function sendNotification(userId, type, data = {}) {
     try {
+        // ✅ Validate userId is a String
+        if (!userId || typeof userId !== 'string') {
+            console.error('❌ Invalid userId:', userId, typeof userId);
+            throw new Error('userId must be a valid string');
+        }
+
         console.log(`📨 Preparing notification for user ${userId}, type: ${type}`);
 
         const config = NOTIFICATION_CONFIGS[type];
@@ -127,6 +133,15 @@ export async function sendNotification(userId, type, data = {}) {
         } catch (dbError) {
             console.error('❌ Database save error:', dbError.message);
             if (dbError.errors) console.error('❌ Validation errors:', dbError.errors);
+
+            // ✅ IMPROVEMENT: Log full error details
+            console.error('❌ Full DB Error:', {
+                message: dbError.message,
+                name: dbError.name,
+                code: dbError.code,
+                notificationData
+            });
+
             throw new Error(`Failed to save notification: ${dbError.message}`);
         }
 
@@ -226,7 +241,22 @@ export async function sendNotification(userId, type, data = {}) {
  * Convenience wrapper for order-related notifications
  */
 export async function sendOrderNotification(userId, orderId, status, orderDetails = {}) {
-    console.log(`📦 Sending order notification: User ${userId}, Order ${orderId}, Status: ${status}`);
+    // ✅ CRITICAL: Validate and convert userId to String
+    if (!userId) {
+        console.error('❌ sendOrderNotification: userId is missing');
+        throw new Error('userId is required for sending notifications');
+    }
+
+    // Convert to String if it's an ObjectId
+    const userIdString = String(userId);
+
+    // ✅ Validate orderId
+    if (!orderId) {
+        console.error('❌ sendOrderNotification: orderId is missing');
+        throw new Error('orderId is required for sending notifications');
+    }
+
+    console.log(`📦 Sending order notification: User ${userIdString}, Order ${orderId}, Status: ${status}`);
 
     const typeMap = {
         'placed': 'order_placed',
@@ -255,7 +285,7 @@ export async function sendOrderNotification(userId, orderId, status, orderDetail
 
     console.log(`✅ Mapped status "${status}" to notification type "${type}"`);
 
-    return sendNotification(userId, type, {
+    return sendNotification(userIdString, type, {
         orderId,
         additionalData: orderDetails
     });
