@@ -1050,6 +1050,32 @@ export const updateVendorOrderStatus = async (req, res) => {
     const { vendorOrderId } = req.params;
     const { status } = req.body;
 
+    // ✅ VALIDATION - Log incoming request
+    console.log(`📝 Status update request:`, {
+      vendorId,
+      vendorOrderId,
+      requestedStatus: status
+    });
+
+    // ✅ Validate vendorOrderId exists
+    if (!vendorOrderId) {
+      console.error('❌ Missing vendorOrderId in request');
+      return res.status(400).json({
+        success: false,
+        message: "Vendor Order ID is required"
+      });
+    }
+
+    // ✅ Validate MongoDB ObjectId format (24 hex characters)
+    if (!vendorOrderId.match(/^[0-9a-fA-F]{24}$/)) {
+      console.error('❌ Invalid vendorOrderId format:', vendorOrderId);
+      return res.status(400).json({
+        success: false,
+        message: "Invalid Vendor Order ID format"
+      });
+    }
+
+    // ✅ Validate status
     const allowed = [
       "pending",
       "accepted",
@@ -1060,8 +1086,14 @@ export const updateVendorOrderStatus = async (req, res) => {
     ];
 
     if (!allowed.includes(status)) {
-      return res.status(400).json({ message: "Invalid status" });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid status"
+      });
     }
+
+    // ✅ Find vendor order
+    console.log(`🔍 Searching for VendorOrder: ${vendorOrderId}`);
 
     const vendorOrder = await VendorOrder.findOne({
       _id: vendorOrderId,
@@ -1069,13 +1101,36 @@ export const updateVendorOrderStatus = async (req, res) => {
     });
 
     if (!vendorOrder) {
-      return res.status(404).json({ message: "Vendor order not found" });
+      console.error('❌ Vendor order not found:', vendorOrderId);
+
+      // ✅ Debug: Check if order exists for different vendor
+      const anyVendorOrder = await VendorOrder.findById(vendorOrderId);
+      if (anyVendorOrder) {
+        console.error('⚠️ Order belongs to different vendor');
+        return res.status(403).json({
+          success: false,
+          message: "Access denied to this order"
+        });
+      }
+
+      return res.status(404).json({
+        success: false,
+        message: "Vendor order not found"
+      });
     }
 
+    console.log(`✅ VendorOrder found - Current status: ${vendorOrder.orderStatus}`);
+
+    // ✅ Store previous status
+    const previousStatus = vendorOrder.orderStatus;
+
+    // ✅ Update status
     vendorOrder.orderStatus = status;
     await vendorOrder.save();
 
-    // Emit real-time Socket.IO event
+    console.log(`✅ Status updated: ${previousStatus} → ${status}`);
+
+    // ✅ Populate order for notifications
     const populatedOrder = await VendorOrder.findById(vendorOrderId)
       .populate({
         path: 'userOrderId',
@@ -1084,14 +1139,14 @@ export const updateVendorOrderStatus = async (req, res) => {
       .populate('restaurantId', 'storeName');
 
     if (populatedOrder && populatedOrder.userOrderId && populatedOrder.userOrderId.userId) {
-      // ✅ CRITICAL FIX: Convert ObjectId to String
+      // ✅ CRITICAL: Convert ObjectId to String
       const userId = String(populatedOrder.userOrderId.userId);
       const orderId = populatedOrder.userOrderId.orderId;
       const restaurantName = populatedOrder.restaurantId.storeName;
 
-      console.log(`🔔 Preparing notification for user ${userId}, order ${orderId}, status: ${status}`);
+      console.log(`🔔 Sending notification - User: ${userId}, Order: ${orderId}`);
 
-      // Emit Socket.IO event for real-time updates
+      // Emit Socket.IO event
       try {
         emitOrderStatusUpdate(
           {
@@ -1102,17 +1157,17 @@ export const updateVendorOrderStatus = async (req, res) => {
             totalAmount: populatedOrder.userOrderId.total,
             restaurantId: populatedOrder.restaurantId._id
           },
-          vendorOrder.orderStatus // previous status
+          previousStatus
         );
-        console.log(`✅ Socket.IO event emitted for order ${orderId}`);
+        console.log(`✅ Socket.IO event emitted`);
       } catch (socketError) {
-        console.error('❌ Socket.IO emission error:', socketError.message);
+        console.error('❌ Socket.IO error:', socketError.message);
       }
 
-      // Send notification (saves to DB + sends push + emits WebSocket notification)
+      // Send notification (saves to DB + push + WebSocket)
       try {
         await sendOrderNotification(
-          userId, // ✅ Now guaranteed to be a String
+          userId,
           orderId,
           status,
           {
@@ -1121,35 +1176,30 @@ export const updateVendorOrderStatus = async (req, res) => {
             items: populatedOrder.items
           }
         );
-        console.log(`✅ Order notification sent successfully for ${orderId} - Status: ${status}`);
+        console.log(`✅ Notification sent successfully`);
       } catch (notifError) {
-        console.error('❌ Notification send error:', notifError.message);
-        console.error('❌ Notification error details:', {
-          userId,
-          orderId,
-          status,
-          error: notifError.stack
-        });
-        // ✅ IMPROVEMENT: Alert admin/monitoring system
-        // TODO: Send alert to monitoring service (e.g., Sentry, Datadog)
+        console.error('❌ Notification error:', notifError.message);
+        console.error('❌ Stack:', notifError.stack);
       }
     } else {
-      console.warn(`⚠️ Unable to send notification - missing data for vendorOrderId ${vendorOrderId}`);
-      console.warn(`⚠️ Debug info:`, {
-        hasPopulatedOrder: !!populatedOrder,
-        hasUserOrderId: !!populatedOrder?.userOrderId,
-        hasUserId: !!populatedOrder?.userOrderId?.userId,
-        populatedOrder: JSON.stringify(populatedOrder, null, 2)
-      });
+      console.warn(`⚠️ Cannot send notification - missing order data`);
     }
 
     return res.json({
-      message: "Vendor order status updated",
+      success: true,
+      message: "Order status updated successfully",
       vendorOrder,
+      previousStatus,
+      newStatus: status
     });
   } catch (err) {
-    console.error("Update Vendor Status Error:", err);
-    return res.status(500).json({ message: "Server error" });
+    console.error("❌ Update status error:", err);
+    console.error("❌ Stack:", err.stack);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: err.message
+    });
   }
 };
 

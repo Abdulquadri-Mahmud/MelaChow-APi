@@ -445,9 +445,9 @@ export const getVendorOrders = async (req, res) => {
 // ---------------------------------
 export const getVendorOrderById = async (req, res) => {
   try {
-    const { orderId } = req.params;
+    const { vendorOrderId } = req.params;
 
-    const vendorOrder = await VendorOrder.findById(orderId)
+    const vendorOrder = await VendorOrder.findById(vendorOrderId)
       .populate({
         path: "userOrderId",
         populate: {

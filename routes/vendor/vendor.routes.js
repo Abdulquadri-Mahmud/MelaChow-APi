@@ -9,10 +9,13 @@ import {
     getWalletForVendor,
     getVendorOrders,
     getVendorOrderById,
-    updateVendorOrderStatus,
     restoreVendor,
     updateVendor
 } from "../../controller/vendor/vendor.controller.js";
+import {
+    updateVendorOrderStatus,
+    completeVendorOrder
+} from "../../controller/order/orderController.js";
 import { getVendorReviews } from "../../controller/user/user.reviews.controller.js";
 import vendorAuth from "../../middleware/vendor.middleware.js";
 
@@ -28,8 +31,9 @@ router.get("/get-vendor", vendorAuth, getVendorById);       // Get vendor by ID/
 router.get("/get-wallet", vendorAuth, getWalletForVendor);  // Get vendor wallet
 router.get("/reviews", vendorAuth, getVendorReviews);         // Get vendor reviews
 router.get("/orders", vendorAuth, getVendorOrders);         // Get vendor orders
-router.get("/orders/:orderId", vendorAuth, getVendorOrderById); // Get single vendor order
-router.patch("/orders/:orderId/update", vendorAuth, updateVendorOrderStatus); // Update order status
+router.get("/orders/:vendorOrderId", vendorAuth, getVendorOrderById); // Get single vendor order
+router.patch("/orders/:vendorOrderId/update", vendorAuth, updateVendorOrderStatus); // Update order status
+router.patch("/orders/:vendorOrderId/complete", vendorAuth, completeVendorOrder); // Complete order status
 router.patch("/update-vendor", vendorAuth, updateVendor);        // Update vendor
 router.delete("/delete-vendor", vendorAuth, deleteVendor);     // Soft delete
 router.patch("/restore-vendor", vendorAuth, restoreVendor); // Restore soft-deleted vendor
