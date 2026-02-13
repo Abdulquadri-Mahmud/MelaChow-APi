@@ -447,6 +447,38 @@ export const getVendorOrderById = async (req, res) => {
   try {
     const { vendorOrderId } = req.params;
 
+    // ✅ VALIDATION - Enhanced logging
+    console.log(`📝 Fetching single vendor order:`, {
+      vendorOrderId,
+      vendorOrderIdType: typeof vendorOrderId,
+      vendorOrderIdLength: vendorOrderId?.length
+    });
+
+    // ✅ Validate vendorOrderId exists
+    if (!vendorOrderId) {
+      console.error('❌ Missing vendorOrderId in request');
+      return res.status(400).json({
+        success: false,
+        message: "Vendor Order ID is required"
+      });
+    }
+
+    // ✅ Validate MongoDB ObjectId format (24 hex characters)
+    if (!vendorOrderId.match(/^[0-9a-fA-F]{24}$/)) {
+      console.error('❌ Invalid vendorOrderId format:', {
+        received: vendorOrderId,
+        length: vendorOrderId.length,
+        isHex: /^[0-9a-fA-F]+$/.test(vendorOrderId)
+      });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid Vendor Order ID format. Expected 24-character MongoDB ObjectId.",
+        received: vendorOrderId,
+        receivedLength: vendorOrderId.length,
+        hint: "Make sure you're sending the MongoDB _id from the VendorOrder document, not the user-facing orderId"
+      });
+    }
+
     const vendorOrder = await VendorOrder.findById(vendorOrderId)
       .populate({
         path: "userOrderId",
