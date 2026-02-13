@@ -1050,11 +1050,13 @@ export const updateVendorOrderStatus = async (req, res) => {
     const { vendorOrderId } = req.params;
     const { status } = req.body;
 
-    // ✅ VALIDATION - Log incoming request
+    // ✅ VALIDATION - Enhanced logging
     console.log(`📝 Status update request:`, {
       vendorId,
       vendorOrderId,
-      requestedStatus: status
+      requestedStatus: status,
+      vendorOrderIdType: typeof vendorOrderId,
+      vendorOrderIdLength: vendorOrderId?.length
     });
 
     // ✅ Validate vendorOrderId exists
@@ -1068,10 +1070,17 @@ export const updateVendorOrderStatus = async (req, res) => {
 
     // ✅ Validate MongoDB ObjectId format (24 hex characters)
     if (!vendorOrderId.match(/^[0-9a-fA-F]{24}$/)) {
-      console.error('❌ Invalid vendorOrderId format:', vendorOrderId);
+      console.error('❌ Invalid vendorOrderId format:', {
+        received: vendorOrderId,
+        length: vendorOrderId.length,
+        isHex: /^[0-9a-fA-F]+$/.test(vendorOrderId)
+      });
       return res.status(400).json({
         success: false,
-        message: "Invalid Vendor Order ID format"
+        message: "Invalid Vendor Order ID format. Expected 24-character MongoDB ObjectId.",
+        received: vendorOrderId,
+        receivedLength: vendorOrderId.length,
+        hint: "Make sure you're sending the MongoDB _id from the VendorOrder document, not the user-facing orderId"
       });
     }
 
@@ -1207,6 +1216,40 @@ export const completeVendorOrder = async (req, res) => {
   try {
     const vendorId = req.vendor._id;
     const { vendorOrderId } = req.params;
+
+    // ✅ VALIDATION - Enhanced logging
+    console.log(`📝 Completion request:`, {
+      vendorId,
+      vendorOrderId,
+      requestedStatus: "completed",
+      vendorOrderIdType: typeof vendorOrderId,
+      vendorOrderIdLength: vendorOrderId?.length
+    });
+
+    // ✅ Validate vendorOrderId exists
+    if (!vendorOrderId) {
+      console.error('❌ Missing vendorOrderId in request');
+      return res.status(400).json({
+        success: false,
+        message: "Vendor Order ID is required"
+      });
+    }
+
+    // ✅ Validate MongoDB ObjectId format (24 hex characters)
+    if (!vendorOrderId.match(/^[0-9a-fA-F]{24}$/)) {
+      console.error('❌ Invalid vendorOrderId format:', {
+        received: vendorOrderId,
+        length: vendorOrderId.length,
+        isHex: /^[0-9a-fA-F]+$/.test(vendorOrderId)
+      });
+      return res.status(400).json({
+        success: false,
+        message: "Invalid Vendor Order ID format. Expected 24-character MongoDB ObjectId.",
+        received: vendorOrderId,
+        receivedLength: vendorOrderId.length,
+        hint: "Make sure you're sending the MongoDB _id from the VendorOrder document, not the user-facing orderId"
+      });
+    }
 
     const vendorOrder = await VendorOrder.findOne({
       _id: vendorOrderId,
