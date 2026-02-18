@@ -939,8 +939,14 @@ export const getSingleOrder = async (req, res) => {
       "pending",
       "accepted",
       "preparing",
-      "ready",
+      "ready_for_pickup",
+      "rider_assigned",
+      "out_for_delivery",
+      "delivered",
       "completed",
+      "cancelled",
+      "failed",
+      "refunded",
     ];
     // pick the "highest" status
     let trackingStatus = "pending"; // default
@@ -1032,9 +1038,14 @@ export const getVendorOrdersByStatus = async (req, res) => {
       pending: orders.filter((o) => o.orderStatus === "pending"),
       accepted: orders.filter((o) => o.orderStatus === "accepted"),
       preparing: orders.filter((o) => o.orderStatus === "preparing"),
-      ready: orders.filter((o) => o.orderStatus === "ready"),
+      ready_for_pickup: orders.filter((o) => o.orderStatus === "ready_for_pickup"),
+      rider_assigned: orders.filter((o) => o.orderStatus === "rider_assigned"),
+      out_for_delivery: orders.filter((o) => o.orderStatus === "out_for_delivery"),
+      delivered: orders.filter((o) => o.orderStatus === "delivered"),
       completed: orders.filter((o) => o.orderStatus === "completed"),
       cancelled: orders.filter((o) => o.orderStatus === "cancelled"),
+      failed: orders.filter((o) => o.orderStatus === "failed"),
+      refunded: orders.filter((o) => o.orderStatus === "refunded"),
     };
 
     return res.json(grouped);
@@ -1089,9 +1100,14 @@ export const updateVendorOrderStatus = async (req, res) => {
       "pending",
       "accepted",
       "preparing",
-      "ready",
+      "ready_for_pickup",
+      "rider_assigned",
+      "out_for_delivery",
+      "delivered",
       "completed",
       "cancelled",
+      "failed",
+      "refunded",
     ];
 
     if (!allowed.includes(status)) {
