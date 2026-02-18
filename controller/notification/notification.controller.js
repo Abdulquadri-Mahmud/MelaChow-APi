@@ -88,7 +88,18 @@ export const getNotificationHistory = async (req, res) => {
         const { limit = 100, skip = 0, type, unread } = req.query;
 
         // Build query
-        const query = { userId: req.userId };
+        let query = { userId: req.userId };
+
+        // If restaurantId is provided, fetch notifications for that restaurant too
+        // (Useful for vendors to see store-wide notifications)
+        if (req.query.restaurantId) {
+            query = {
+                $or: [
+                    { userId: req.userId },
+                    { restaurantId: req.query.restaurantId }
+                ]
+            };
+        }
 
         if (type && type !== 'all') {
             if (type === 'orders') {

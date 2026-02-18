@@ -1,7 +1,7 @@
 import Notification from '../model/notification/notification.model.js';
 import webpush from 'web-push';
 import PushSubscription from '../model/notification/pushSubscription.model.js';
-import { emitToUser } from '../socket/socketServer.js';
+import { emitToUser, emitToRestaurant } from '../socket/socketServer.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -68,6 +68,19 @@ const NOTIFICATION_CONFIGS = {
         requireInteraction: true,
         vibrate: [200, 100, 200, 100, 200]
     },
+    vendor_new_order: {
+        title: '🔔 New Order Received!',
+        getBody: (orderId) => `You have a new order #${orderId}. Check your dashboard to start preparing.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: true,
+        vibrate: [300, 100, 300, 100, 300]
+    },
+    vendor_order_cancelled: {
+        title: '⚠️ Order Cancelled',
+        getBody: (orderId) => `Order #${orderId} has been cancelled by the customer.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: true
+    },
     promo: {
         title: '🎁 Special Offer',
         getBody: (message) => message,
@@ -89,10 +102,10 @@ const NOTIFICATION_CONFIGS = {
  */
 export async function sendNotification(userId, type, data = {}) {
     try {
-        // ✅ Validate userId is a String
-        if (!userId || typeof userId !== 'string') {
-            console.error('❌ Invalid userId:', userId, typeof userId);
-            throw new Error('userId must be a valid string');
+        // ✅ Validate userId (Required unless restaurantId is provided)
+        if (!userId && !data.restaurantId) {
+            console.error('❌ Missing recipient: neither userId nor restaurantId provided');
+            throw new Error('Notification must have a recipient (userId or restaurantId)');
         }
 
         console.log(`📨 Preparing notification for user ${userId}, type: ${type}`);
@@ -147,27 +160,45 @@ export async function sendNotification(userId, type, data = {}) {
 
         // 2. Emit via WebSocket (Real-time in-app notification)
         try {
-            emitToUser(userId, 'new_notification', {
-                _id: savedNotification._id,
-                title: notificationData.title,
-                body: notificationData.body,
-                type: notificationData.type,
-                orderId: notificationData.orderId,
-                url: notificationData.url,
-                icon: notificationData.icon,
-                image: notificationData.image,
-                createdAt: savedNotification.createdAt,
-                read: false
-            });
-            console.log(`✅ WebSocket notification emitted to user ${userId}`);
+            if (notificationData.userId) {
+                emitToUser(userId, 'new_notification', {
+                    _id: savedNotification._id,
+                    title: notificationData.title,
+                    body: notificationData.body,
+                    type: notificationData.type,
+                    orderId: notificationData.orderId,
+                    url: notificationData.url,
+                    icon: notificationData.icon,
+                    image: notificationData.image,
+                    createdAt: savedNotification.createdAt,
+                    read: false
+                });
+                console.log(`✅ WebSocket notification emitted to user ${userId}`);
 
-            // 3. Emit unread count update
-            const unreadCount = await Notification.countDocuments({
-                userId,
-                read: false
-            });
-            emitToUser(userId, 'notification_count_update', { count: unreadCount });
-            console.log(`✅ Unread count updated: ${unreadCount}`);
+                // 3. Emit unread count update
+                const unreadCount = await Notification.countDocuments({
+                    userId,
+                    read: false
+                });
+                emitToUser(userId, 'notification_count_update', { count: unreadCount });
+                console.log(`✅ Unread count updated for user: ${unreadCount}`);
+            }
+
+            if (data.restaurantId) {
+                emitToRestaurant(data.restaurantId, 'new_notification', {
+                    _id: savedNotification._id,
+                    title: notificationData.title,
+                    body: notificationData.body,
+                    type: notificationData.type,
+                    orderId: notificationData.orderId,
+                    url: notificationData.url,
+                    icon: notificationData.icon,
+                    image: notificationData.image,
+                    createdAt: savedNotification.createdAt,
+                    read: false
+                });
+                console.log(`✅ WebSocket notification emitted to restaurant ${data.restaurantId}`);
+            }
         } catch (socketError) {
             console.error('❌ Socket.IO emission error:', socketError.message);
             // Don't fail the notification if Socket.IO fails
@@ -289,6 +320,55 @@ export async function sendOrderNotification(userId, orderId, status, orderDetail
         orderId,
         additionalData: orderDetails
     });
+}
+
+/**
+ * Send notification to a vendor/restaurant
+ */
+export async function sendVendorNotification(restaurantId, orderId, type, data = {}) {
+    if (!restaurantId) {
+        console.error('❌ sendVendorNotification: restaurantId is missing');
+        throw new Error('restaurantId is required');
+    }
+
+    const restaurantIdString = String(restaurantId);
+    console.log(`🏪 Sending vendor notification: Restaurant ${restaurantIdString}, Order ${orderId}, Type: ${type}`);
+
+    // We can also try to find the owner's userId to send them a personal notification/push
+    try {
+        const Vendor = (await import('../model/vendor/vendor.model.js')).default;
+        const vendor = await Vendor.findById(restaurantIdString).select('owners');
+
+        if (vendor && vendor.owners && vendor.owners.length > 0) {
+            console.log(`👥 Notifying ${vendor.owners.length} vendor owner(s)`);
+            const promises = vendor.owners.map(ownerId =>
+                sendNotification(String(ownerId), type, {
+                    orderId,
+                    restaurantId: restaurantIdString,
+                    url: `/vendor/orders/${orderId}`,
+                    ...data
+                })
+            );
+            await Promise.allSettled(promises);
+        } else {
+            // If no owners found (maybe restaurant-only account)
+            return sendNotification(null, type, {
+                orderId,
+                restaurantId: restaurantIdString,
+                url: `/vendor/orders/${orderId}`,
+                ...data
+            });
+        }
+    } catch (err) {
+        console.error('❌ Failed to fetch vendor owners for notification:', err.message);
+        // Fallback to restaurant-only notification (no userId)
+        return sendNotification(null, type, {
+            orderId,
+            restaurantId: restaurantIdString,
+            url: `/vendor/orders/${orderId}`,
+            ...data
+        });
+    }
 }
 
 /**

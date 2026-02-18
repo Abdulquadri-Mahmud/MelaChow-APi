@@ -4,7 +4,7 @@ const notificationSchema = new mongoose.Schema({
     userId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
-        required: true,
+        required: false,
         index: true // Index for fast queries by user
     },
     title: {
@@ -26,6 +26,8 @@ const notificationSchema = new mongoose.Schema({
             'order_dispatched',
             'order_delivered',
             'order_cancelled',
+            'vendor_new_order',
+            'vendor_order_cancelled',
             'promo',
             'discount',
             'delivery_nearby',
@@ -38,6 +40,11 @@ const notificationSchema = new mongoose.Schema({
     orderId: {
         type: String,
         sparse: true // Only index non-null values
+    },
+    restaurantId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Vendor',
+        index: true
     },
     url: {
         type: String, // Deep link URL for navigation

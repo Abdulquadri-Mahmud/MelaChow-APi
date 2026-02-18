@@ -9,6 +9,7 @@ import Wallet from "../../model/wallet/wallet.mode.js";
 import Admin from "../../model/Admin/admin.model.js";
 import discountService from "../../services/discount.service.js";
 import Discount from "../../model/discount/Discount.js";
+import { emitNewOrderToRestaurant } from "../../socket/events/orderEvents.js";
 
 /**
  * ========================================
@@ -517,16 +518,18 @@ export const createOrderV2 = async ({
 
         console.log(`✅ Order created successfully: ${finalOrderId} (status: pending)`);
 
-        // 🔔 Send order placed notification AFTER transaction commits
+        // 🔔 Send notifications AFTER transaction commits
         try {
-            const { sendOrderNotification } = await import('../../services/notification.service.js');
+            const { sendOrderNotification, sendVendorNotification } = await import('../../services/notification.service.js');
 
+            // 1. Notify Customer
             // Get restaurant names for the notification
             const restaurantIds = [...new Set(normalizedItems.map(item => String(item.restaurantId)))];
             const vendors = await Vendor.find({ _id: { $in: restaurantIds } }).select('storeName');
             const restaurantNames = vendors.map(v => v.storeName).join(', ');
 
-            await sendOrderNotification(userId, finalOrderId, 'pending', {
+            const customerStatus = order.paymentStatus === 'paid' ? 'accepted' : 'pending';
+            await sendOrderNotification(userId, finalOrderId, customerStatus, {
                 restaurantName: restaurantNames,
                 totalAmount: total,
                 itemCount: normalizedItems.length,
@@ -536,9 +539,27 @@ export const createOrderV2 = async ({
                 }))
             });
 
-            console.log(`✅ Order placed notification sent for ${finalOrderId}`);
+            // 2. Notify Vendors (only if paid/accepted)
+            if (order.paymentStatus === 'paid') {
+                for (const restaurantId of restaurantIds) {
+                    // Send persistent notification
+                    await sendVendorNotification(restaurantId, finalOrderId, 'vendor_new_order', {
+                        customerName: `${req.user?.firstname || ''} ${req.user?.lastname || ''}`.trim() || 'Customer',
+                        totalAmount: total,
+                        items: normalizedItems.filter(i => String(i.restaurantId) === String(restaurantId))
+                    });
+
+                    // Emit real-time order event for dashboard
+                    emitNewOrderToRestaurant({
+                        ...order.toObject(),
+                        restaurantId // Specify which restaurant this broadcast is for
+                    });
+                }
+            }
+
+            console.log(`✅ Notifications sent for order ${finalOrderId}`);
         } catch (notifError) {
-            console.error('❌ Failed to send order placed notification:', notifError.message);
+            console.error('❌ Failed to send notifications:', notifError.message);
             // Don't throw - notification failure shouldn't block order creation
         }
 
@@ -748,6 +769,42 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
         session.endSession();
 
         console.log(`✅ Order ${order.orderId} updated to paid`);
+
+        // 🔔 Send notifications AFTER transaction commits
+        try {
+            const { sendOrderNotification, sendVendorNotification } = await import('../../services/notification.service.js');
+            const Vendor = (await import('../../model/vendor/vendor.model.js')).default;
+
+            const restaurantIds = [...new Set(order.items.map(item => String(item.restaurantId)))];
+            const vendorsForNotif = await Vendor.find({ _id: { $in: restaurantIds } }).select('storeName');
+            const restaurantNames = vendorsForNotif.map(v => v.storeName).join(', ');
+
+            // 1. Notify Customer
+            await sendOrderNotification(order.userId, order.orderId, 'accepted', {
+                restaurantName: restaurantNames,
+                totalAmount: order.total
+            });
+
+            // 2. Notify Vendors
+            for (const restaurantId of restaurantIds) {
+                // Persistent notification
+                await sendVendorNotification(restaurantId, order.orderId, 'vendor_new_order', {
+                    totalAmount: order.total,
+                    items: order.items.filter(i => String(i.restaurantId) === String(restaurantId))
+                });
+
+                // Real-time dashboard event
+                emitNewOrderToRestaurant({
+                    ...order.toObject(),
+                    restaurantId
+                });
+            }
+
+            console.log(`✅ Real-time notifications sent for verified order ${order.orderId}`);
+        } catch (notifError) {
+            console.error('❌ Failed to send notifications after payment:', notifError.message);
+        }
+
         return order;
 
     } catch (error) {
