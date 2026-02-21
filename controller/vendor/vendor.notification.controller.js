@@ -41,10 +41,27 @@ export const unsubscribeVendor = async (req, res) => {
 
 export const getVendorNotifications = async (req, res) => {
     try {
-        const { limit = 50, skip = 0 } = req.query;
+        const { limit = 50, skip = 0, type, unread } = req.query;
         const vendorId = req.vendor._id;
 
-        const notifications = await Notification.find({ restaurantId: vendorId })
+        // Build query
+        let query = { restaurantId: vendorId };
+
+        if (type && type !== 'all') {
+            if (type === 'orders') {
+                query.type = { $regex: 'order_', $options: 'i' };
+            } else if (type === 'system') {
+                query.type = { $in: ['system', 'account_update'] };
+            } else {
+                query.type = type;
+            }
+        }
+
+        if (unread === 'true') {
+            query.read = false;
+        }
+
+        const notifications = await Notification.find(query)
             .sort({ createdAt: -1 })
             .limit(parseInt(limit))
             .skip(parseInt(skip));
@@ -54,8 +71,100 @@ export const getVendorNotifications = async (req, res) => {
             read: false
         });
 
-        res.json({ success: true, notifications, unreadCount });
+        const total = await Notification.countDocuments(query);
+
+        res.json({
+            success: true,
+            notifications,
+            unreadCount,
+            total,
+            hasMore: total > (parseInt(skip) + notifications.length)
+        });
     } catch (error) {
         res.status(500).json({ message: 'Failed to fetch messages', error: error.message });
+    }
+};
+
+/**
+ * Get count of unread vendor notifications
+ */
+export const getVendorUnreadCount = async (req, res) => {
+    try {
+        const vendorId = req.vendor._id;
+        const count = await Notification.countDocuments({
+            restaurantId: vendorId,
+            read: false
+        });
+
+        res.json({ success: true, count });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Failed to get unread count', error: error.message });
+    }
+};
+
+/**
+ * Mark single vendor notification as read
+ */
+export const markVendorAsRead = async (req, res) => {
+    try {
+        const vendorId = req.vendor._id;
+        const notification = await Notification.findOneAndUpdate(
+            {
+                _id: req.params.id,
+                restaurantId: vendorId
+            },
+            { read: true },
+            { new: true }
+        );
+
+        if (!notification) {
+            return res.status(404).json({ success: false, message: 'Notification not found' });
+        }
+
+        res.json({ success: true, notification });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Failed to update notification', error: error.message });
+    }
+};
+
+/**
+ * Mark all vendor notifications as read
+ */
+export const markAllVendorAsRead = async (req, res) => {
+    try {
+        const vendorId = req.vendor._id;
+        const result = await Notification.updateMany(
+            { restaurantId: vendorId, read: false },
+            { read: true }
+        );
+
+        res.json({
+            success: true,
+            message: 'All vendor notifications marked as read',
+            modifiedCount: result.modifiedCount
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Failed to update notifications', error: error.message });
+    }
+};
+
+/**
+ * Delete a single vendor notification
+ */
+export const deleteVendorNotification = async (req, res) => {
+    try {
+        const vendorId = req.vendor._id;
+        const notification = await Notification.findOneAndDelete({
+            _id: req.params.id,
+            restaurantId: vendorId
+        });
+
+        if (!notification) {
+            return res.status(404).json({ success: false, message: 'Notification not found' });
+        }
+
+        res.json({ success: true, message: 'Notification deleted' });
+    } catch (error) {
+        res.status(500).json({ success: false, message: 'Failed to delete notification', error: error.message });
     }
 };

@@ -112,7 +112,7 @@ app.use(cookieParser()); // Parse cookies
 if (process.env.NODE_ENV !== 'production') {
   app.use((req, res, next) => {
     // Only log auth-related requests to reduce noise
-    if (req.path.includes('/auth/') || req.path.includes('/profile') || req.path.includes('/notifications')) {
+    if (req.path.includes('/auth/') || req.path.includes('/profile') || req.path.includes('notifications')) {
       console.log('\n[Request Debug]', {
         method: req.method,
         path: req.path,
