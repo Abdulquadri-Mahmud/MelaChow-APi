@@ -136,7 +136,7 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
             }),
             icon: data.icon || config.icon,
             image: data.image,
-            url: data.url || (data.orderId ? (role === 'vendor' ? `/vendors/orders/${data.orderDatabaseId || data.orderId}` : `/profile/orders/${data.orderId}`) : '/notifications'),
+            url: data.url || (data.orderId ? (role === 'vendor' || role === 'vendors' ? `/vendors/orders/${data.orderDatabaseId || data.orderId}` : `/profile/orders/${data.orderId}`) : '/notifications'),
             orderId: data.orderId,
             read: false,
             data: data.additionalData || {}
@@ -380,7 +380,7 @@ export async function sendVendorNotification(restaurantId, orderId, type, data =
         customerName: data.customerName,
         location: data.location,
         restaurantId: restaurantIdString,
-        url: `/vendor/orders/${data.orderDatabaseId || orderId}`,
+        url: `/vendors/orders/${data.orderDatabaseId || orderId}`,
         ...data
     }, 'vendor');
 
@@ -395,7 +395,7 @@ export async function sendVendorNotification(restaurantId, orderId, type, data =
                 sendNotification(String(ownerId), type, {
                     orderId,
                     restaurantId: restaurantIdString,
-                    url: `/vendor/orders/${orderId}`,
+                    url: `/vendors/orders/${data.orderDatabaseId || orderId}`,
                     ...data
                 }, 'user')
             );

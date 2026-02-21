@@ -27,6 +27,47 @@ function normalizePaystackMetadata(rawMetadata) {
   return rawMetadata;
 }
 
+/**
+ * =======================
+ * HELPER: Synchronize Parent Order Status
+ * =======================
+ * Updates the main Order document status based on the statuses of all its VendorOrders.
+ * This ensures that when a vendor updates their portion of an order, 
+ * the overall order status visible to the customer is updated.
+ */
+const syncParentOrderStatus = async (userOrderId) => {
+  try {
+    const vendorOrders = await VendorOrder.find({ userOrderId });
+    if (!vendorOrders.length) return;
+
+    const statuses = vendorOrders.map(vo => vo.orderStatus);
+
+    let finalStatus = "pending";
+
+    // 1. Single Vendor Case: Just mirror the status
+    if (vendorOrders.length === 1) {
+      finalStatus = vendorOrders[0].orderStatus;
+    }
+    // 2. Multi-vendor Logic (Aggregate Status)
+    else {
+      if (statuses.every(s => s === "completed")) finalStatus = "completed";
+      else if (statuses.every(s => s === "delivered")) finalStatus = "delivered";
+      else if (statuses.includes("out_for_delivery")) finalStatus = "out_for_delivery";
+      else if (statuses.includes("rider_assigned")) finalStatus = "rider_assigned";
+      else if (statuses.includes("ready_for_pickup")) finalStatus = "ready_for_pickup";
+      else if (statuses.includes("preparing")) finalStatus = "preparing";
+      else if (statuses.includes("accepted")) finalStatus = "accepted";
+      else if (statuses.every(s => s === "cancelled")) finalStatus = "cancelled";
+      else if (statuses.includes("pending")) finalStatus = "pending";
+    }
+
+    await Order.findByIdAndUpdate(userOrderId, { orderStatus: finalStatus });
+    console.log(`🔄 Synced Parent Order ${userOrderId} status to: ${finalStatus}`);
+  } catch (err) {
+    console.error(`❌ Failed to sync parent order status:`, err.message);
+  }
+};
+
 // =======================
 // HELPER: Validate Availability & Stock
 // =======================
@@ -1153,6 +1194,9 @@ export const updateVendorOrderStatus = async (req, res) => {
     vendorOrder.orderStatus = status;
     await vendorOrder.save();
 
+    // ✅ Sync parent order status
+    await syncParentOrderStatus(vendorOrder.userOrderId);
+
     console.log(`✅ Status updated: ${previousStatus} → ${status}`);
 
     // ✅ Populate order for notifications
@@ -1318,20 +1362,8 @@ export const completeVendorOrder = async (req, res) => {
       ).catch(err => console.error('Notification error:', err));
     }
 
-    // check if ALL vendor orders for this user order are completed
-    const relatedVendorOrders = await VendorOrder.find({
-      userOrderId: vendorOrder.userOrderId,
-    });
-
-    const allCompleted = relatedVendorOrders.every(
-      (o) => o.orderStatus === "completed"
-    );
-
-    if (allCompleted) {
-      await Order.findByIdAndUpdate(vendorOrder.userOrderId, {
-        orderStatus: "completed",
-      });
-    }
+    // Sync parent order status rigorously
+    await syncParentOrderStatus(vendorOrder.userOrderId);
 
     return res.json({
       message: "Vendor order completed",
