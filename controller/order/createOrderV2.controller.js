@@ -509,8 +509,9 @@ export const createOrderV2 = async ({
 
         // 7️⃣ ATOMIC FULFILLMENT (For Wallet Payments)
         // If paid by wallet, we MUST fulfill (distribute funds) immediately within the same transaction
+        let vendorOrderMapping = {};
         if (useWallet) {
-            await createVendorOrdersAndUpdateWallets(order, session);
+            vendorOrderMapping = await createVendorOrdersAndUpdateWallets(order, session);
         }
 
         await session.commitTransaction();
@@ -543,9 +544,10 @@ export const createOrderV2 = async ({
             // 2. Notify Vendors (only if paid/accepted)
             if (order.paymentStatus === 'paid') {
                 for (const restaurantId of restaurantIds) {
+                    const vendorOrderId = vendorOrderMapping[restaurantId];
                     // Send persistent notification
                     await sendVendorNotification(restaurantId, finalOrderId, 'vendor_new_order', {
-                        orderDatabaseId: order._id,
+                        orderDatabaseId: vendorOrderId || order._id,
                         customerName: `${req.user?.firstname || ''} ${req.user?.lastname || ''}`.trim() || 'A customer',
                         location: order.deliveryAddress?.addressLine || 'specified location',
                         totalAmount: total,
@@ -606,8 +608,11 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
 
     const vendorIds = Object.keys(vendorItemsMap);
 
+    const vendorOrderMapping = {};
+
     // Process each vendor
     for (const vendorId of vendorIds) {
+        // ... (lines 611-631)
         const vendorItems = vendorItemsMap[vendorId];
         const vendorSubtotal = vendorItems.reduce(
             (sum, item) => sum + item.price * item.quantity,
@@ -626,6 +631,7 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
 
         if (existingVendorOrder) {
             console.log(`⚠️ VendorOrder already exists for vendor ${vendorId}, order ${order.orderId}`);
+            vendorOrderMapping[vendorId] = existingVendorOrder._id;
             continue;
         }
 
@@ -652,7 +658,10 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
             { session }
         );
 
+        vendorOrderMapping[vendorId] = vendorOrder._id;
+
         // Update vendor stats
+        // ... (rest of the stats/wallet logic)
         await Vendor.findByIdAndUpdate(
             vendorId,
             {
@@ -689,7 +698,7 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
         await vendorWallet.save({ session });
     }
 
-    // Update admin wallet
+    // Update admin wallet (lines 693-725)
     const totalCommission = vendorIds.reduce((sum, vendorId) => {
         const vendorSubtotal = vendorItemsMap[vendorId].reduce(
             (s, item) => s + item.price * item.quantity,
@@ -725,6 +734,7 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
     }
 
     console.log(`✅ VendorOrders and wallets updated for Order ${order.orderId}`);
+    return vendorOrderMapping;
 };
 
 /**
@@ -766,7 +776,7 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
         await order.save({ session });
 
         // 4. Create VendorOrders and update wallets
-        await createVendorOrdersAndUpdateWallets(order, session);
+        const vendorOrderMapping = await createVendorOrdersAndUpdateWallets(order, session);
 
         await session.commitTransaction();
         session.endSession();
@@ -791,9 +801,10 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
 
             // 2. Notify Vendors
             for (const restaurantId of restaurantIds) {
+                const vendorOrderId = vendorOrderMapping[restaurantId];
                 // Persistent notification
                 await sendVendorNotification(restaurantId, order.orderId, 'vendor_new_order', {
-                    orderDatabaseId: order._id,
+                    orderDatabaseId: vendorOrderId || order._id,
                     customerName: order.deliveryAddress?.contactName || 'A customer',
                     location: order.deliveryAddress?.addressLine || 'specified location',
                     totalAmount: order.total,
