@@ -530,6 +530,7 @@ export const createOrderV2 = async ({
 
             const customerStatus = order.paymentStatus === 'paid' ? 'accepted' : 'pending';
             await sendOrderNotification(userId, finalOrderId, customerStatus, {
+                orderDatabaseId: order._id,
                 restaurantName: restaurantNames,
                 totalAmount: total,
                 itemCount: normalizedItems.length,
@@ -544,7 +545,9 @@ export const createOrderV2 = async ({
                 for (const restaurantId of restaurantIds) {
                     // Send persistent notification
                     await sendVendorNotification(restaurantId, finalOrderId, 'vendor_new_order', {
-                        customerName: `${req.user?.firstname || ''} ${req.user?.lastname || ''}`.trim() || 'Customer',
+                        orderDatabaseId: order._id,
+                        customerName: `${req.user?.firstname || ''} ${req.user?.lastname || ''}`.trim() || 'A customer',
+                        location: order.deliveryAddress?.addressLine || 'specified location',
                         totalAmount: total,
                         items: normalizedItems.filter(i => String(i.restaurantId) === String(restaurantId))
                     });
@@ -781,6 +784,7 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
 
             // 1. Notify Customer
             await sendOrderNotification(order.userId, order.orderId, 'accepted', {
+                orderDatabaseId: order._id,
                 restaurantName: restaurantNames,
                 totalAmount: order.total
             });
@@ -789,6 +793,9 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
             for (const restaurantId of restaurantIds) {
                 // Persistent notification
                 await sendVendorNotification(restaurantId, order.orderId, 'vendor_new_order', {
+                    orderDatabaseId: order._id,
+                    customerName: order.deliveryAddress?.contactName || 'A customer',
+                    location: order.deliveryAddress?.addressLine || 'specified location',
                     totalAmount: order.total,
                     items: order.items.filter(i => String(i.restaurantId) === String(restaurantId))
                 });
