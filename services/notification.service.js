@@ -383,7 +383,7 @@ export async function sendVendorNotification(restaurantId, orderId, type, data =
         url: `/vendors/orders/${data.orderDatabaseId || orderId}`,
         ...data
     }, 'vendor');
-
+    
     // 2. Notify the owner users (if any)
     try {
         const Vendor = (await import('../model/vendor/vendor.model.js')).default;
