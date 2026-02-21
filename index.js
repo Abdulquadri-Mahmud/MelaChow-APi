@@ -60,8 +60,7 @@ const corsOptions = {
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
-      -
-        console.log('⚠️ Blocked by CORS:', origin);
+      console.log('⚠️ Blocked by CORS:', origin);
       callback(new Error('Not allowed by CORS'));
     }
   },
@@ -113,7 +112,7 @@ app.use(cookieParser()); // Parse cookies
 if (process.env.NODE_ENV !== 'production') {
   app.use((req, res, next) => {
     // Only log auth-related requests to reduce noise
-    if (req.path.includes('/auth/') || req.path.includes('/profile')) {
+    if (req.path.includes('/auth/') || req.path.includes('/profile') || req.path.includes('/notifications')) {
       console.log('\n[Request Debug]', {
         method: req.method,
         path: req.path,

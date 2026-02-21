@@ -9,7 +9,7 @@ const authVendor = async (req, res, next) => {
     if (!token) {
       return res.status(401).json({
         success: false,
-        message: "Unauthorized. Token missing or invalid."
+        message: "Unauthorized (Vendor). Token missing or invalid."
       });
     }
 
