@@ -23,69 +23,73 @@ if (publicKey && privateKey) {
 const NOTIFICATION_CONFIGS = {
     order_placed: {
         title: '🎉 Order Placed!',
-        getBody: (orderId) => `Your order #${orderId} has been placed successfully.`,
+        getBody: (data) => `Your order #${data.orderId} from ${data.restaurantName || 'the restaurant'} has been placed successfully.`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
     order_confirmed: {
         title: '✅ Order Confirmed',
-        getBody: (orderId) => `Your order #${orderId} has been confirmed by the restaurant.`,
+        getBody: (data) => `Your order #${data.orderId} has been confirmed by ${data.restaurantName || 'the restaurant'}.`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
     order_preparing: {
         title: '👨‍🍳 Order Preparing',
-        getBody: (orderId) => `Your delicious food is being prepared! Order #${orderId}`,
+        getBody: (data) => `Your food from ${data.restaurantName || 'the restaurant'} is being prepared! Order #${data.orderId}`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
     order_ready: {
         title: '📦 Order Ready',
-        getBody: (orderId) => `Your order #${orderId} is ready for pickup/delivery!`,
+        getBody: (data) => `Your order #${data.orderId} from ${data.restaurantName || 'the restaurant'} is ready!`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
     order_dispatched: {
         title: '🚚 Order Dispatched',
-        getBody: (orderId) => `Your order #${orderId} is on the way!`,
+        getBody: (data) => `Your order #${data.orderId} from ${data.restaurantName || 'the restaurant'} is on the way!`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
     order_delivered: {
         title: '🎊 Order Delivered',
-        getBody: (orderId) => `Your order #${orderId} has been delivered. Enjoy your meal!`,
+        getBody: (data) => `Your order #${data.orderId} has been delivered. Enjoy your meal from ${data.restaurantName || 'the restaurant'}!`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
     order_cancelled: {
         title: '❌ Order Cancelled',
-        getBody: (orderId) => `Your order #${orderId} has been cancelled.`,
+        getBody: (data) => `Your order #${data.orderId} from ${data.restaurantName || 'the restaurant'} has been cancelled.`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
     delivery_nearby: {
         title: '📍 Delivery Nearby',
-        getBody: (orderId) => `Your delivery rider is approaching! Order #${orderId}`,
+        getBody: (data) => `Your delivery rider is approaching with your order #${data.orderId}!`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: true,
         vibrate: [200, 100, 200, 100, 200]
     },
     vendor_new_order: {
         title: '🔔 New Order Received!',
-        getBody: (orderId) => `You have a new order #${orderId}. Check your dashboard to start preparing.`,
+        getBody: (data) => {
+            const customerPart = data.customerName ? ` from ${data.customerName}` : '';
+            const locationPart = data.location ? ` to ${data.location}` : '';
+            return `You have a new order #${data.orderId}${customerPart}${locationPart}. Check your dashboard to start preparing.`;
+        },
         icon: '/icons/icon-192x192.png',
         requireInteraction: true,
         vibrate: [300, 100, 300, 100, 300]
     },
     vendor_order_cancelled: {
         title: '⚠️ Order Cancelled',
-        getBody: (orderId) => `Order #${orderId} has been cancelled by the customer.`,
+        getBody: (data) => `Order #${data.orderId} has been cancelled by ${data.customerName || 'the customer'}.`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: true
     },
     promo: {
         title: '🎁 Special Offer',
-        getBody: (message) => message,
+        getBody: (data) => data.message,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     }
@@ -123,10 +127,16 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
             adminId: role === 'admin' ? recipientId : null,
             type,
             title: config.title,
-            body: data.message || (data.orderId ? config.getBody(data.orderId) : config.getBody(data.customMessage)),
+            body: data.message || config.getBody({
+                orderId: data.orderId,
+                restaurantName: data.restaurantName,
+                customerName: data.customerName,
+                location: data.location,
+                customMessage: data.customMessage
+            }),
             icon: data.icon || config.icon,
             image: data.image,
-            url: data.url || (data.orderId ? (role === 'vendor' ? `/vendor/orders/${data.orderId}` : `/profile/orders/${data.orderId}`) : '/notifications'),
+            url: data.url || (data.orderId ? (role === 'vendor' ? `/vendors/orders/${data.orderDatabaseId || data.orderId}` : `/profile/orders/${data.orderId}`) : '/notifications'),
             orderId: data.orderId,
             read: false,
             data: data.additionalData || {}
@@ -345,6 +355,8 @@ export async function sendOrderNotification(userId, orderId, status, orderDetail
 
     return sendNotification(userIdString, type, {
         orderId,
+        orderDatabaseId: orderDetails.orderDatabaseId,
+        restaurantName: orderDetails.restaurantName,
         additionalData: orderDetails
     });
 }
@@ -364,8 +376,11 @@ export async function sendVendorNotification(restaurantId, orderId, type, data =
     // 1. Notify the Vendor Account itself (Direct Push/WebSocket)
     const vendorMainPromise = sendNotification(restaurantIdString, type, {
         orderId,
+        orderDatabaseId: data.orderDatabaseId,
+        customerName: data.customerName,
+        location: data.location,
         restaurantId: restaurantIdString,
-        url: `/vendor/orders/${orderId}`,
+        url: `/vendor/orders/${data.orderDatabaseId || orderId}`,
         ...data
     }, 'vendor');
 
