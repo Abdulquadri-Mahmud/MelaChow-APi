@@ -56,7 +56,7 @@ export function initializeSocket(server) {
             socket.userEmail = identity.email || identity.name;
             socket.userRole = role;
 
-            console.log(`✅ Socket authenticated: User ${user.email} (${socket.id})`);
+            console.log(`✅ Socket authenticated: ${socket.userRole} ${socket.userEmail} (${socket.id})`);
             next();
 
         } catch (error) {
