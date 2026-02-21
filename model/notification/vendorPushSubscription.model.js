@@ -1,9 +1,9 @@
 import mongoose from 'mongoose';
 
-const pushSubscriptionSchema = new mongoose.Schema({
-    userId: {
+const vendorPushSubscriptionSchema = new mongoose.Schema({
+    vendorId: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
+        ref: 'Vendor',
         required: true
     },
     subscription: {
@@ -25,11 +25,10 @@ const pushSubscriptionSchema = new mongoose.Schema({
     }
 });
 
-// Ensure a user can have multiple subscriptions (multiple devices)
-// but avoid duplicate endpoints for the same user
-pushSubscriptionSchema.index({ 'subscription.endpoint': 1 }, { unique: true });
-pushSubscriptionSchema.index({ userId: 1 });
+// Ensure a vendor can have multiple subscriptions but avoid duplicate endpoints for same vendor
+vendorPushSubscriptionSchema.index({ 'subscription.endpoint': 1 }, { unique: true });
+vendorPushSubscriptionSchema.index({ vendorId: 1 });
 
-const PushSubscription = mongoose.model('PushSubscription', pushSubscriptionSchema);
+const VendorPushSubscription = mongoose.model('VendorPushSubscription', vendorPushSubscriptionSchema);
 
-export default PushSubscription;
+export default VendorPushSubscription;

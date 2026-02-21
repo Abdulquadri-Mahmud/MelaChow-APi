@@ -1,6 +1,8 @@
 import { Server } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import User from '../model/user.model.js';
+import Vendor from '../model/vendor/vendor.model.js';
+import Admin from '../model/Admin/admin.model.js';
 
 let io;
 
@@ -32,17 +34,27 @@ export function initializeSocket(server) {
             // Verify JWT token
             const decoded = jwt.verify(token, process.env.JWT_SECRET);
 
-            // Fetch user from database
-            const user = await User.findById(decoded.userId || decoded.id).select('-password');
+            // Fetch user/vendor/admin from database
+            let identity;
+            const role = decoded.role || 'user';
+            const id = decoded.userId || decoded.id;
 
-            if (!user) {
-                return next(new Error('User not found'));
+            if (role === 'vendor') {
+                identity = await Vendor.findById(id).select('-password');
+            } else if (role === 'admin' || role === 'super-admin') {
+                identity = await Admin.findById(id).select('-password');
+            } else {
+                identity = await User.findById(id).select('-password');
             }
 
-            // Attach user to socket
-            socket.userId = user._id.toString();
-            socket.userEmail = user.email;
-            socket.userRole = user.role || 'customer'; // 'customer', 'vendor', 'rider', etc.
+            if (!identity) {
+                return next(new Error(`${role} not found`));
+            }
+
+            // Attach identity to socket
+            socket.userId = identity._id.toString();
+            socket.userEmail = identity.email || identity.name;
+            socket.userRole = role;
 
             console.log(`✅ Socket authenticated: User ${user.email} (${socket.id})`);
             next();
@@ -59,7 +71,13 @@ export function initializeSocket(server) {
 
         // Join user-specific room for targeted broadcasts
         socket.join(`user_${socket.userId}`);
-        console.log(`👤 User ${socket.userId} joined personal room`);
+        console.log(`👤 ${socket.userRole} ${socket.userId} joined personal room`);
+
+        // Join role-specific rooms
+        if (socket.userRole === 'admin' || socket.userRole === 'super-admin') {
+            socket.join('admin_room');
+            console.log(`🛡️ Admin joined admin_room`);
+        }
 
         // Handle client disconnection
         socket.on('disconnect', (reason) => {
@@ -154,6 +172,20 @@ export function emitToRestaurant(restaurantId, event, data) {
 
     io.to(`restaurant_${restaurantId}`).emit(event, data);
     console.log(`📤 Emitted '${event}' to restaurant ${restaurantId}`);
+}
+
+/**
+ * Emit event to all admins
+ */
+export function emitToAdmin(adminId, event, data) {
+    if (!io) return;
+
+    if (adminId) {
+        io.to(`user_${adminId}`).emit(event, data);
+    } else {
+        io.to('admin_room').emit(event, data);
+    }
+    console.log(`📤 Emitted '${event}' to admin(s)`);
 }
 
 /**

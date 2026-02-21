@@ -1,9 +1,9 @@
 import mongoose from 'mongoose';
 
-const pushSubscriptionSchema = new mongoose.Schema({
-    userId: {
+const adminPushSubscriptionSchema = new mongoose.Schema({
+    adminId: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
+        ref: 'Admin',
         required: true
     },
     subscription: {
@@ -25,11 +25,10 @@ const pushSubscriptionSchema = new mongoose.Schema({
     }
 });
 
-// Ensure a user can have multiple subscriptions (multiple devices)
-// but avoid duplicate endpoints for the same user
-pushSubscriptionSchema.index({ 'subscription.endpoint': 1 }, { unique: true });
-pushSubscriptionSchema.index({ userId: 1 });
+// Unique endpoint across admins
+adminPushSubscriptionSchema.index({ 'subscription.endpoint': 1 }, { unique: true });
+adminPushSubscriptionSchema.index({ adminId: 1 });
 
-const PushSubscription = mongoose.model('PushSubscription', pushSubscriptionSchema);
+const AdminPushSubscription = mongoose.model('AdminPushSubscription', adminPushSubscriptionSchema);
 
-export default PushSubscription;
+export default AdminPushSubscription;

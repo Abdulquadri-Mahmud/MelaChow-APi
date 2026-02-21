@@ -29,6 +29,8 @@ import { seedCategories } from './config/categorySeed.js';
 import discountRoutes from './routes/user/discount.routes.js';
 import adminDiscountRoutes from './routes/Admin/discount.routes.js';
 import notificationRoutes from './routes/notification.routes.js';
+import vendorNotificationRoutes from './routes/vendor/vendor.notification.routes.js';
+import adminNotificationRoutes from './routes/Admin/admin.notification.routes.js';
 import socketHealthRoutes from './routes/socket.routes.js';
 import http from 'http';
 import { initializeSocket } from './socket/socketServer.js';
@@ -161,11 +163,13 @@ app.use('/api/socket', socketHealthRoutes);
 app.use("/api/vendors", vendorRoutes);
 app.use("/api/vendor/auth", vendorAuthRoutes);
 app.use("/api/vendors/foods", foodRoutes);
+app.use("/api/vendors/notifications", vendorNotificationRoutes);
 app.use("/api/orders", vendorOrderRoutes);
 
 // Admin routes
 app.use('/api/admin', adminRoutes);
 app.use('/api/admin/auth', adminAuthRoutes); // ✅ NEW: Admin Auth
+app.use('/api/admin/notifications', adminNotificationRoutes);
 app.use('/api/admin/discounts', adminDiscountRoutes); // Discount Management
 app.use('/api/admin/user', userManagementRoutes);
 app.use('/api/admin/user/reviews', ReviewsRoutes);
