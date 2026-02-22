@@ -50,6 +50,15 @@ export const getRidersByVendor = async (vendorId, filters = {}) => {
 };
 
 /**
+ * Get full details of a single rider for a vendor
+ */
+export const getSingleRiderForVendor = async (riderId, vendorId) => {
+    const rider = await Rider.findOne({ _id: riderId, vendorId, deletedAt: null }).populate("currentOrderId");
+    if (!rider) throw new Error("Rider not found for this vendor");
+    return rider.getPublicProfile();
+};
+
+/**
  * Get available riders for a vendor
  */
 export const getAvailableRiders = async (vendorId) => {

@@ -10,6 +10,8 @@ const router = express.Router();
 router.post("/vendors/:vendorId/riders", authVendor, riderController.createRider);
 router.get("/vendors/:vendorId/riders", authVendor, riderController.getVendorRiders);
 router.get("/vendors/:vendorId/riders/available", authVendor, riderController.getAvailableRiders);
+router.get("/vendors/:vendorId/riders/:riderId", authVendor, riderController.getSingleVendorRider);
+
 router.patch("/vendors/:vendorId/riders/:riderId", authVendor, riderController.updateRider);
 router.delete("/vendors/:vendorId/riders/:riderId", authVendor, riderController.deactivateRider);
 
