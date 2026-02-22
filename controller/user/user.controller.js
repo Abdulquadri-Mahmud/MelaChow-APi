@@ -1,6 +1,8 @@
 import jwt from 'jsonwebtoken';
 import bcryptjs from 'bcryptjs';
 import User from '../../model/user.model.js';
+import City from '../../model/location/City.js';
+import State from '../../model/location/State.js';
 import { sendMail } from '../../config/mailer.js';
 import { errorHandler } from '../../utils/errorHandler.js';
 
@@ -94,6 +96,7 @@ export const verifyOtp = async (req, res) => {
     }
 
     // 3. Set new password and clear OTP
+    user.isVerified = true;
     user.otp = undefined;
     user.otpExpires = undefined;
 
@@ -440,9 +443,17 @@ export const updateProfile = async (req, res) => {
 export const addAddress = async (req, res) => {
   try {
     const userId = req.userId;
-    const { addressLine, city, state, isDefault = false } = req.body;
+    const {
+      addressLine,
+      city,
+      state,
+      cityId,
+      stateId,
+      isDefault = false,
+      label = "Home"
+    } = req.body;
 
-    if (!addressLine || !city || !state) {
+    if (!addressLine || (!city && !cityId) || (!state && !stateId)) {
       return res.status(400).json({
         status: false,
         message: "Address line, city, and state are required",
@@ -454,18 +465,42 @@ export const addAddress = async (req, res) => {
       return res.status(404).json({ status: false, message: "User not found" });
     }
 
+    const newAddress = {
+      label,
+      addressLine,
+      isDefault,
+    };
+
+    // Validate and set City
+    if (cityId) {
+      const cityDoc = await City.findOne({ _id: cityId, isActive: true });
+      if (!cityDoc) {
+        return res.status(400).json({ status: false, message: "Invalid or inactive cityId" });
+      }
+      newAddress.cityId = cityId;
+      newAddress.cityName = cityDoc.name;
+    } else {
+      newAddress.cityName = city;
+      newAddress.city = city; // Legacy support
+    }
+
+    // Validate and set State
+    if (stateId) {
+      const stateDoc = await State.findOne({ _id: stateId, isActive: true });
+      if (!stateDoc) {
+        return res.status(400).json({ status: false, message: "Invalid or inactive stateId" });
+      }
+      newAddress.stateId = stateId;
+      newAddress.stateName = stateDoc.name;
+    } else {
+      newAddress.stateName = state;
+      newAddress.state = state; // Legacy support
+    }
+
     // Reset previous defaults if this new one is default
     if (isDefault) {
       user.addresses.forEach((a) => (a.isDefault = false));
     }
-
-    const newAddress = {
-      label: "Home",
-      addressLine,
-      city,
-      state,
-      isDefault,
-    };
 
     user.addresses.push(newAddress);
     await user.save();
@@ -517,8 +552,16 @@ export const getUserAddresses = async (req, res) => {
 export const updateAddress = async (req, res) => {
   try {
     const userId = req.userId;
-    const { addressId } = req.query; // 👈 changed from params to query
-    const { state, city, addressLine, isDefault } = req.body;
+    const { addressId } = req.query;
+    const {
+      state,
+      city,
+      addressLine,
+      isDefault,
+      cityId,
+      stateId,
+      label
+    } = req.body;
 
     if (!addressId)
       return res.status(400).json({ status: false, message: "addressId query is required" });
@@ -536,9 +579,44 @@ export const updateAddress = async (req, res) => {
     }
 
     // Update fields
+    if (label !== undefined) addr.label = label;
     if (addressLine !== undefined) addr.addressLine = addressLine;
-    if (state !== undefined) addr.state = state;
-    if (city !== undefined) addr.city = city;
+
+    // Validate and set City
+    if (cityId !== undefined) {
+      if (cityId) {
+        const cityDoc = await City.findOne({ _id: cityId, isActive: true });
+        if (!cityDoc) {
+          return res.status(400).json({ status: false, message: "Invalid or inactive cityId" });
+        }
+        addr.cityId = cityId;
+        addr.cityName = cityDoc.name;
+      } else {
+        addr.cityId = undefined;
+        addr.cityName = undefined;
+      }
+    } else if (city !== undefined) {
+      addr.cityName = city;
+      addr.city = city; // Legacy support
+    }
+
+    // Validate and set State
+    if (stateId !== undefined) {
+      if (stateId) {
+        const stateDoc = await State.findOne({ _id: stateId, isActive: true });
+        if (!stateDoc) {
+          return res.status(400).json({ status: false, message: "Invalid or inactive stateId" });
+        }
+        addr.stateId = stateId;
+        addr.stateName = stateDoc.name;
+      } else {
+        addr.stateId = undefined;
+        addr.stateName = undefined;
+      }
+    } else if (state !== undefined) {
+      addr.stateName = state;
+      addr.state = state; // Legacy support
+    }
 
     await user.save();
 
