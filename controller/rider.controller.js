@@ -25,6 +25,16 @@ export const getVendorRiders = async (req, res, next) => {
     }
 };
 
+export const getSingleVendorRider = async (req, res, next) => {
+    try {
+        const { vendorId, riderId } = req.params;
+        const rider = await riderService.getSingleRiderForVendor(riderId, vendorId);
+        res.status(200).json({ success: true, data: rider });
+    } catch (error) {
+        next(error);
+    }
+};
+
 export const getAvailableRiders = async (req, res, next) => {
     try {
         const { vendorId } = req.params;
