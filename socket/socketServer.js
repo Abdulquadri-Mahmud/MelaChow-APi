@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import User from '../model/user.model.js';
 import Vendor from '../model/vendor/vendor.model.js';
 import Admin from '../model/Admin/admin.model.js';
+import { registerRiderSocketHandlers } from './rider.socket.js';
 
 let io;
 
@@ -68,6 +69,9 @@ export function initializeSocket(server) {
     // Connection handler
     io.on('connection', (socket) => {
         console.log(`🔌 Client connected: ${socket.id} | User: ${socket.userEmail}`);
+
+        // Register Rider Specific Handlers
+        registerRiderSocketHandlers(io, socket);
 
         // Join user-specific room for targeted broadcasts
         socket.join(`user_${socket.userId}`);

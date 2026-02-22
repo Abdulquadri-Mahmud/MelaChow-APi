@@ -31,6 +31,8 @@ import adminDiscountRoutes from './routes/Admin/discount.routes.js';
 import notificationRoutes from './routes/notification.routes.js';
 import vendorNotificationRoutes from './routes/vendor/vendor.notification.routes.js';
 import adminNotificationRoutes from './routes/Admin/admin.notification.routes.js';
+import riderRoutes from "./routes/rider.routes.js";
+import riderAuthRoutes from "./routes/riderAuth.routes.js";
 import socketHealthRoutes from './routes/socket.routes.js';
 import http from 'http';
 import { initializeSocket } from './socket/socketServer.js';
@@ -164,6 +166,10 @@ app.use("/api/vendor/auth", vendorAuthRoutes);
 app.use("/api/vendors/foods", foodRoutes);
 app.use("/api/vendors/notifications", vendorNotificationRoutes);
 app.use("/api/orders", vendorOrderRoutes);
+
+// Riders routes
+app.use("/api", riderRoutes);
+app.use("/api", riderAuthRoutes);
 
 // Admin routes
 app.use('/api/admin', adminRoutes);

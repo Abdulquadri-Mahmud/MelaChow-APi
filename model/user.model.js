@@ -4,8 +4,12 @@ import bcrypt from "bcryptjs";
 const AddressSchema = new mongoose.Schema({
   label: { type: String, default: "Home" },         // e.g. "Home", "Work"
   addressLine: { type: String, required: true },    // Full address
-  city: { type: String },
-  state: { type: String },
+  city: { type: String },                           // Legacy string field
+  state: { type: String },                          // Legacy string field
+  cityId: { type: mongoose.Schema.Types.ObjectId, ref: "City" },
+  stateId: { type: mongoose.Schema.Types.ObjectId, ref: "State" },
+  cityName: { type: String },
+  stateName: { type: String },
   postalCode: { type: String },
   coordinates: {
     lat: { type: Number },
@@ -21,15 +25,15 @@ const UserSchema = new mongoose.Schema(
     lastname: { type: String, trim: true },
     fullName: { type: String },
     email: { type: String, required: true, unique: true, lowercase: true },
-    
+
     // ✅ Enhanced password field with select: false (don't return in queries by default)
-    password: { 
-      type: String, 
+    password: {
+      type: String,
       required: false,  // Optional during migration (existing users won't have it)
       minlength: 8,
       select: false     // Don't return password in queries by default
     },
-    
+
     phone: { type: String },
     avatar: { type: String },
 
@@ -63,7 +67,7 @@ const UserSchema = new mongoose.Schema(
     ],
 
     role: { type: String, default: "user" },
-    
+
     // ✅ OTP fields (keep for registration/reset) - also hidden by default
     otp: { type: String, select: false },
     otpExpires: { type: Date, select: false },
@@ -74,13 +78,13 @@ const UserSchema = new mongoose.Schema(
 // ============================================
 // PRE-SAVE HOOK: Hash password before saving
 // ============================================
-UserSchema.pre('save', async function(next) {
+UserSchema.pre('save', async function (next) {
   // Only hash if password is modified
   if (!this.isModified('password')) return next();
-  
+
   // Don't hash if password is being cleared
   if (!this.password) return next();
-  
+
   try {
     // Generate salt and hash password
     const salt = await bcrypt.genSalt(12);
@@ -100,7 +104,7 @@ UserSchema.pre('save', async function(next) {
  * @param {string} candidatePassword - Plain text password to compare
  * @returns {Promise<boolean>} - True if passwords match
  */
-UserSchema.methods.comparePassword = async function(candidatePassword) {
+UserSchema.methods.comparePassword = async function (candidatePassword) {
   try {
     if (!this.password) {
       throw new Error('No password set for this user');
@@ -115,7 +119,7 @@ UserSchema.methods.comparePassword = async function(candidatePassword) {
  * Check if account is currently locked
  * @returns {boolean} - True if account is locked
  */
-UserSchema.methods.isLocked = function() {
+UserSchema.methods.isLocked = function () {
   return !!(this.lockUntil && this.lockUntil > Date.now());
 };
 
@@ -123,7 +127,7 @@ UserSchema.methods.isLocked = function() {
  * Increment login attempts and lock account if threshold reached
  * @returns {Promise} - Update promise
  */
-UserSchema.methods.incLoginAttempts = async function() {
+UserSchema.methods.incLoginAttempts = async function () {
   // Reset attempts if lock has expired
   if (this.lockUntil && this.lockUntil < Date.now()) {
     return this.updateOne({
@@ -131,17 +135,17 @@ UserSchema.methods.incLoginAttempts = async function() {
       $unset: { lockUntil: 1 }
     });
   }
-  
+
   const updates = { $inc: { loginAttempts: 1 } };
-  
+
   // Lock account after 5 failed attempts (15 minutes lockout)
   const maxAttempts = 5;
   const lockTime = 15 * 60 * 1000; // 15 minutes
-  
+
   if (this.loginAttempts + 1 >= maxAttempts) {
     updates.$set = { lockUntil: Date.now() + lockTime };
   }
-  
+
   return this.updateOne(updates);
 };
 
@@ -149,7 +153,7 @@ UserSchema.methods.incLoginAttempts = async function() {
  * Reset login attempts on successful login
  * @returns {Promise} - Update promise
  */
-UserSchema.methods.resetLoginAttempts = async function() {
+UserSchema.methods.resetLoginAttempts = async function () {
   return this.updateOne({
     $set: { loginAttempts: 0, lastLogin: Date.now() },
     $unset: { lockUntil: 1 }

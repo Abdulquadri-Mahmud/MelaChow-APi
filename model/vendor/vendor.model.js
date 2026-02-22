@@ -97,6 +97,9 @@ const vendorSchema = new Schema(
     // Vendor Orders linked to this vendor
     vendorOrders: [{ type: mongoose.Schema.Types.ObjectId, ref: "VendorOrder" }],
 
+    // Riders managed by this vendor
+    riders: [{ type: mongoose.Schema.Types.ObjectId, ref: "Rider" }],
+
     // Business performance
     totalSales: { type: Number, default: 0 },
     totalOrders: { type: Number, default: 0 },
@@ -105,7 +108,7 @@ const vendorSchema = new Schema(
     // Ratings
     rating: { type: Number, default: 0 },
     ratingCount: { type: Number, default: 0 },
-
+    
     // Status flags
     verified: { type: Boolean, default: false, index: true },
     suspended: { type: Boolean, default: false },

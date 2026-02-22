@@ -78,3 +78,39 @@ export const getActiveCities = async (req, res) => {
         });
     }
 };
+
+/**
+ * @desc Get all cities that have active and approved vendors
+ * @route GET /api/locations/cities/with-vendors
+ * @access Public
+ */
+export const getActiveCitiesWithVendors = async (req, res) => {
+    try {
+        // 1. Get distinct cityIds from active and approved vendors
+        const cityIdsWithVendors = await Vendor.distinct("cityId", {
+            active: true,
+            verified: true,
+        });
+
+        // 2. Get active City documents matching those IDs
+        const cities = await City.find({
+            _id: { $in: cityIdsWithVendors },
+            isActive: true,
+        })
+            .populate("stateId", "name")
+            .sort({ name: 1 });
+
+        res.status(200).json({
+            success: true,
+            count: cities.length,
+            cities,
+        });
+    } catch (error) {
+        console.error("Get Active Cities With Vendors Error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error fetching cities with vendors",
+            error: error.message,
+        });
+    }
+};
