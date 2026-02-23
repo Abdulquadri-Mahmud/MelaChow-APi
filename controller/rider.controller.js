@@ -1,8 +1,6 @@
 import * as riderService from "../services/rider.service.js";
 import { SOCKET_EVENTS, SOCKET_ROOMS, buildPayload } from "../socket/rider.events.js";
-
-// Helper to get IO from app
-const getIO = (req) => req.app.get("io");
+import { getIO } from "../socket/socketServer.js";
 
 export const createRider = async (req, res, next) => {
     try {
@@ -92,22 +90,23 @@ export const updateRiderStatus = async (req, res, next) => {
         const { riderId } = req.params;
         const { status } = req.body;
 
-        // Pass only riderId and status — service fetches the full rider document
         const rider = await riderService.updateRiderStatus(riderId, status);
-
-        // Get vendorId from the actual rider document, not req.rider
         const vendorId = rider.vendorId?.toString();
 
         if (vendorId) {
-            const io = getIO(req);
-            io.to(SOCKET_ROOMS.vendor(vendorId)).emit(
-                SOCKET_EVENTS.RIDER_STATUS_CHANGED,
-                buildPayload.riderStatusChanged({
-                    riderId: rider._id,
-                    riderName: rider.name,
-                    status: rider.status
-                })
-            );
+            try {
+                const io = getIO();
+                io.to(SOCKET_ROOMS.vendor(vendorId)).emit(
+                    SOCKET_EVENTS.RIDER_STATUS_CHANGED,
+                    buildPayload.riderStatusChanged({
+                        riderId: rider._id,
+                        riderName: rider.name,
+                        status: rider.status
+                    })
+                );
+            } catch (socketErr) {
+                console.warn('⚠️ Socket emit failed:', socketErr.message);
+            }
         }
 
         res.status(200).json({ success: true, data: rider.getPublicProfile() });
@@ -123,17 +122,20 @@ export const markPickedUp = async (req, res, next) => {
 
         const order = await riderService.markPickedUp(orderId, riderId);
 
-        const io = getIO(req);
-        const payload = buildPayload.statusUpdate({
-            orderId: order._id,
-            status: "picked_up",
-            changedBy: "rider",
-            message: "Rider has picked up the order",
-            riderName: req.rider.name
-        });
-
-        io.to(SOCKET_ROOMS.vendor(order.vendorId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, payload);
-        io.to(SOCKET_ROOMS.customer(order.customerId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, payload);
+        try {
+            const io = getIO();
+            const payload = buildPayload.statusUpdate({
+                orderId: order._id,
+                status: "picked_up",
+                changedBy: "rider",
+                message: "Rider has picked up the order",
+                riderName: req.rider.name
+            });
+            io.to(SOCKET_ROOMS.vendor(order.vendorId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, payload);
+            io.to(SOCKET_ROOMS.customer(order.customerId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, payload);
+        } catch (socketErr) {
+            console.warn('⚠️ Socket emit failed:', socketErr.message);
+        }
 
         res.status(200).json({ success: true, message: "Order picked up", data: order });
     } catch (error) {
@@ -148,23 +150,24 @@ export const markDelivered = async (req, res, next) => {
 
         const order = await riderService.markDelivered(orderId, riderId);
 
-        const io = getIO(req);
-
-        const statusPayload = buildPayload.statusUpdate({
-            orderId: order._id,
-            status: "delivered",
-            changedBy: "rider",
-            message: "Order has been delivered",
-            riderName: req.rider.name
-        });
-
-        const deliveredPayload = buildPayload.orderDelivered({
-            orderId: order._id,
-            riderName: req.rider.name
-        });
-
-        io.to(SOCKET_ROOMS.customer(order.customerId)).emit(SOCKET_EVENTS.ORDER_DELIVERED, deliveredPayload);
-        io.to(SOCKET_ROOMS.vendor(order.vendorId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, statusPayload);
+        try {
+            const io = getIO();
+            const statusPayload = buildPayload.statusUpdate({
+                orderId: order._id,
+                status: "delivered",
+                changedBy: "rider",
+                message: "Order has been delivered",
+                riderName: req.rider.name
+            });
+            const deliveredPayload = buildPayload.orderDelivered({
+                orderId: order._id,
+                riderName: req.rider.name
+            });
+            io.to(SOCKET_ROOMS.customer(order.customerId)).emit(SOCKET_EVENTS.ORDER_DELIVERED, deliveredPayload);
+            io.to(SOCKET_ROOMS.vendor(order.vendorId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, statusPayload);
+        } catch (socketErr) {
+            console.warn('⚠️ Socket emit failed:', socketErr.message);
+        }
 
         res.status(200).json({ success: true, message: "Order delivered", data: order });
     } catch (error) {
