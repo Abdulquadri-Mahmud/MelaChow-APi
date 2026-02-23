@@ -171,9 +171,9 @@ export const markDelivered = async (orderId, riderId) => {
 /**
  * Update rider status manually
  */
-export const updateRiderStatus = async (riderId, vendorId, status) => {
-    const rider = await Rider.findOne({ _id: riderId, vendorId });
-    if (!rider) throw new Error("Rider not found for this vendor");
+export const updateRiderStatus = async (riderId, status) => {
+    const rider = await Rider.findById(riderId);
+    if (!rider) throw new Error("Rider not found");
 
     if (!["available", "offline"].includes(status)) {
         throw new Error("Only 'available' or 'offline' status can be set manually");
@@ -184,7 +184,8 @@ export const updateRiderStatus = async (riderId, vendorId, status) => {
     }
 
     rider.status = status;
-    return rider.save();
+    await rider.save();
+    return rider;
 };
 
 /**
