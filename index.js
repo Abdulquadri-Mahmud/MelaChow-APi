@@ -252,10 +252,10 @@ if (!process.env.VERCEL) {
       await seedCategories();
 
       // Create HTTP server (CRITICAL: Don't use app.listen directly for Socket.IO)
+      // ✅ After
       const server = http.createServer(app);
-
-      // Initialize Socket.IO
-      initializeSocket(server);
+      const io = initializeSocket(server);
+      app.set("io", io);
 
       server.listen(PORT, () => {
         console.log(`🚀 Server running at http://localhost:${PORT}`);
