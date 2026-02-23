@@ -92,22 +92,24 @@ export const updateRiderStatus = async (req, res, next) => {
         const { riderId } = req.params;
         const { status } = req.body;
 
-        // Pass only riderId and status — service fetches the full rider document
         const rider = await riderService.updateRiderStatus(riderId, status);
-
-        // Get vendorId from the actual rider document, not req.rider
         const vendorId = rider.vendorId?.toString();
 
+        // Guard both vendorId AND io before emitting
         if (vendorId) {
             const io = getIO(req);
-            io.to(SOCKET_ROOMS.vendor(vendorId)).emit(
-                SOCKET_EVENTS.RIDER_STATUS_CHANGED,
-                buildPayload.riderStatusChanged({
-                    riderId: rider._id,
-                    riderName: rider.name,
-                    status: rider.status
-                })
-            );
+            if (io) {
+                io.to(SOCKET_ROOMS.vendor(vendorId)).emit(
+                    SOCKET_EVENTS.RIDER_STATUS_CHANGED,
+                    buildPayload.riderStatusChanged({
+                        riderId: rider._id,
+                        riderName: rider.name,
+                        status: rider.status
+                    })
+                );
+            } else {
+                console.warn('⚠️ Socket IO not available on req.app');
+            }
         }
 
         res.status(200).json({ success: true, data: rider.getPublicProfile() });
