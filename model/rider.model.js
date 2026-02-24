@@ -10,8 +10,14 @@ const riderSchema = new mongoose.Schema(
         vendorId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "Vendor",
-            required: true,
+            required: false, // changed from true
+            default: null,
             index: true
+        },
+        managedBy: {
+            type: String,
+            enum: ["vendor", "admin"],
+            default: "vendor",
         },
         password: {
             type: String,
@@ -121,10 +127,13 @@ riderSchema.methods.assignOrder = async function (orderId) {
     return this.save();
 };
 
-riderSchema.methods.freeUp = async function () {
+riderSchema.methods.freeUp = async function (deliveryEarnings = 0) {
     this.status = "available";
     this.currentOrderId = null;
     this.totalDeliveries += 1;
+    if (deliveryEarnings > 0) {
+        this.totalEarnings += deliveryEarnings;
+    }
     return this.save();
 };
 

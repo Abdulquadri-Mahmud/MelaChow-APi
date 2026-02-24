@@ -33,10 +33,6 @@ const foodSchema = new mongoose.Schema(
       type: Number,
       required: [true, "Price is required"],
     },
-    deliveryFee: {
-      type: Number,
-      // If null/undefined, system should fallback to Vendor.flatRateDeliveryFee
-    },
     categories: {
       type: [String], // [rootCategory, subCategory]
       required: [true, "Multi-level categorization is required (e.g., ['Fast Food', 'Pizza'])"],
@@ -55,13 +51,6 @@ const foodSchema = new mongoose.Schema(
         price: { type: Number, required: true },
         label: { type: String }, // e.g., "1 Portion", "Double Portion"
       }
-    ],
-    variants: [
-      {
-        name: { type: String, required: true }, // e.g. "Small", "Large"
-        price: { type: Number, required: true },
-        image: { type: String, default: "" },
-      },
     ],
     // Flexible groups for extras (e.g., "Choice of Protein", "Add-ons")
     // 4️⃣ Stock Control (Global)

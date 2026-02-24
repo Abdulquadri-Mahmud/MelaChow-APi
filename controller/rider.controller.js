@@ -5,7 +5,7 @@ import { getIO } from "../socket/socketServer.js";
 export const createRider = async (req, res, next) => {
     try {
         const { vendorId } = req.params;
-        const rider = await riderService.createRider(vendorId, req.body);
+        const rider = await riderService.createRider(req.body, vendorId);
         res.status(201).json({ success: true, data: rider.getPublicProfile() });
     } catch (error) {
         next(error);
@@ -68,7 +68,7 @@ export const assignRider = async (req, res, next) => {
         );
 
         // Notify customer
-        io.to(SOCKET_ROOMS.customer(order.customerId)).emit(
+        io.to(SOCKET_ROOMS.customer(order.userId)).emit(
             SOCKET_EVENTS.ORDER_STATUS_UPDATE,
             buildPayload.statusUpdate({
                 orderId: order._id,
@@ -131,8 +131,9 @@ export const markPickedUp = async (req, res, next) => {
                 message: "Rider has picked up the order",
                 riderName: req.rider.name
             });
-            io.to(SOCKET_ROOMS.vendor(order.vendorId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, payload);
-            io.to(SOCKET_ROOMS.customer(order.customerId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, payload);
+            // vendorId must come from the rider — fetch it from req.rider
+            io.to(SOCKET_ROOMS.vendor(req.rider?.vendorId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, payload);
+            io.to(SOCKET_ROOMS.customer(order.userId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, payload);
         } catch (socketErr) {
             console.warn('⚠️ Socket emit failed:', socketErr.message);
         }
@@ -163,8 +164,9 @@ export const markDelivered = async (req, res, next) => {
                 orderId: order._id,
                 riderName: req.rider.name
             });
-            io.to(SOCKET_ROOMS.customer(order.customerId)).emit(SOCKET_EVENTS.ORDER_DELIVERED, deliveredPayload);
-            io.to(SOCKET_ROOMS.vendor(order.vendorId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, statusPayload);
+            io.to(SOCKET_ROOMS.customer(order.userId)).emit(SOCKET_EVENTS.ORDER_DELIVERED, deliveredPayload);
+            // vendorId must come from the rider — fetch it from req.rider
+            io.to(SOCKET_ROOMS.vendor(req.rider?.vendorId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, statusPayload);
         } catch (socketErr) {
             console.warn('⚠️ Socket emit failed:', socketErr.message);
         }
@@ -221,6 +223,16 @@ export const adminDeactivateRider = async (req, res, next) => {
         const { riderId } = req.params;
         await riderService.adminDeactivateRider(riderId);
         res.status(200).json({ success: true, message: "Rider deactivated successfully by admin" });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const getRiderWallet = async (req, res, next) => {
+    try {
+        const { riderId } = req.params;
+        const wallet = await riderService.getRiderWallet(riderId);
+        res.status(200).json({ success: true, data: wallet });
     } catch (error) {
         next(error);
     }

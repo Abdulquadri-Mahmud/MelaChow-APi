@@ -140,6 +140,18 @@ const orderSchema = new mongoose.Schema(
       ],
       default: "pending",
     },
+    riderId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Rider",
+      default: null,
+    },
+    statusLog: [
+      {
+        status: String,
+        changedBy: String,
+        timestamp: { type: Date, default: Date.now },
+      },
+    ],
   },
   { timestamps: true }
 );

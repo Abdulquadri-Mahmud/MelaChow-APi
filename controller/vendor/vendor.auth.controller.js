@@ -9,7 +9,7 @@ import { sendTokenCookie } from '../../utils/sendTokenCookie.js';
 
 export const registerVendor = async (req, res) => {
   try {
-    const { email, name, phone, storeName } = req.body;
+    const { email, name, phone, storeName, deliveryManagedBy, flatRateDeliveryFee } = req.body;
 
     // Validate input
     if (!email || !name || !storeName) {
@@ -33,6 +33,10 @@ export const registerVendor = async (req, res) => {
       existingVendor.name = name || existingVendor.name;
       existingVendor.phone = phone || existingVendor.phone;
       existingVendor.storeName = storeName || existingVendor.storeName;
+
+      if (deliveryManagedBy) existingVendor.deliveryManagedBy = deliveryManagedBy;
+      if (flatRateDeliveryFee !== undefined) existingVendor.flatRateDeliveryFee = flatRateDeliveryFee;
+
       await existingVendor.save();
     } else {
       // Create new vendor
@@ -43,7 +47,9 @@ export const registerVendor = async (req, res) => {
         storeName,
         otp,
         otpExpires,
-        verified: false
+        verified: false,
+        deliveryManagedBy: deliveryManagedBy || "admin",
+        flatRateDeliveryFee: flatRateDeliveryFee || 0
       });
     }
 

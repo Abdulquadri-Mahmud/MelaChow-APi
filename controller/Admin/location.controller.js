@@ -58,7 +58,7 @@ export const createState = async (req, res) => {
  */
 export const createCity = async (req, res) => {
     try {
-        const { name, stateId } = req.body;
+        const { name, stateId, platformDeliveryFee } = req.body;
 
         if (!name || !name.trim() || !stateId) {
             return res.status(400).json({
@@ -94,6 +94,7 @@ export const createCity = async (req, res) => {
             name: name.trim(),
             stateId,
             isActive: true,
+            platformDeliveryFee: platformDeliveryFee || 0,
         });
 
         // Populate state info
@@ -282,6 +283,56 @@ export const getAllCities = async (req, res) => {
         res.status(500).json({
             success: false,
             message: "Error fetching cities",
+            error: error.message,
+        });
+    }
+};
+
+/**
+ * @desc Update a city
+ * @route PATCH /api/admin/locations/cities/:id
+ * @access Admin only
+ */
+export const updateCity = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name, stateId, isActive, platformDeliveryFee } = req.body;
+
+        const city = await City.findById(id);
+        if (!city) {
+            return res.status(404).json({
+                success: false,
+                message: "City not found",
+            });
+        }
+
+        if (name !== undefined) city.name = name.trim();
+        if (stateId !== undefined) {
+            const state = await State.findById(stateId);
+            if (!state) {
+                return res.status(404).json({
+                    success: false,
+                    message: "State not found",
+                });
+            }
+            city.stateId = stateId;
+        }
+        if (isActive !== undefined) city.isActive = isActive;
+        if (platformDeliveryFee !== undefined) city.platformDeliveryFee = platformDeliveryFee;
+
+        await city.save();
+        await city.populate("stateId", "name");
+
+        res.status(200).json({
+            success: true,
+            message: "City updated successfully",
+            city,
+        });
+    } catch (error) {
+        console.error("Update City Error:", error);
+        res.status(500).json({
+            success: false,
+            message: "Error updating city",
             error: error.message,
         });
     }

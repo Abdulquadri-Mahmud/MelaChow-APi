@@ -18,6 +18,11 @@ const citySchema = new mongoose.Schema(
             default: true,
             index: true,
         },
+        platformDeliveryFee: {
+            type: Number,
+            default: 0,
+            min: 0,
+        },
     },
     {
         timestamps: true,

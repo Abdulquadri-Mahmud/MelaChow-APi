@@ -1,6 +1,6 @@
 import { SOCKET_EVENTS, SOCKET_ROOMS, buildPayload } from "./rider.events.js";
 import Rider from "../model/rider.model.js";
-import Order from "../model/order/order.model.js";
+import Order from "../model/order/Order.js";
 import VendorOrder from "../model/vendor/VendorOrder.js";
 
 export const registerRiderSocketHandlers = (io, socket) => {
@@ -85,7 +85,7 @@ export const registerRiderSocketHandlers = (io, socket) => {
             if (!rider) throw new Error("Rider not found");
 
             // Update Order
-            order.status = "picked_up";
+            order.orderStatus = "picked_up";
             order.statusLog.push({
                 status: "picked_up",
                 changedBy: "rider",
@@ -109,7 +109,7 @@ export const registerRiderSocketHandlers = (io, socket) => {
 
             // Notify vendor and customer
             io.to(SOCKET_ROOMS.vendor(rider.vendorId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, payload);
-            io.to(SOCKET_ROOMS.customer(order.customerId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, payload);
+            io.to(SOCKET_ROOMS.customer(order.userId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, payload);
 
         } catch (error) {
             socket.emit(SOCKET_EVENTS.ERROR, { message: error.message });
@@ -128,7 +128,7 @@ export const registerRiderSocketHandlers = (io, socket) => {
             if (!rider) throw new Error("Rider not found");
 
             // Update Order
-            order.status = "delivered";
+            order.orderStatus = "delivered";
             order.statusLog.push({
                 status: "delivered",
                 changedBy: "rider",
@@ -159,7 +159,7 @@ export const registerRiderSocketHandlers = (io, socket) => {
             });
 
             // Notify customer
-            io.to(SOCKET_ROOMS.customer(order.customerId)).emit(SOCKET_EVENTS.ORDER_DELIVERED, deliveredPayload);
+            io.to(SOCKET_ROOMS.customer(order.userId)).emit(SOCKET_EVENTS.ORDER_DELIVERED, deliveredPayload);
 
             // Notify vendor
             io.to(SOCKET_ROOMS.vendor(rider.vendorId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, statusPayload);

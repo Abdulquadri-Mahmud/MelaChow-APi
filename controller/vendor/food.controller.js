@@ -160,7 +160,6 @@ export const updateFood = async (req, res) => {
     }
 
     if (updates.price) food.price = Number(updates.price);
-    if (updates.deliveryFee !== undefined) food.deliveryFee = updates.deliveryFee;
     if (updates.estimatedDeliveryTime) food.estimatedDeliveryTime = updates.estimatedDeliveryTime;
 
     if (Array.isArray(updates.tags)) food.tags = updates.tags;
