@@ -166,7 +166,7 @@ export const getVendorForUserDisplay = async (req, res) => {
       .findOne({
         $or: [{ _id: id }, { storeSlug: id }],
       })
-      .select("storeName fullAddress storeDescription address logo email phone openingHours acceptsDelivery rating ratingCount estimatedDeliveryTime deliveryFee")
+      .select("storeName fullAddress storeDescription address logo email phone openingHours acceptsDelivery rating ratingCount flatRateDeliveryFee deliveryManagedBy deliveryRadiusKm")
       .lean(); // lean makes it return a plain JS object
 
     if (!vendor) {

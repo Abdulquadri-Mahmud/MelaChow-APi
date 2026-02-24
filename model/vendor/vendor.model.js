@@ -108,7 +108,7 @@ const vendorSchema = new Schema(
     // Ratings
     rating: { type: Number, default: 0 },
     ratingCount: { type: Number, default: 0 },
-    
+
     // Status flags
     verified: { type: Boolean, default: false, index: true },
     suspended: { type: Boolean, default: false },
@@ -139,8 +139,16 @@ const vendorSchema = new Schema(
     owners: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }], // For multi-owner setups
     deletedAt: { type: Date, default: null }, // Soft delete flag
     adminNotes: { type: String, default: "" }, // Notes for internal admin use
-  },
-  {
+    deliveryManagedBy: {
+      type: String,
+      enum: ["vendor", "admin"],
+      default: "admin",
+    },
+    platformDeliveryFeeOverride: {
+      type: Number,
+      default: null,
+      // Optional: if set, overrides the city platformDeliveryFee for this vendor
+    },
     role: { type: String, default: "vendor" },
   },
   {

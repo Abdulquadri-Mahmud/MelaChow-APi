@@ -1,13 +1,14 @@
 import express from "express";
 import { adminAuth } from "../../middleware/adminAuth.js";
-import { 
+import {
     createCity,
-    createState, 
-    getAllCities, 
-    getAllStates, 
-    getLocationRequests, 
-    toggleCityStatus, 
-    toggleStateStatus
+    createState,
+    getAllCities,
+    getAllStates,
+    getLocationRequests,
+    toggleCityStatus,
+    toggleStateStatus,
+    updateCity
 } from "../../controller/Admin/location.controller.js";
 
 const router = express.Router();
@@ -24,6 +25,7 @@ router.patch("/states/:id/activate", toggleStateStatus);
 router.post("/cities", createCity);
 router.get("/cities", getAllCities);
 router.patch("/cities/:id/activate", toggleCityStatus);
+router.patch("/cities/:id", updateCity);
 
 // Location requests from vendors
 router.get("/location-requests", getLocationRequests);

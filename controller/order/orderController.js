@@ -271,7 +271,7 @@ export const completeOrderFulfillment = async (orderId) => {
       const adminUser = await Admin.findOne().session(session);
       if (adminUser) {
         [adminWallet] = await Wallet.create(
-          [{ ownerId: adminUser._id, ownerModel: "Admin", balance: 0 }],
+          [{ ownerId: adminUser._id, ownerModel: "Admin", balance: 0, transactions: [] }],
           { session }
         );
       } else {
@@ -307,13 +307,21 @@ export const completeOrderFulfillment = async (orderId) => {
 
       const vendorDeliveryShare = deliveryFeeMap[vendorId] || 0;
 
-      const adminShare = Number((vendorSubtotal * PLATFORM_PERCENT).toFixed(2));
+      const vendor = await Vendor.findById(vendorId).session(session);
+      const deliveryManagedBy = vendor?.deliveryManagedBy || "admin";
 
+      const adminShare = Number((vendorSubtotal * PLATFORM_PERCENT).toFixed(2));
       const vendorShare = Number((vendorSubtotal - adminShare).toFixed(2));
 
-      const vendorCredit = Number(
-        (vendorShare + vendorDeliveryShare).toFixed(2)
-      );
+      let vendorCredit;
+      if (deliveryManagedBy === "vendor") {
+        // Vendor handles delivery — they get food revenue + delivery fee
+        vendorCredit = Number((vendorShare + vendorDeliveryShare).toFixed(2));
+        // Transactions will be added below after wallet fetch
+      } else {
+        // Admin handles delivery — vendor gets food revenue only
+        vendorCredit = Number(vendorShare.toFixed(2));
+      }
 
       /* -------------------------------
        * Create Vendor Order
@@ -367,15 +375,35 @@ export const completeOrderFulfillment = async (orderId) => {
         );
       }
 
+      // Wallet splits already calculated above (adminShare, vendorShare)
+
+      if (deliveryManagedBy === "vendor") {
+        vendorWallet.transactions.push({
+          type: "credit",
+          amount: vendorCredit,
+          description: `Food revenue + delivery fee from Order ${order.orderId}`,
+        });
+      } else {
+        vendorWallet.transactions.push({
+          type: "credit",
+          amount: vendorCredit,
+          description: `Food revenue from Order ${order.orderId}`,
+        });
+
+        // Delivery fee goes to admin wallet (held until rider delivers)
+        if (adminWallet && vendorDeliveryShare > 0) {
+          adminWallet.balance = Number((adminWallet.balance + vendorDeliveryShare).toFixed(2));
+          adminWallet.transactions.push({
+            type: "credit",
+            amount: vendorDeliveryShare,
+            description: `Delivery fee held for admin rider - Order ${order.orderId}`,
+          });
+        }
+      }
+
       vendorWallet.balance = Number(
         (vendorWallet.balance + vendorCredit).toFixed(2)
       );
-
-      vendorWallet.transactions.push({
-        type: "credit",
-        amount: vendorCredit,
-        description: `Revenue from Order ${order.orderId}`,
-      });
 
       await vendorWallet.save({ session });
 
@@ -394,7 +422,7 @@ export const completeOrderFulfillment = async (orderId) => {
       );
 
       /* -------------------------------
-       * Update Admin Wallet
+       * Update Admin Wallet (Commission)
        * ------------------------------- */
       if (adminWallet) {
         adminWallet.balance = Number(
