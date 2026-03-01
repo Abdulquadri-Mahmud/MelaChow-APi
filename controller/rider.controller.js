@@ -1,6 +1,8 @@
 import * as riderService from "../services/rider.service.js";
 import { SOCKET_EVENTS, SOCKET_ROOMS, buildPayload } from "../socket/rider.events.js";
 import { getIO } from "../socket/socketServer.js";
+import Notification from "../model/notification/notification.model.js";
+import Order from "../model/order/Order.js";
 
 export const createRider = async (req, res, next) => {
     try {
@@ -79,7 +81,50 @@ export const assignRider = async (req, res, next) => {
             })
         );
 
+        // --- NEW: Create Notification in DB for Rider ---
+        try {
+            await Notification.create({
+                riderId: rider._id,
+                title: "New Delivery Assigned",
+                body: `You have been assigned an order from ${req.vendor.storeName}.`,
+                type: "order_assigned",
+                orderId: order._id,
+                restaurantId: vendorId,
+                data: {
+                    deliveryAddress: order.deliveryAddress,
+                }
+            });
+        } catch (notifErr) {
+            console.warn('⚠️ Failed to create rider notification in DB:', notifErr.message);
+        }
+
         res.status(200).json({ success: true, message: "Rider assigned successfully", data: { order, rider } });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const getRiderOrderDetails = async (req, res, next) => {
+    try {
+        const { riderId, orderId } = req.params;
+
+        if (req.rider._id.toString() !== riderId) {
+            return res.status(403).json({ success: false, message: "Unauthorized to view this order" });
+        }
+
+        const order = await Order.findById(orderId)
+            .populate("restaurantId", "storeName address phone location coords")
+            .populate("userId", "name phone email");
+
+        if (!order) {
+            return res.status(404).json({ success: false, message: "Order not found" });
+        }
+
+        if (order.riderId?.toString() !== riderId) {
+            return res.status(403).json({ success: false, message: "Rider not assigned to this order" });
+        }
+
+        res.status(200).json({ success: true, data: order });
     } catch (error) {
         next(error);
     }
@@ -90,12 +135,74 @@ export const updateRiderStatus = async (req, res, next) => {
         const { riderId } = req.params;
         const { status } = req.body;
 
+        // Fetch old state before updating
+        const oldRider = await riderService.getSingleRiderForVendor(riderId, req.rider?.vendorId || "dummy");
+        const wasPending = oldRider.status === "pending_assignment";
+        const orderId = oldRider.currentOrderId?._id || oldRider.currentOrderId;
+
         const rider = await riderService.updateRiderStatus(riderId, status);
         const vendorId = rider.vendorId?.toString();
 
+        const io = getIO();
+
+        if (wasPending && orderId) {
+            if (status === "on_delivery") {
+                // Rider Accepted the Order
+                if (vendorId) {
+                    io.to(SOCKET_ROOMS.vendor(vendorId)).emit(
+                        SOCKET_EVENTS.ORDER_STATUS_UPDATE,
+                        buildPayload.statusUpdate({
+                            orderId,
+                            status: "rider_accepted",
+                            changedBy: "rider",
+                            message: `Rider ${rider.name} has accepted the delivery assignment.`,
+                            riderName: rider.name
+                        })
+                    );
+                }
+            } else if (status === "available") {
+                // Rider Rejected the Order
+                const Order = (await import("../model/order/Order.js")).default;
+                const VendorOrder = (await import("../model/vendor/VendorOrder.js")).default;
+
+                const order = await Order.findByIdAndUpdate(
+                    orderId,
+                    {
+                        orderStatus: "ready_for_pickup",
+                        riderId: null, // Open it back up for reassignment
+                        $push: {
+                            statusLog: {
+                                status: "rider_rejected",
+                                changedBy: "rider",
+                                timestamp: new Date()
+                            }
+                        }
+                    },
+                    { new: true }
+                );
+
+                if (order && vendorId) {
+                    await VendorOrder.findOneAndUpdate(
+                        { userOrderId: order._id, restaurantId: vendorId },
+                        { orderStatus: "ready_for_pickup" }
+                    );
+
+                    io.to(SOCKET_ROOMS.vendor(vendorId)).emit(
+                        SOCKET_EVENTS.ORDER_STATUS_UPDATE,
+                        buildPayload.statusUpdate({
+                            orderId,
+                            status: "rider_rejected",
+                            changedBy: "rider",
+                            message: `Rider ${rider.name} rejected the assignment. Please assign another rider.`,
+                            riderName: rider.name
+                        })
+                    );
+                }
+            }
+        }
+
         if (vendorId) {
             try {
-                const io = getIO();
                 io.to(SOCKET_ROOMS.vendor(vendorId)).emit(
                     SOCKET_EVENTS.RIDER_STATUS_CHANGED,
                     buildPayload.riderStatusChanged({

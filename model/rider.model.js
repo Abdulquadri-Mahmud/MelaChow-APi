@@ -33,7 +33,7 @@ const riderSchema = new mongoose.Schema(
         lastLogin: { type: Date },
         status: {
             type: String,
-            enum: ["available", "on_delivery", "offline"],
+            enum: ["available", "pending_assignment", "on_delivery", "offline"],
             default: "offline",
             index: true
         },

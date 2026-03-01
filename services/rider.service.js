@@ -128,7 +128,7 @@ export const assignRiderToOrder = async (orderId, riderId, vendorId) => {
 
         await Rider.findByIdAndUpdate(
             riderId,
-            { status: "on_delivery", currentOrderId: orderId },
+            { status: "pending_assignment", currentOrderId: orderId },
             { session }
         );
 
@@ -296,12 +296,25 @@ export const updateRiderStatus = async (riderId, status) => {
     const rider = await Rider.findById(riderId);
     if (!rider) throw new Error("Rider not found");
 
-    if (!["available", "offline"].includes(status)) {
-        throw new Error("Only 'available' or 'offline' status can be set manually");
+    if (!["available", "offline", "on_delivery"].includes(status)) {
+        throw new Error("Invalid status update");
     }
 
     if (rider.currentOrderId && status === "offline") {
-        throw new Error("Cannot go offline while on a delivery");
+        throw new Error("Cannot go offline while assigned to an order");
+    }
+
+    // Allow transition from pending_assignment to on_delivery or available
+    if (status === "on_delivery") {
+        if (rider.status !== "pending_assignment") {
+            throw new Error("You can only transition to on_delivery from pending_assignment");
+        }
+    }
+
+    // If rider rejects order (transitions to available from pending)
+    if (status === "available" && rider.status === "pending_assignment") {
+        rider.currentOrderId = null; // Clear the pending order from rider
+        // NOTE: Order unassignment logic (removing riderId from Order document) should be handled via the controller orchestrating this.
     }
 
     rider.status = status;
