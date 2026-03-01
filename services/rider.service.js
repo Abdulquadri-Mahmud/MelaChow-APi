@@ -126,12 +126,15 @@ export const assignRiderToOrder = async (orderId, riderId, vendorId) => {
             { session, new: true }
         );
 
-        rider.status = "on_delivery";
-        rider.currentOrderId = orderId;
-        await rider.save({ session });
+        await Rider.findByIdAndUpdate(
+            riderId,
+            { status: "on_delivery", currentOrderId: orderId },
+            { session }
+        );
 
         await session.commitTransaction();
-        return { order, vendorOrder, rider };
+        const updatedRider = await Rider.findById(riderId);
+        return { order, vendorOrder, rider: updatedRider };
     } catch (error) {
         await session.abortTransaction();
         throw error;
