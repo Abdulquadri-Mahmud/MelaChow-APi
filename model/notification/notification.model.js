@@ -7,6 +7,12 @@ const notificationSchema = new mongoose.Schema({
         required: false,
         index: true // Index for fast queries by user
     },
+    riderId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Rider',
+        required: false,
+        index: true
+    },
     title: {
         type: String,
         required: true,
@@ -73,8 +79,11 @@ const notificationSchema = new mongoose.Schema({
 
 // Compound indexes for efficient queries
 notificationSchema.index({ userId: 1, createdAt: -1 }); // Get user's notifications sorted by date
+notificationSchema.index({ riderId: 1, createdAt: -1 }); // Get rider's notifications sorted by date
 notificationSchema.index({ userId: 1, read: 1 }); // Filter by read/unread status
+notificationSchema.index({ riderId: 1, read: 1 }); // Filter rider by read/unread status
 notificationSchema.index({ userId: 1, type: 1 }); // Filter by notification type
+notificationSchema.index({ riderId: 1, type: 1 }); // Filter by rider notification type
 
 // Auto-delete notifications older than 90 days
 notificationSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7776000 }); // 90 days

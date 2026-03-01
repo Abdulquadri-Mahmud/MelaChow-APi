@@ -23,6 +23,7 @@ router.patch("/riders/:riderId/status", requireRiderAuth, riderController.update
 router.patch("/riders/:riderId/picked-up", requireRiderAuth, riderController.markPickedUp);
 router.patch("/riders/:riderId/delivered", requireRiderAuth, riderController.markDelivered);
 router.get("/riders/:riderId/wallet", requireRiderAuth, riderController.getRiderWallet);
+router.get("/riders/:riderId/orders/:orderId", requireRiderAuth, riderController.getRiderOrderDetails);
 
 // Admin global rider management
 router.get("/admin/riders", adminAuth, riderController.adminGetAllRiders);
