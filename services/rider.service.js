@@ -115,7 +115,13 @@ export const getActiveOrder = async (riderId) => {
 
     // Enrich with a simplified status so the dashboard can show the right CTA
     const orderObj = order.toObject();
-    orderObj.status = rider.status === "pending_assignment" ? "assigned" : order.orderStatus;
+    if (rider.status === "pending_assignment") {
+        orderObj.status = "assigned";
+    } else if (rider.status === "on_delivery" || order.orderStatus === "out_for_delivery") {
+        orderObj.status = "out_for_delivery";
+    } else {
+        orderObj.status = order.orderStatus;
+    }
     orderObj.restaurantName = order.restaurantId?.storeName || null;
     orderObj.userPhone = order.userId?.phone || null;
 
