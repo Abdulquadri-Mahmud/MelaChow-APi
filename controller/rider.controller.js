@@ -143,9 +143,14 @@ export const updateRiderStatus = async (req, res, next) => {
         const rider = await riderService.updateRiderStatus(riderId, status);
         const vendorId = rider.vendorId?.toString();
 
-        const io = getIO();
+        let io;
+        try {
+            io = getIO();
+        } catch (err) {
+            console.warn("Socket.IO not initialized during rider status update", err.message);
+        }
 
-        if (wasPending && orderId) {
+        if (wasPending && orderId && io) {
             if (status === "on_delivery") {
                 // Rider Accepted the Order
                 if (vendorId) {
@@ -201,7 +206,7 @@ export const updateRiderStatus = async (req, res, next) => {
             }
         }
 
-        if (vendorId) {
+        if (io && vendorId) {
             try {
                 io.to(SOCKET_ROOMS.vendor(vendorId)).emit(
                     SOCKET_EVENTS.RIDER_STATUS_CHANGED,
