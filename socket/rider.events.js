@@ -36,8 +36,11 @@ export const buildPayload = {
         createdAt
     }),
 
-    orderAssigned: ({ orderId, vendorId, vendorName, items, deliveryAddress, customerName, customerPhone, note }) => ({
+    // ✅ FIX: Added riderId to the payload so the frontend can verify the event
+    // is meant for this specific rider and dispatch rider:new_assignment
+    orderAssigned: ({ orderId, riderId, vendorId, vendorName, items, deliveryAddress, customerName, customerPhone, note }) => ({
         orderId,
+        riderId,      // ← was missing; handleRiderAssigned check always failed without this
         vendorId,
         vendorName,
         items,

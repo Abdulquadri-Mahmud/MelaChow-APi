@@ -31,7 +31,7 @@ export const createRider = async (riderData, vendorId = null) => {
         isActive: true
     });
 
-    // ── Auto-create wallet for rider ──────────────────────────────────────
+    // Auto-create wallet for rider
     try {
         const existingWallet = await Wallet.findOne({
             ownerId: rider._id,
@@ -51,7 +51,6 @@ export const createRider = async (riderData, vendorId = null) => {
         console.error(`⚠️ Failed to create wallet for rider ${rider._id}:`, walletError.message);
     }
 
-    // Add rider to vendor's riders array if applicable
     if (vendorId) {
         const vendor = await Vendor.findById(vendorId);
         if (vendor) {
@@ -89,6 +88,44 @@ export const getSingleRiderForVendor = async (riderId, vendorId) => {
  */
 export const getAvailableRiders = async (vendorId) => {
     return Rider.getAvailableForVendor(vendorId);
+};
+
+/**
+ * ✅ FIX: Get the rider's currently active/assigned order.
+ * The frontend calls GET /riders/:riderId/active-order but this function
+ * did not exist — causing a permanent 404 and making activeOrder always null.
+ */
+export const getActiveOrder = async (riderId) => {
+    const rider = await Rider.findById(riderId);
+    if (!rider) throw new Error("Rider not found");
+
+    // No active order assigned
+    if (!rider.currentOrderId) return null;
+
+    const order = await Order.findById(rider.currentOrderId)
+        .populate("restaurantId", "storeName address phone location coords")
+        .populate("userId", "name phone email");
+
+    if (!order) {
+        // Order was deleted or currentOrderId is stale — clean it up
+        rider.currentOrderId = null;
+        await rider.save();
+        return null;
+    }
+
+    // Enrich with a simplified status so the dashboard can show the right CTA
+    const orderObj = order.toObject();
+    if (rider.status === "pending_assignment") {
+        orderObj.status = "assigned";
+    } else if (rider.status === "on_delivery" || order.orderStatus === "out_for_delivery") {
+        orderObj.status = "out_for_delivery";
+    } else {
+        orderObj.status = order.orderStatus;
+    }
+    orderObj.restaurantName = order.restaurantId?.storeName || null;
+    orderObj.userPhone = order.userId?.phone || null;
+
+    return orderObj;
 };
 
 /**
@@ -167,6 +204,9 @@ export const markPickedUp = async (orderId, riderId) => {
         { orderStatus: "out_for_delivery" }
     );
 
+    // Move rider to on_delivery
+    await Rider.findByIdAndUpdate(riderId, { status: "on_delivery" });
+
     return order;
 };
 
@@ -201,14 +241,12 @@ export const markDelivered = async (orderId, riderId) => {
 
         const riderVendorId = rider.vendorId?.toString();
 
-        // Resolve delivery fee from order
         const deliveryFeeEntry = order.vendorDeliveryFees?.find(
             v => v.restaurantId?.toString() === riderVendorId
         );
         const deliveryFee = Number(deliveryFeeEntry?.deliveryFee || 0);
 
         if (deliveryFee > 0) {
-            // Find or create rider wallet
             let riderWallet = await Wallet.findOne({
                 ownerId: riderId,
                 ownerModel: "Rider"
@@ -221,7 +259,6 @@ export const markDelivered = async (orderId, riderId) => {
                 );
             }
 
-            // Credit rider wallet
             riderWallet.balance = Number((riderWallet.balance + deliveryFee).toFixed(2));
             riderWallet.transactions.push({
                 type: "credit",
@@ -231,14 +268,12 @@ export const markDelivered = async (orderId, riderId) => {
             });
             await riderWallet.save({ session });
 
-            // Determine who to debit based on delivery mode
             const vendor = riderVendorId
                 ? await Vendor.findById(riderVendorId).session(session)
                 : null;
             const deliveryManagedBy = vendor?.deliveryManagedBy || "admin";
 
             if (deliveryManagedBy === "vendor" && vendor) {
-                // Debit vendor wallet
                 const vendorWallet = await Wallet.findOne({
                     ownerId: riderVendorId,
                     ownerModel: "Vendor"
@@ -254,10 +289,8 @@ export const markDelivered = async (orderId, riderId) => {
                         date: new Date()
                     });
                     await vendorWallet.save({ session });
-                    console.log(`💸 ₦${deliveryFee} transferred: Vendor ${riderVendorId} → Rider ${riderId}`);
                 }
             } else {
-                // Debit admin wallet
                 const adminWallet = await Wallet.findOne({
                     ownerModel: "Admin"
                 }).session(session);
@@ -272,7 +305,6 @@ export const markDelivered = async (orderId, riderId) => {
                         date: new Date()
                     });
                     await adminWallet.save({ session });
-                    console.log(`💸 ₦${deliveryFee} transferred: Admin → Rider ${riderId}`);
                 }
             }
         }
@@ -304,17 +336,14 @@ export const updateRiderStatus = async (riderId, status) => {
         throw new Error("Cannot go offline while assigned to an order");
     }
 
-    // Allow transition from pending_assignment to on_delivery or available
     if (status === "on_delivery") {
         if (rider.status !== "pending_assignment") {
             throw new Error("You can only transition to on_delivery from pending_assignment");
         }
     }
 
-    // If rider rejects order (transitions to available from pending)
     if (status === "available" && rider.status === "pending_assignment") {
-        rider.currentOrderId = null; // Clear the pending order from rider
-        // NOTE: Order unassignment logic (removing riderId from Order document) should be handled via the controller orchestrating this.
+        rider.currentOrderId = null;
     }
 
     rider.status = status;

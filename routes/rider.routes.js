@@ -11,12 +11,16 @@ router.post("/vendors/:vendorId/riders", authVendor, riderController.createRider
 router.get("/vendors/:vendorId/riders", authVendor, riderController.getVendorRiders);
 router.get("/vendors/:vendorId/riders/available", authVendor, riderController.getAvailableRiders);
 router.get("/vendors/:vendorId/riders/:riderId", authVendor, riderController.getSingleVendorRider);
-
 router.patch("/vendors/:vendorId/riders/:riderId", authVendor, riderController.updateRider);
 router.delete("/vendors/:vendorId/riders/:riderId", authVendor, riderController.deactivateRider);
 
 // Vendor assigns a rider to an order
 router.post("/vendors/:vendorId/orders/:orderId/assign-rider", authVendor, riderController.assignRider);
+
+// ✅ FIX: This route was called by the dashboard (getActiveRiderOrder) but NEVER existed.
+// Without it, fetchActiveOrder() always got a 404 → activeOrder was always null
+// → rider could never see their assigned delivery on the dashboard.
+router.get("/riders/:riderId/active-order", requireRiderAuth, riderController.getActiveOrder);
 
 // Rider self-service actions
 router.patch("/riders/:riderId/status", requireRiderAuth, riderController.updateRiderStatus);
@@ -29,7 +33,6 @@ router.get("/riders/:riderId/orders/:orderId", requireRiderAuth, riderController
 router.get("/admin/riders", adminAuth, riderController.adminGetAllRiders);
 router.patch("/admin/riders/:riderId", adminAuth, riderController.adminUpdateRider);
 router.delete("/admin/riders/:riderId", adminAuth, riderController.adminDeactivateRider);
-// Admin can also create riders for any vendor via the existing POST route if we allow adminAuth there
 router.post("/admin/vendors/:vendorId/riders", adminAuth, riderController.createRider);
 
 export default router;

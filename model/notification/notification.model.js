@@ -5,7 +5,7 @@ const notificationSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         required: false,
-        index: true // Index for fast queries by user
+        index: true
     },
     riderId: {
         type: mongoose.Schema.Types.ObjectId,
@@ -32,6 +32,8 @@ const notificationSchema = new mongoose.Schema({
             'order_dispatched',
             'order_delivered',
             'order_cancelled',
+            'order_assigned',        // ✅ FIX: was missing — caused silent DB failure for rider assignment notifications
+            'rider_order_rejected',  // ✅ FIX: added for completeness
             'vendor_new_order',
             'vendor_order_cancelled',
             'promo',
@@ -45,7 +47,7 @@ const notificationSchema = new mongoose.Schema({
     },
     orderId: {
         type: String,
-        sparse: true // Only index non-null values
+        sparse: true
     },
     restaurantId: {
         type: mongoose.Schema.Types.ObjectId,
@@ -53,40 +55,37 @@ const notificationSchema = new mongoose.Schema({
         index: true
     },
     url: {
-        type: String, // Deep link URL for navigation
+        type: String,
         trim: true
     },
     image: {
-        type: String, // Optional banner image URL
+        type: String,
         trim: true
     },
     icon: {
-        type: String, // Custom icon URL
+        type: String,
         trim: true
     },
     read: {
         type: Boolean,
         default: false,
-        index: true // Index for filtering unread notifications
+        index: true
     },
     data: {
-        type: mongoose.Schema.Types.Mixed, // Additional custom data
+        type: mongoose.Schema.Types.Mixed,
         default: {}
     }
 }, {
-    timestamps: true // Adds createdAt and updatedAt
+    timestamps: true
 });
 
-// Compound indexes for efficient queries
-notificationSchema.index({ userId: 1, createdAt: -1 }); // Get user's notifications sorted by date
-notificationSchema.index({ riderId: 1, createdAt: -1 }); // Get rider's notifications sorted by date
-notificationSchema.index({ userId: 1, read: 1 }); // Filter by read/unread status
-notificationSchema.index({ riderId: 1, read: 1 }); // Filter rider by read/unread status
-notificationSchema.index({ userId: 1, type: 1 }); // Filter by notification type
-notificationSchema.index({ riderId: 1, type: 1 }); // Filter by rider notification type
-
-// Auto-delete notifications older than 90 days
-notificationSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7776000 }); // 90 days
+notificationSchema.index({ userId: 1, createdAt: -1 });
+notificationSchema.index({ riderId: 1, createdAt: -1 });
+notificationSchema.index({ userId: 1, read: 1 });
+notificationSchema.index({ riderId: 1, read: 1 });
+notificationSchema.index({ userId: 1, type: 1 });
+notificationSchema.index({ riderId: 1, type: 1 });
+notificationSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7776000 });
 
 const Notification = mongoose.model('Notification', notificationSchema);
 
