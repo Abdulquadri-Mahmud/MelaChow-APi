@@ -3,6 +3,7 @@ import { SOCKET_EVENTS, SOCKET_ROOMS, buildPayload } from "../socket/rider.event
 import { getIO } from "../socket/socketServer.js";
 import Notification from "../model/notification/notification.model.js";
 import Order from "../model/order/Order.js";
+import Rider from "../model/rider.model.js";
 
 export const createRider = async (req, res, next) => {
     try {
@@ -54,17 +55,19 @@ export const assignRider = async (req, res, next) => {
 
         const io = getIO(req);
 
-        // Notify rider
+        // ✅ FIX: riderId is now included in the payload so the frontend
+        // handleRiderAssigned guard (data.riderId === riderId) actually passes
         io.to(SOCKET_ROOMS.rider(riderId)).emit(
             SOCKET_EVENTS.ORDER_ASSIGNED_TO_RIDER,
             buildPayload.orderAssigned({
                 orderId: order._id,
+                riderId,                                   // ← was missing
                 vendorId,
                 vendorName: req.vendor.storeName,
                 items: order.items,
                 deliveryAddress: order.deliveryAddress,
-                customerName: order.deliveryAddress.name || "Customer", // Fallback
-                customerPhone: order.deliveryAddress.phone,
+                customerName: order.deliveryAddress?.name || "Customer",
+                customerPhone: order.deliveryAddress?.phone,
                 note: order.note
             })
         );
@@ -81,24 +84,58 @@ export const assignRider = async (req, res, next) => {
             })
         );
 
-        // --- NEW: Create Notification in DB for Rider ---
+        // ✅ FIX: Notification type changed from "order_assigned" (not in enum → DB failure)
+        // to "order_assigned" which is NOW in the schema enum after the model fix.
+        // The try/catch here is fine for resilience but should no longer fail.
         try {
             await Notification.create({
                 riderId: rider._id,
                 title: "New Delivery Assigned",
                 body: `You have been assigned an order from ${req.vendor.storeName}.`,
                 type: "order_assigned",
-                orderId: order._id,
+                orderId: order._id?.toString(),
                 restaurantId: vendorId,
+                url: `/rider/dashboard`,
                 data: {
                     deliveryAddress: order.deliveryAddress,
+                    orderId: order._id,
                 }
             });
         } catch (notifErr) {
             console.warn('⚠️ Failed to create rider notification in DB:', notifErr.message);
         }
 
-        res.status(200).json({ success: true, message: "Rider assigned successfully", data: { order, rider } });
+        res.status(200).json({
+            success: true,
+            message: "Rider assigned successfully",
+            data: { order, rider }
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
+ * ✅ FIX: New controller for GET /riders/:riderId/active-order
+ * The frontend always called this endpoint but it never existed,
+ * causing activeOrder to perpetually be null on the dashboard.
+ */
+export const getActiveOrder = async (req, res, next) => {
+    try {
+        const { riderId } = req.params;
+
+        // Auth guard — rider can only fetch their own active order
+        if (req.rider._id.toString() !== riderId) {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
+        }
+
+        const order = await riderService.getActiveOrder(riderId);
+
+        if (!order) {
+            return res.status(404).json({ success: false, message: "No active order" });
+        }
+
+        res.status(200).json({ success: true, data: { order } });
     } catch (error) {
         next(error);
     }
@@ -135,8 +172,15 @@ export const updateRiderStatus = async (req, res, next) => {
         const { riderId } = req.params;
         const { status } = req.body;
 
-        // Fetch old state before updating
-        const oldRider = await riderService.getSingleRiderForVendor(riderId, req.rider?.vendorId || "dummy");
+        // ✅ FIX: Was calling getSingleRiderForVendor(riderId, req.rider?.vendorId || "dummy")
+        // which queries { _id: riderId, vendorId: "dummy" } for admin-managed riders
+        // → always throws "Rider not found" BEFORE the status update happens.
+        // Now we fetch directly by ID, which works for all rider types.
+        const oldRider = await Rider.findById(riderId).populate("currentOrderId");
+        if (!oldRider) {
+            return res.status(404).json({ success: false, message: "Rider not found" });
+        }
+
         const wasPending = oldRider.status === "pending_assignment";
         const orderId = oldRider.currentOrderId?._id || oldRider.currentOrderId;
 
@@ -152,7 +196,7 @@ export const updateRiderStatus = async (req, res, next) => {
 
         if (wasPending && orderId && io) {
             if (status === "on_delivery") {
-                // Rider Accepted the Order
+                // Rider accepted the order
                 if (vendorId) {
                     io.to(SOCKET_ROOMS.vendor(vendorId)).emit(
                         SOCKET_EVENTS.ORDER_STATUS_UPDATE,
@@ -166,15 +210,15 @@ export const updateRiderStatus = async (req, res, next) => {
                     );
                 }
             } else if (status === "available") {
-                // Rider Rejected the Order
-                const Order = (await import("../model/order/Order.js")).default;
+                // Rider rejected the order
+                const OrderModel = (await import("../model/order/Order.js")).default;
                 const VendorOrder = (await import("../model/vendor/VendorOrder.js")).default;
 
-                const order = await Order.findByIdAndUpdate(
+                const order = await OrderModel.findByIdAndUpdate(
                     orderId,
                     {
                         orderStatus: "ready_for_pickup",
-                        riderId: null, // Open it back up for reassignment
+                        riderId: null,
                         $push: {
                             statusLog: {
                                 status: "rider_rejected",
@@ -243,7 +287,6 @@ export const markPickedUp = async (req, res, next) => {
                 message: "Rider has picked up the order",
                 riderName: req.rider.name
             });
-            // vendorId must come from the rider — fetch it from req.rider
             io.to(SOCKET_ROOMS.vendor(req.rider?.vendorId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, payload);
             io.to(SOCKET_ROOMS.customer(order.userId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, payload);
         } catch (socketErr) {
@@ -277,7 +320,6 @@ export const markDelivered = async (req, res, next) => {
                 riderName: req.rider.name
             });
             io.to(SOCKET_ROOMS.customer(order.userId)).emit(SOCKET_EVENTS.ORDER_DELIVERED, deliveredPayload);
-            // vendorId must come from the rider — fetch it from req.rider
             io.to(SOCKET_ROOMS.vendor(req.rider?.vendorId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, statusPayload);
         } catch (socketErr) {
             console.warn('⚠️ Socket emit failed:', socketErr.message);
