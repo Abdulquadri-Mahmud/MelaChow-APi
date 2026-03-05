@@ -151,7 +151,7 @@ export const getRiderOrderDetails = async (req, res, next) => {
 
         const order = await Order.findById(orderId)
             .populate({ path: "items.restaurantId", select: "storeName address phone location coords" })
-            .populate("userId", "name phone email");
+            .populate("userId", "firstname lastname name fullName phone email");
 
         if (!order) {
             return res.status(404).json({ success: false, message: "Order not found" });
@@ -163,6 +163,14 @@ export const getRiderOrderDetails = async (req, res, next) => {
 
         const orderObj = order.toObject();
         orderObj.restaurantId = orderObj.items?.[0]?.restaurantId || orderObj.vendorId || null;
+
+        // Populate customer-specific details for Rider UI
+        const user = orderObj.userId;
+        orderObj.userName = user?.fullName || (user ? `${user.firstname || ""} ${user.lastname || ""}`.trim() : null) || "Customer";
+        orderObj.userPhone = user?.phone || orderObj.phone || null;
+
+        const addr = orderObj.deliveryAddress;
+        orderObj.deliveryFullAddress = addr?.address || addr?.addressLine || (addr ? `${addr.addressLine || ""}, ${addr.cityName || addr.city || ""}`.trim() : null);
 
         res.status(200).json({ success: true, data: orderObj });
     } catch (error) {
