@@ -103,7 +103,7 @@ export const getActiveOrder = async (riderId) => {
     if (!rider.currentOrderId) return null;
 
     const order = await Order.findById(rider.currentOrderId)
-        .populate("restaurantId", "storeName address phone location coords")
+        .populate({ path: "items.restaurantId", select: "storeName address phone location coords" })
         .populate("userId", "name phone email");
 
     if (!order) {
@@ -122,7 +122,9 @@ export const getActiveOrder = async (riderId) => {
     } else {
         orderObj.status = order.orderStatus;
     }
-    orderObj.restaurantName = order.restaurantId?.storeName || null;
+    const firstRestaurant = order.items?.[0]?.restaurantId;
+    orderObj.restaurantId = firstRestaurant || order.vendorId || null;
+    orderObj.restaurantName = firstRestaurant?.storeName || null;
     orderObj.userPhone = order.userId?.phone || null;
 
     return orderObj;
