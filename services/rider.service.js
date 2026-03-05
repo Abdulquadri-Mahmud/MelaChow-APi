@@ -104,7 +104,7 @@ export const getActiveOrder = async (riderId) => {
 
     const order = await Order.findById(rider.currentOrderId)
         .populate({ path: "items.restaurantId", select: "storeName address phone location coords" })
-        .populate("userId", "name phone email");
+        .populate("userId", "firstname lastname name fullName phone email");
 
     if (!order) {
         // Order was deleted or currentOrderId is stale — clean it up
@@ -125,7 +125,15 @@ export const getActiveOrder = async (riderId) => {
     const firstRestaurant = order.items?.[0]?.restaurantId;
     orderObj.restaurantId = firstRestaurant || order.vendorId || null;
     orderObj.restaurantName = firstRestaurant?.storeName || null;
-    orderObj.userPhone = order.userId?.phone || null;
+
+    // Customer Name resolution
+    const user = order.userId;
+    orderObj.userName = user?.fullName || (user ? `${user.firstname || ""} ${user.lastname || ""}`.trim() : null) || "Customer";
+    orderObj.userPhone = user?.phone || order.phone || null;
+
+    // Address resolution for Rider (Full String)
+    const addr = order.deliveryAddress;
+    orderObj.deliveryFullAddress = addr?.address || addr?.addressLine || (addr ? `${addr.addressLine || ""}, ${addr.cityName || addr.city || ""}`.trim() : null);
 
     return orderObj;
 };
