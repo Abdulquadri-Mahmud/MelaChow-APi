@@ -150,7 +150,7 @@ export const getRiderOrderDetails = async (req, res, next) => {
         }
 
         const order = await Order.findById(orderId)
-            .populate("restaurantId", "storeName address phone location coords")
+            .populate({ path: "items.restaurantId", select: "storeName address phone location coords" })
             .populate("userId", "name phone email");
 
         if (!order) {
@@ -161,7 +161,10 @@ export const getRiderOrderDetails = async (req, res, next) => {
             return res.status(403).json({ success: false, message: "Rider not assigned to this order" });
         }
 
-        res.status(200).json({ success: true, data: order });
+        const orderObj = order.toObject();
+        orderObj.restaurantId = orderObj.items?.[0]?.restaurantId || orderObj.vendorId || null;
+
+        res.status(200).json({ success: true, data: orderObj });
     } catch (error) {
         next(error);
     }
