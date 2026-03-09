@@ -20,14 +20,17 @@ const router = express.Router();
 // Registration flow
 router.post("/register", registerVendor);
 router.post("/verify-registration", verifyVendorRegistration);
+router.post("/verify-otp", verifyVendorRegistration); // Alias for frontend compatibility
 router.post("/set-password", setVendorPassword);
 
 // Login
 router.post("/login-password", loginVendorWithPassword);
+router.post("/login", loginVendorWithPassword); // Alias
 
 // Password Reset Flow
 router.post("/forgot-password", vendorForgotPasswordNew);
 router.post("/verify-reset-code", verifyVendorResetCode);
+router.post("/verify-reset", verifyVendorResetCode); // Alias
 router.post("/reset-password", resetVendorPasswordNew);
 
 // Token Refresh

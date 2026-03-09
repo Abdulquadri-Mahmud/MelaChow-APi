@@ -34,6 +34,7 @@ import adminNotificationRoutes from './routes/Admin/admin.notification.routes.js
 import riderRoutes from "./routes/rider.routes.js";
 import riderAuthRoutes from "./routes/riderAuth.routes.js";
 import adminOrderRoutes from './routes/Admin/adminOrder.routes.js';
+import platformFinanceRouter from './routes/Admin/platformFinance.routes.js';
 import socketHealthRoutes from './routes/socket.routes.js';
 import riderNotificationRoutes from './routes/riderNotification.routes.js';
 import http from 'http';
@@ -183,6 +184,7 @@ app.use('/api/admin/user', userManagementRoutes);
 app.use('/api/admin/user/reviews', ReviewsRoutes);
 app.use('/api/admin/locations', adminLocationRoutes);
 app.use('/api/admin/orders', adminOrderRoutes);
+app.use('/api/admin/finance', platformFinanceRouter);
 
 // Transactions
 app.use("/api/transactions", transactionRoutes);

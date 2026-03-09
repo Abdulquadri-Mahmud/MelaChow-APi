@@ -185,7 +185,16 @@ export const setVendorPassword = async (req, res) => {
     vendor.lastLogin = Date.now();
     await vendor.save();
 
-    // Generate tokens
+    // If not approved, notify but don't log in
+    if (!vendor.isApproved) {
+      return res.status(200).json({
+        success: true,
+        message: 'Password set successfully. Your account is currently pending admin approval. You will receive an email once your account is activated.',
+        requiresApproval: true
+      });
+    }
+
+    // Generate tokens (only if already approved - rare case but possible for re-registrations)
     const accessToken = generateAccessToken(vendor._id, 'vendor');
     const refreshToken = generateRefreshToken(vendor._id, 'vendor');
 
@@ -227,11 +236,20 @@ export const loginVendorWithPassword = async (req, res) => {
       return res.status(401).json({ message: 'Invalid email or password' });
     }
 
-    // Check if account is verified
+    // Check if account is verified (email)
     if (!vendor.verified) {
       return res.status(401).json({
-        message: 'Account under review or not verified. Please verify your email first.',
+        message: 'Email not verified. Please verify your email first.',
         requiresVerification: true
+      });
+    }
+
+    // Check if account is approved by admin
+    if (!vendor.isApproved) {
+      return res.status(403).json({
+        success: false,
+        message: 'Your account is pending admin approval. You will be notified via email once approved.',
+        requiresApproval: true
       });
     }
 
@@ -487,8 +505,8 @@ export const refreshVendorToken = async (req, res) => {
 
     const vendor = await Vendor.findById(decoded.id);
 
-    if (!vendor || vendor.suspended || !vendor.active) {
-      return res.status(401).json({ message: 'Vendor not found or inactive' });
+    if (!vendor || vendor.suspended || !vendor.active || !vendor.isApproved) {
+      return res.status(401).json({ message: 'Vendor not found, inactive, or pending approval' });
     }
 
     // Generate new access token

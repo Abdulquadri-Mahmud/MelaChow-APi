@@ -52,6 +52,7 @@ export const getAllOrders = async (req, res) => {
 
         const orders = await Order.find(filters)
             .populate("userId", "firstname lastname email phone")
+            .populate("riderId", "firstname lastname phone")
             .populate("items.restaurantId", "storeName logo deliveryManagedBy")
             .populate("items.foodId", "name")
             .sort({ createdAt: -1 })
@@ -302,23 +303,29 @@ export const adminOverrideOrderStatus = async (req, res) => {
  */
 export const getPlatformManagedOrders = async (req, res) => {
     try {
-        const { status, page = 1, limit = 20 } = req.query;
+        const { status, paymentStatus, startDate, endDate, page = 1, limit = 20 } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
         // 1. Find platform-managed vendor IDs
         const adminVendors = await Vendor.find({ deliveryManagedBy: "admin" }).select("_id");
         const adminVendorIds = adminVendors.map(v => v._id);
 
-        // 2. Find paid orders containing these vendors
+        // 2. Build filters
         const filter = {
-            paymentStatus: "paid",
             "items.restaurantId": { $in: adminVendorIds }
         };
 
         if (status) filter.orderStatus = status;
+        if (paymentStatus) filter.paymentStatus = paymentStatus;
+        if (startDate || endDate) {
+            filter.createdAt = {};
+            if (startDate) filter.createdAt.$gte = new Date(startDate);
+            if (endDate) filter.createdAt.$lte = new Date(endDate);
+        }
 
         const orders = await Order.find(filter)
-            .populate("riderId", "firstname lastname phone")
+            .populate("userId", "firstname lastname email phone")
+            .populate("riderId", "firstname lastname phone profileImage vehicleType")
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit))
