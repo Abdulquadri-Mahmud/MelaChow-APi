@@ -8,6 +8,8 @@ import Wallet from "../../model/wallet/wallet.mode.js";
 import { sendTokenCookie } from "../../utils/sendTokenCookie.js";
 
 import { generateAccessToken, generateRefreshToken } from "../../utils/generateTokens.js";
+import ActivityLog from "../../model/ActivityLog.js";
+
 
 export const registerAdmin = async (req, res) => {
   try {
@@ -35,6 +37,16 @@ export const registerAdmin = async (req, res) => {
     // Link wallet to admin
     admin.wallet = wallet._id;
     await admin.save();
+
+    // Create a wallet...
+    // Log registration
+    await ActivityLog.create({
+      adminId: admin._id,
+      action: "LOGIN", // Registry counts as initial login
+      targetType: "Admin",
+      targetId: admin._id,
+      details: `New admin registered with role: ${role}`,
+    });
 
     // Response
     res.status(201).json({
@@ -70,6 +82,17 @@ export const loginAdmin = async (req, res) => {
     const refreshToken = generateRefreshToken({ id: admin._id, role: admin.role });
 
     sendTokenCookie(res, refreshToken, "adminToken");
+
+    // Log login
+    await ActivityLog.create({
+      adminId: admin._id,
+      action: "LOGIN",
+      targetType: "System",
+      details: `${admin.name} logged into the system`,
+      ipAddress: req.ip,
+      userAgent: req.headers["user-agent"],
+    });
+
     res.status(200).json({
       success: true,
       message: "Login successful",
@@ -144,7 +167,20 @@ export const getAllAdmins = async (req, res) => {
 export const deleteAdmin = async (req, res) => {
   try {
     const { id } = req.params;
+    const adminToDelete = await Admin.findById(id);
     await Admin.findByIdAndDelete(id);
+
+    // Log deletion if performer is super-admin
+    if (req.admin) {
+      await ActivityLog.create({
+        adminId: req.admin._id,
+        action: "DELETE_ADMIN",
+        targetType: "Admin",
+        targetId: id,
+        details: `Deleted admin account: ${adminToDelete?.email || id}`,
+      });
+    }
+
     res.status(200).json({ success: true, message: "Admin deleted successfully" });
   } catch (err) {
     res.status(500).json({ success: false, message: "Delete failed", error: err.message });
@@ -167,8 +203,47 @@ export const logoutAdmin = async (req, res) => {
       path: "/",
     });
 
+    // Log logout
+    if (req.admin) {
+      await ActivityLog.create({
+        adminId: req.admin._id,
+        action: "LOGOUT",
+        targetType: "System",
+        details: `${req.admin.name} logged out`,
+      });
+    }
+
     res.status(200).json({ success: true, message: "Logged out successfully" });
   } catch (err) {
     res.status(500).json({ success: false, message: "Logout failed", error: err.message });
   }
 };
+
+// =============================
+// GET RECENT ACTIVITIES
+// =============================
+export const getRecentActivities = async (req, res) => {
+  try {
+    const { limit = 10, page = 1 } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+
+    const activities = await ActivityLog.find()
+      .populate("adminId", "name email role")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(parseInt(limit))
+      .lean();
+
+    const total = await ActivityLog.countDocuments();
+
+    res.status(200).json({
+      success: true,
+      count: activities.length,
+      total,
+      activities,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to fetch activities", error: err.message });
+  }
+};
+

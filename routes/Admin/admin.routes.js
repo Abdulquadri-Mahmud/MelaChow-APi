@@ -6,7 +6,8 @@ import {
     loginAdmin,
     registerAdmin,
     resetPassword,
-    logoutAdmin
+    logoutAdmin,
+    getRecentActivities
 } from "../../controller/Admin/admin.controller.js";
 import { adminAuth } from "../../middleware/adminAuth.js";
 import {
@@ -35,6 +36,7 @@ router.post("/logout", logoutAdmin);
 // Admin management
 router.get("/get-all", adminAuth, getAllAdmins);
 router.delete("/delete/:id", adminAuth, deleteAdmin);
+router.get("/activities", adminAuth, getRecentActivities);
 
 // Vendor Management Routes (Admin Protected)
 router.patch("/vendors/approve", adminAuth, approveVendor);

@@ -160,6 +160,14 @@ UserSchema.methods.resetLoginAttempts = async function () {
   });
 };
 
+UserSchema.virtual("wallet", {
+  ref: "Wallet",
+  localField: "_id",
+  foreignField: "ownerId",
+  justOne: true,
+  match: { ownerModel: "User" }
+});
+
 // Avoid recompilation issues in dev (important for Next.js)
 const User = mongoose.models.User || mongoose.model("User", UserSchema);
 

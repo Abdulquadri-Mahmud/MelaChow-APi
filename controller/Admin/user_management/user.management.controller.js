@@ -2,6 +2,8 @@ import { sendUserBanEmail } from "../../../config/Admin/user_mailer/sendUser.ban
 import { sendUserReactivationEmail } from "../../../config/Admin/user_mailer/sendUser.reactivation.email.js";
 import { sendUserSuspensionEmail } from "../../../config/Admin/user_mailer/sendUser.suspension.email.js";
 import User from "../../../model/user.model.js";
+import ActivityLog from "../../../model/ActivityLog.js";
+
 
 /**
  * Get all users with optional filters
@@ -23,6 +25,7 @@ export const getAllUsers = async (req, res) => {
       ];
 
     const users = await User.find(filters)
+      .populate("wallet")
       .sort({ createdAt: -1 })
       .lean();
 
@@ -45,7 +48,7 @@ export const getUserDetails = async (req, res) => {
     if (!userId)
       return res.status(400).json({ success: false, message: "userId is required" });
 
-    const user = await User.findById(userId).lean();
+    const user = await User.findById(userId).populate("wallet").lean();
     if (!user)
       return res.status(404).json({ success: false, message: "User not found" });
 
@@ -75,6 +78,15 @@ export const suspendUser = async (req, res) => {
 
     // Send suspension email
     await sendUserSuspensionEmail(user, reason);
+
+    // Log action
+    await ActivityLog.create({
+      adminId: req.admin._id,
+      action: "SUSPEND_USER",
+      targetType: "User",
+      targetId: user._id,
+      details: `Suspended user: ${user.fullName || user.email}. Reason: ${reason || "N/A"}`,
+    });
 
     res.status(200).json({
       success: true,
@@ -106,6 +118,15 @@ export const banUser = async (req, res) => {
 
     // Send ban email
     await sendUserBanEmail(user, reason);
+
+    // Log action
+    await ActivityLog.create({
+      adminId: req.admin._id,
+      action: "BAN_USER",
+      targetType: "User",
+      targetId: user._id,
+      details: `Permanently banned user: ${user.fullName || user.email}. Reason: ${reason || "N/A"}`,
+    });
 
     res.status(200).json({
       success: true,
@@ -139,6 +160,15 @@ export const reactivateUser = async (req, res) => {
 
     // Send reactivation email
     await sendUserReactivationEmail(user);
+
+    // Log action
+    await ActivityLog.create({
+      adminId: req.admin._id,
+      action: "REACTIVATE_USER",
+      targetType: "User",
+      targetId: user._id,
+      details: `Reactivated user: ${user.fullName || user.email}`,
+    });
 
     res.status(200).json({
       success: true,
