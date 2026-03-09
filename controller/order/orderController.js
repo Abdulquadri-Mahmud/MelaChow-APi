@@ -382,12 +382,14 @@ export const completeOrderFulfillment = async (orderId) => {
           type: "credit",
           amount: vendorCredit,
           description: `Food revenue + delivery fee from Order ${order.orderId}`,
+          orderId: order._id,
         });
       } else {
         vendorWallet.transactions.push({
           type: "credit",
           amount: vendorCredit,
           description: `Food revenue from Order ${order.orderId}`,
+          orderId: order._id,
         });
 
         // Delivery fee goes to admin wallet (held until rider delivers)
@@ -397,6 +399,7 @@ export const completeOrderFulfillment = async (orderId) => {
             type: "credit",
             amount: vendorDeliveryShare,
             description: `Delivery fee held for admin rider - Order ${order.orderId}`,
+            orderId: order._id,
           });
         }
       }
@@ -433,6 +436,7 @@ export const completeOrderFulfillment = async (orderId) => {
           type: "credit",
           amount: adminShare,
           description: `Commission from Order ${order.orderId}`,
+          orderId: order._id,
         });
       }
     }

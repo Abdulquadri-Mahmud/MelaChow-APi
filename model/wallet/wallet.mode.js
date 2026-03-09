@@ -28,6 +28,11 @@ const walletSchema = new mongoose.Schema(
           required: true,
         },
         description: String,
+        orderId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "Order",
+          default: null
+        },
         date: {
           type: Date,
           default: Date.now,
