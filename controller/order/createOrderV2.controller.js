@@ -712,7 +712,8 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
             vendorWallet.transactions.push({
                 type: "credit",
                 amount: vendorCredit,
-                description: `Food revenue + delivery fee from Order ${order.orderId}`
+                description: `Food revenue + delivery fee from Order ${order.orderId}`,
+                orderId: order._id
             });
         } else {
             // Admin handles delivery — vendor gets food revenue only
@@ -720,7 +721,8 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
             vendorWallet.transactions.push({
                 type: "credit",
                 amount: vendorCredit,
-                description: `Food revenue from Order ${order.orderId}`
+                description: `Food revenue from Order ${order.orderId}`,
+                orderId: order._id
             });
 
             // Delivery fee goes to admin wallet (held until rider delivers)
@@ -729,7 +731,8 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
                 adminWallet.transactions.push({
                     type: "credit",
                     amount: vendorDeliveryShare,
-                    description: `Delivery fee held for admin rider - Order ${order.orderId}`
+                    description: `Delivery fee held for admin rider - Order ${order.orderId}`,
+                    orderId: order._id
                 });
             }
         }
@@ -756,7 +759,8 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
         adminWallet.transactions.push({
             type: "credit",
             amount: Number(totalCommission.toFixed(2)),
-            description: `Commission from Order ${order.orderId}`
+            description: `Commission from Order ${order.orderId}`,
+            orderId: order._id
         });
         await adminWallet.save({ session });
     }
