@@ -232,7 +232,14 @@ export const getVendor = async (req, res) => {
 
     const vendor = await vendorModel.findById(vendorId)
       .populate("wallet")
-      .populate("foods");
+      .populate({
+        path: "foods",
+        populate: {
+          path: "activePromotions",
+          model: "Discount",
+          select: "code description type value scope minOrderAmount maxDiscountAmount usageLimit usageCount userUsageLimit isActive startDate endDate fundedBy",
+        },
+      });
 
     if (!vendor)
       return res.status(404).json({ success: false, message: "Vendor not found" });
