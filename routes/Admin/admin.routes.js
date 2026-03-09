@@ -20,6 +20,7 @@ import {
     suspendVendor,
     toggleVendorStatus,
     updateCommission,
+    updateVendorDeliveryMode,
 } from "../../controller/Admin/vendors_management/vendor.controller.js";
 
 const router = express.Router();
@@ -55,6 +56,9 @@ router.patch("/vendors/status", adminAuth, toggleVendorStatus);
 // Update vendor commission
 // PATCH /api/admin/vendors/commission
 router.patch("/vendors/commission", adminAuth, updateCommission);
+
+// Switch vendor delivery management mode
+router.patch("/vendors/:vendorId/delivery-mode", adminAuth, updateVendorDeliveryMode);
 
 // Vendor performance metrics
 // GET /api/vendors/performance?vendorId=123

@@ -269,53 +269,50 @@ export const markDelivered = async (orderId, riderId) => {
                 );
             }
 
-            riderWallet.balance = Number((riderWallet.balance + deliveryFee).toFixed(2));
-            riderWallet.transactions.push({
-                type: "credit",
-                amount: deliveryFee,
-                description: `Delivery fee from Order ${order.orderId}`,
-                date: new Date()
-            });
-            await riderWallet.save({ session });
-
             const vendor = riderVendorId
                 ? await Vendor.findById(riderVendorId).session(session)
                 : null;
-            const deliveryManagedBy = vendor?.deliveryManagedBy || "admin";
 
-            if (deliveryManagedBy === "vendor" && vendor) {
-                const vendorWallet = await Wallet.findOne({
-                    ownerId: riderVendorId,
-                    ownerModel: "Vendor"
-                }).session(session);
+            const deliveryManagedBy = vendor?.deliveryManagedBy || "vendor";
 
-                if (vendorWallet) {
-                    const safeDebit = Math.min(deliveryFee, vendorWallet.balance);
-                    vendorWallet.balance = Number((vendorWallet.balance - safeDebit).toFixed(2));
-                    vendorWallet.transactions.push({
-                        type: "debit",
-                        amount: safeDebit,
-                        description: `Rider delivery payout for Order ${order.orderId}`,
-                        date: new Date()
-                    });
-                    await vendorWallet.save({ session });
-                }
+            if (deliveryManagedBy === "vendor") {
+                // ── PHASE 1: VENDOR-MANAGED DELIVERY ──────────────────────────────────
+                // The vendor pays their rider directly in cash.
+                // The delivery fee was already credited to the vendor wallet during
+                // completeOrderFulfillment. The vendor is responsible for paying their
+                // rider from that balance.
+                // No wallet debit. No rider wallet credit.
+                console.log(`💵 Vendor-managed delivery — rider paid in cash by vendor. No wallet transaction.`);
+
             } else {
-                const adminWallet = await Wallet.findOne({
-                    ownerModel: "Admin"
-                }).session(session);
+                // ── PLATFORM-MANAGED DELIVERY ─────────────────────────────────────────
+                // GrubDash supplied the rider. Deduct delivery fee from admin wallet
+                // and credit the rider's wallet.
 
-                if (adminWallet) {
-                    const safeDebit = Math.min(deliveryFee, adminWallet.balance);
-                    adminWallet.balance = Number((adminWallet.balance - safeDebit).toFixed(2));
-                    adminWallet.transactions.push({
-                        type: "debit",
-                        amount: safeDebit,
-                        description: `Admin rider delivery payout for Order ${order.orderId}`,
-                        date: new Date()
-                    });
-                    await adminWallet.save({ session });
+                const adminWallet = await Wallet.findOne({ ownerModel: "Admin" }).session(session);
+                if (!adminWallet) throw new Error("Admin wallet not found");
+
+                if (adminWallet.balance < deliveryFee) {
+                    throw new Error("Admin wallet has insufficient balance to pay rider");
                 }
+
+                adminWallet.balance = Number((adminWallet.balance - deliveryFee).toFixed(2));
+                adminWallet.transactions.push({
+                    type: "debit",
+                    amount: deliveryFee,
+                    description: `Rider payout for Order ${order.orderId}`,
+                });
+                await adminWallet.save({ session });
+
+                riderWallet.balance = Number((riderWallet.balance + deliveryFee).toFixed(2));
+                riderWallet.transactions.push({
+                    type: "credit",
+                    amount: deliveryFee,
+                    description: `Delivery fee for Order ${order.orderId}`,
+                });
+                await riderWallet.save({ session });
+
+                console.log(`💰 Platform-managed delivery — ₦${deliveryFee} credited to rider wallet.`);
             }
         }
 
