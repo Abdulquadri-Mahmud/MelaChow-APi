@@ -89,6 +89,7 @@ export const getSingleOrder = async (req, res) => {
 
         const order = await Order.findOne({ orderId })
             .populate("userId", "firstname lastname email phone")
+            .populate("riderId", "firstname lastname phone email profileImage vehicleType")
             .populate("items.restaurantId", "storeName logo deliveryManagedBy")
             .populate("items.foodId", "name")
             .lean();
@@ -98,7 +99,7 @@ export const getSingleOrder = async (req, res) => {
         }
 
         const vendorOrders = await VendorOrder.find({ userOrderId: order._id })
-            .populate("restaurantId", "storeName")
+            .populate("restaurantId", "storeName logo")
             .lean();
 
         // Fetch wallets for each vendor
@@ -124,6 +125,7 @@ export const getSingleOrder = async (req, res) => {
         const financialSummary = {
             subtotal: order.subtotal,
             totalDeliveryFee: order.deliveryFee,
+            discountAmount: order.appliedDiscount?.amount || 0,
             totalCommission: vendorOrders.reduce((sum, vo) => sum + (vo.commission || 0), 0),
             totalVendorEarnings: vendorOrders.reduce((sum, vo) => sum + (vo.vendorTotal || 0), 0),
             total: order.total
