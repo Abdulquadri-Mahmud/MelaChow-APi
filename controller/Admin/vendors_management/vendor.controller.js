@@ -6,6 +6,8 @@ import { sendVendorSuspensionEmail } from "../../../config/Admin/vendor_mailer/s
 import Food from "../../../model/vendor/food.model.js";
 import vendorModel from "../../../model/vendor/vendor.model.js";
 import { resolveVendorLocation } from "../../../services/locationService.js";
+import ActivityLog from "../../../model/ActivityLog.js";
+
 
 /**
  * APPROVE A VENDOR
@@ -79,6 +81,15 @@ export const approveVendor = async (req, res) => {
     // Send approval email
     await sendVendorApprovalEmail(vendor);
 
+    // Log action
+    await ActivityLog.create({
+      adminId: req.admin._id,
+      action: "APPROVE_VENDOR",
+      targetType: "Vendor",
+      targetId: vendor._id,
+      details: `Approved vendor: ${vendor.storeName}`,
+    });
+
     res.status(200).json({
       success: true,
       message: "Vendor approved successfully and notified via email",
@@ -111,6 +122,15 @@ export const rejectVendor = async (req, res) => {
 
     // Send rejection email
     await sendVendorRejectionEmail(vendor, reason);
+
+    // Log action
+    await ActivityLog.create({
+      adminId: req.admin._id,
+      action: "REJECT_VENDOR",
+      targetType: "Vendor",
+      targetId: vendor._id,
+      details: `Rejected vendor: ${vendor.storeName}. Reason: ${reason || "N/A"}`,
+    });
 
     res.status(200).json({
       success: true,
@@ -149,6 +169,15 @@ export const suspendVendor = async (req, res) => {
     // Send suspension email
     await sendVendorSuspensionEmail(vendor, vendor.suspensionReason);
 
+    // Log action
+    await ActivityLog.create({
+      adminId: req.admin._id,
+      action: "SUSPEND_VENDOR",
+      targetType: "Vendor",
+      targetId: vendor._id,
+      details: `Suspended vendor: ${vendor.storeName}. Reason: ${reason || "N/A"}`,
+    });
+
     res.status(200).json({
       success: true,
       message: "Vendor suspended successfully and notified via email",
@@ -181,6 +210,15 @@ export const reactivateVendor = async (req, res) => {
 
     // Optional email
     await sendVendorReactivationEmail(vendor);
+
+    // Log action
+    await ActivityLog.create({
+      adminId: req.admin._id,
+      action: "REACTIVATE_VENDOR",
+      targetType: "Vendor",
+      targetId: vendor._id,
+      details: `Reactivated vendor: ${vendor.storeName}`,
+    });
 
     res.status(200).json({
       success: true,
@@ -306,6 +344,14 @@ export const updateCommission = async (req, res) => {
     // Update all vendors' commission rate
     const result = await vendorModel.updateMany({}, { $set: { commissionRate: newRate } });
 
+    // Log action
+    await ActivityLog.create({
+      adminId: req.admin._id,
+      action: "UPDATE_COMMISSION",
+      targetType: "Commission",
+      details: `Updated global commission rate to ${newRate}% for all vendors`,
+    });
+
     res.status(200).json({
       success: true,
       message: `Commission rate updated to ${newRate}% for all vendors`,
@@ -395,6 +441,15 @@ export const updateVendorDeliveryMode = async (req, res) => {
     }
 
     console.log(`🔄 Vendor ${vendor.storeName} delivery mode → ${deliveryManagedBy}`);
+
+    // Log action
+    await ActivityLog.create({
+      adminId: req.admin._id,
+      action: "UPDATE_DELIVERY_MODE",
+      targetType: "Vendor",
+      targetId: vendor._id,
+      details: `Updated ${vendor.storeName} delivery mode to ${deliveryManagedBy}`,
+    });
 
     return res.status(200).json({
       success: true,
