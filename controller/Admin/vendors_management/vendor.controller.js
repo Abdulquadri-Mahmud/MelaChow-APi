@@ -75,7 +75,8 @@ export const approveVendor = async (req, res) => {
     // ========================================
     // APPROVE VENDOR
     // ========================================
-    vendor.verified = true;
+    vendor.isApproved = true;
+    vendor.verified = true; // Ensure they are marked verified too
     await vendor.save();
 
     // Send approval email
@@ -242,12 +243,13 @@ export const reactivateVendor = async (req, res) => {
 // Get all vendors (optionally filter by status, verified, suspended)
 export const getAllVendors = async (req, res) => {
   try {
-    const { verified, suspended, active } = req.query;
+    const { verified, suspended, active, isApproved } = req.query;
     const filters = {};
 
     if (verified !== undefined) filters.verified = verified === "true";
     if (suspended !== undefined) filters.suspended = suspended === "true";
     if (active !== undefined) filters.active = active === "true";
+    if (isApproved !== undefined) filters.isApproved = isApproved === "true";
 
     const vendors = await vendorModel.find(filters)
       .populate("wallet")

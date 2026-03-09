@@ -110,7 +110,8 @@ const vendorSchema = new Schema(
     ratingCount: { type: Number, default: 0 },
 
     // Status flags
-    verified: { type: Boolean, default: false, index: true },
+    verified: { type: Boolean, default: false, index: true }, // Email verification
+    isApproved: { type: Boolean, default: false, index: true }, // Admin approval
     suspended: { type: Boolean, default: false },
     active: { type: Boolean, default: true },
     suspensionReason: {
