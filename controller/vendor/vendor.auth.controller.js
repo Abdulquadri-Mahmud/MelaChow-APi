@@ -9,7 +9,20 @@ import { sendTokenCookie } from '../../utils/sendTokenCookie.js';
 
 export const registerVendor = async (req, res) => {
   try {
-    const { email, name, phone, storeName, deliveryManagedBy, flatRateDeliveryFee } = req.body;
+    const {
+      email,
+      name,
+      phone,
+      storeName,
+      storeDescription,
+      logo,
+      cuisineTypes,
+      address,
+      openingHours,
+      payoutDetails,
+      deliveryManagedBy,
+      flatRateDeliveryFee
+    } = req.body;
 
     // Validate input
     if (!email || !name || !storeName) {
@@ -34,6 +47,24 @@ export const registerVendor = async (req, res) => {
       existingVendor.phone = phone || existingVendor.phone;
       existingVendor.storeName = storeName || existingVendor.storeName;
 
+      if (storeDescription) existingVendor.storeDescription = storeDescription;
+      if (logo) existingVendor.logo = logo;
+      if (cuisineTypes?.length) existingVendor.cuisineTypes = cuisineTypes;
+      if (address) existingVendor.address = {
+        street: address?.street || existingVendor.address?.street || "",
+        city: address?.city || existingVendor.address?.city || "",
+        state: address?.state || existingVendor.address?.state || "",
+        postalCode: address?.postalCode || existingVendor.address?.postalCode || "",
+      };
+      if (openingHours) existingVendor.openingHours = openingHours;
+      if (payoutDetails) existingVendor.payoutDetails = {
+        bankName: payoutDetails?.bankName || existingVendor.payoutDetails?.bankName || "",
+        accountName: payoutDetails?.accountName || existingVendor.payoutDetails?.accountName || "",
+        accountNumber: payoutDetails?.accountNumber || existingVendor.payoutDetails?.accountNumber || "",
+        payoutMethod: payoutDetails?.payoutMethod || existingVendor.payoutDetails?.payoutMethod || "paystack",
+        payoutEnabled: payoutDetails?.payoutEnabled ?? existingVendor.payoutDetails?.payoutEnabled ?? true,
+      };
+
       if (deliveryManagedBy) existingVendor.deliveryManagedBy = deliveryManagedBy;
       if (flatRateDeliveryFee !== undefined) existingVendor.flatRateDeliveryFee = flatRateDeliveryFee;
 
@@ -45,6 +76,23 @@ export const registerVendor = async (req, res) => {
         name,
         phone,
         storeName,
+        storeDescription: storeDescription || "",
+        logo: logo || "",
+        cuisineTypes: cuisineTypes || [],
+        address: {
+          street: address?.street || "",
+          city: address?.city || "",
+          state: address?.state || "",
+          postalCode: address?.postalCode || "",
+        },
+        openingHours: openingHours || undefined,
+        payoutDetails: {
+          bankName: payoutDetails?.bankName || "",
+          accountName: payoutDetails?.accountName || "",
+          accountNumber: payoutDetails?.accountNumber || "",
+          payoutMethod: payoutDetails?.payoutMethod || "paystack",
+          payoutEnabled: payoutDetails?.payoutEnabled ?? true,
+        },
         otp,
         otpExpires,
         verified: false,
