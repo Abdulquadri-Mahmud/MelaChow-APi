@@ -35,6 +35,9 @@ import riderRoutes from "./routes/rider.routes.js";
 import riderAuthRoutes from "./routes/riderAuth.routes.js";
 import adminOrderRoutes from './routes/Admin/adminOrder.routes.js';
 import platformFinanceRouter from './routes/Admin/platformFinance.routes.js';
+import vendorMenuRoutes from "./routes/menu/vendorMenu.routes.js";
+import customerMenuRoutes from "./routes/menu/customerMenu.routes.js";
+import cartRoutes from "./routes/menu/cart.routes.js";
 import socketHealthRoutes from './routes/socket.routes.js';
 import riderNotificationRoutes from './routes/riderNotification.routes.js';
 import http from 'http';
@@ -191,6 +194,11 @@ app.use("/api/transactions", transactionRoutes);
 
 // Orders
 app.use("/api/orders", orderRoutes);
+
+// --- V1 MENU SYSTEM (NEW) ---
+app.use("/v1/vendor/menu", vendorMenuRoutes);
+app.use("/v1/vendors", customerMenuRoutes);
+app.use("/v1/cart", cartRoutes);
 
 // ✅ DEBUG: Log registered auth routes (dev only)
 if (process.env.NODE_ENV !== 'production') {
