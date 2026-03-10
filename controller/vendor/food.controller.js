@@ -42,7 +42,6 @@ export const createFood = async (req, res) => {
 };
 
 // GET ALL FOODS (optionally filter by vendor)
-// GET ALL FOODS (optionally filter by vendor)
 export const getFoods = async (req, res) => {
   try {
     let { vendorId } = req.query;
