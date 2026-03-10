@@ -5,7 +5,7 @@ import {
     removeCartItem,
     removeVendorSubCart
 } from '../../controller/menu/cartController.js';
-import userAuth from '../../middleware/verifyToken.js';
+import userAuth from '../../middleware/auth.middleware.js';
 
 const router = express.Router();
 
