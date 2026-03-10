@@ -9,7 +9,7 @@ export const CartService = {
     /**
      * Adds a portion-based item to the cart. Always creates a new row.
      */
-    async addPortionItem(userId, { vendor_id, menu_item_id, portion_id, quantity, selected_choices, special_instructions }) {
+    async addPortionItem(userId, { vendor_id, menu_item_id, portion_id, quantity, selected_choices = [], special_instructions }) {
         // 1. Find or create an active cart for the user
         let cart = await Cart.findOne({ customer_id: userId, status: 'ACTIVE' });
         if (!cart) {
@@ -91,7 +91,7 @@ export const CartService = {
     /**
      * Adds a variant/combo-based item to the cart. Always creates a new row.
      */
-    async addVariantItem(userId, { vendor_id, variant_id, quantity, variant_choices, special_instructions }) {
+    async addVariantItem(userId, { vendor_id, variant_id, quantity, variant_choices = [], special_instructions }) {
         // 1. Find or create an active cart for the user
         let cart = await Cart.findOne({ customer_id: userId, status: 'ACTIVE' });
         if (!cart) {
