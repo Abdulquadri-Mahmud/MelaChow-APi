@@ -27,9 +27,19 @@ async function buildFullItem(item) {
 
     const fullChoiceGroups = await Promise.all(
         choiceGroups.map(async (group) => {
-            const options = await MenuItemChoiceOption.find({ group_id: group._id, is_available: true })
+            const rawOptions = await MenuItemChoiceOption.find({ group_id: group._id, is_available: true })
                 .sort('sort_order')
                 .lean();
+            // Explicitly shape each option — ensures image_url is always present (null if not set)
+            const options = rawOptions.map(opt => ({
+                _id: opt._id,
+                label: opt.label,
+                image_url: opt.image_url || null,
+                price_modifier: opt.price_modifier,
+                price_modifier_naira: opt.price_modifier / 100,
+                is_available: opt.is_available,
+                sort_order: opt.sort_order,
+            }));
             return { ...group, options };
         })
     );

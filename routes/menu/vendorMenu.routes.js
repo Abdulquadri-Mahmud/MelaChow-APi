@@ -24,6 +24,7 @@ import {
     // Choice Groups
     addMenuItemChoiceGroup,
     addMenuItemChoiceOption,
+    updateMenuItemChoiceOption,
     // Platform categories reference
     getPlatformCategories,
 } from '../../controller/menu/vendorMenuController.js';
@@ -60,5 +61,6 @@ router.patch('/:vendorId/variants/:variantId/availability', vendorAuth, toggleVa
 // ─── Choice Groups (item-level add-ons) ────────────────────────────────────
 router.post('/:vendorId/items/:itemId/choice-groups', vendorAuth, addMenuItemChoiceGroup);
 router.post('/choice-groups/:groupId/options', vendorAuth, addMenuItemChoiceOption);
+router.patch('/choice-options/:optionId', vendorAuth, updateMenuItemChoiceOption);
 
 export default router;
