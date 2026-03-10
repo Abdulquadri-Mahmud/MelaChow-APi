@@ -45,17 +45,41 @@ export const getCart = async (req, res) => {
 
 /**
  * Remove a specific cart line item.
+ * Verifies ownership chain: LineItem → VendorSubCart → Cart → Customer
  */
 export const removeCartItem = async (req, res) => {
     try {
         const { lineItemId } = req.params;
-        const lineItem = await CartLineItem.findById(lineItemId);
-        if (!lineItem) return res.status(404).json({ success: false, message: 'Item not found' });
+        const userId = req.user._id;
 
+        // 1. Find the line item
+        const lineItem = await CartLineItem.findById(lineItemId);
+        if (!lineItem) {
+            return res.status(404).json({ success: false, message: 'Item not found' });
+        }
+
+        // 2. Walk the ownership chain: LineItem → VendorSubCart → Cart → Customer
+        const subCart = await VendorSubCart.findById(lineItem.vendor_sub_cart_id);
+        if (!subCart) {
+            return res.status(404).json({ success: false, message: 'Cart not found' });
+        }
+
+        const cart = await Cart.findOne({
+            _id: subCart.cart_id,
+            customer_id: userId,
+            status: 'ACTIVE',
+        });
+
+        if (!cart) {
+            // Belongs to another user, or cart is no longer active
+            return res.status(403).json({ success: false, message: 'Unauthorized' });
+        }
+
+        // 3. Verified — safe to delete
         const subCartId = lineItem.vendor_sub_cart_id;
         await CartLineItem.findByIdAndDelete(lineItemId);
 
-        // If sub-cart is empty, delete it
+        // 4. If sub-cart is now empty, delete it
         const remainingItems = await CartLineItem.countDocuments({ vendor_sub_cart_id: subCartId });
         if (remainingItems === 0) {
             await VendorSubCart.findByIdAndDelete(subCartId);
@@ -66,6 +90,7 @@ export const removeCartItem = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
 
 /**
  * Clear items from a specific vendor in the cart.

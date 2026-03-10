@@ -23,7 +23,8 @@ export const createVendorMenuSection = async (req, res) => {
 export const getVendorMenuSections = async (req, res) => {
     try {
         const vendor_id = req.vendor._id;
-        const sections = await VendorMenuSection.find({ vendor_id }).sort('sort_order');
+        // Exclude soft-deleted sections
+        const sections = await VendorMenuSection.find({ vendor_id, deleted_at: null }).sort('sort_order');
         res.status(200).json({ success: true, sections });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
@@ -36,7 +37,7 @@ export const updateVendorMenuSection = async (req, res) => {
         const vendor_id = req.vendor._id;
         const { name, description, sort_order, is_visible } = req.body;
         const section = await VendorMenuSection.findOneAndUpdate(
-            { _id: sectionId, vendor_id }, // scope to vendor
+            { _id: sectionId, vendor_id, deleted_at: null }, // scope to vendor + not deleted
             { name, description, sort_order, is_visible },
             { new: true }
         );
@@ -52,8 +53,16 @@ export const deleteVendorMenuSection = async (req, res) => {
         const { sectionId } = req.params;
         const vendor_id = req.vendor._id;
 
-        const section = await VendorMenuSection.findOneAndDelete({ _id: sectionId, vendor_id });
-        if (!section) return res.status(404).json({ success: false, message: 'Section not found' });
+        // Soft delete — set deleted_at timestamp instead of destroying the record
+        const section = await VendorMenuSection.findOneAndUpdate(
+            { _id: sectionId, vendor_id, deleted_at: null }, // only if not already deleted
+            { deleted_at: new Date(), is_visible: false },
+            { new: true }
+        );
+
+        if (!section) {
+            return res.status(404).json({ success: false, message: 'Section not found' });
+        }
 
         // Nullify vendor_section_id on all items in this section — they fall into "Other"
         await MenuItem.updateMany({ vendor_id, vendor_section_id: sectionId }, { vendor_section_id: null });
@@ -143,6 +152,20 @@ export const toggleMenuItemStock = async (req, res) => {
 
         const item = await MenuItem.findOneAndUpdate({ _id: itemId, vendor_id }, { is_in_stock }, { new: true });
         if (!item) return res.status(404).json({ success: false, message: 'Item not found' });
+
+        // Cascade to any variants that include this item as a FIXED component
+        const affectedComponents = await MenuVariantComponent.find({
+            menu_item_id: itemId,
+            component_type: 'FIXED',
+        }).lean();
+
+        const affectedVariantIds = [...new Set(affectedComponents.map(c => c.variant_id.toString()))];
+
+        if (affectedVariantIds.length > 0) {
+            await Promise.all(
+                affectedVariantIds.map(variantId => MenuService.updateMenuVariantStockStatus(variantId))
+            );
+        }
 
         res.status(200).json({ success: true, item });
     } catch (error) {

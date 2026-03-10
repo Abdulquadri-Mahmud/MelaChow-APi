@@ -17,6 +17,9 @@ async function resolvePlatformCategory(categoryId) {
 // ─────────────────────────────────────────────────────────────────────────────
 async function buildFullItem(item) {
     const [portions, choiceGroups, platformCategory] = await Promise.all([
+        // Fetch all AVAILABLE-tier portions regardless of is_in_stock.
+        // Sold-out portions must still be VISIBLE to customers (shown greyed with "Sold Out").
+        // Only is_available: false hides a portion tier entirely.
         MenuItemPortion.find({ menu_item_id: item._id, is_available: true }).sort('sort_order').lean(),
         MenuItemChoiceGroup.find({ menu_item_id: item._id }).sort('sort_order').lean(),
         resolvePlatformCategory(item.platform_category_id),
@@ -79,8 +82,8 @@ export const getFullVendorMenu = async (req, res) => {
     try {
         const { vendorId } = req.params;
 
-        // 1. Get all visible vendor sections sorted by sort_order
-        const sections = await VendorMenuSection.find({ vendor_id: vendorId, is_visible: true })
+        // 1. Get all visible vendor sections sorted by sort_order — exclude soft-deleted
+        const sections = await VendorMenuSection.find({ vendor_id: vendorId, is_visible: true, deleted_at: null })
             .sort('sort_order')
             .lean();
 
@@ -209,7 +212,9 @@ export const getItemsByPlatformCategory = async (req, res) => {
             }),
         ]);
 
-        // Attach portions to each item
+        // Attach portions to each item.
+        // Include sold-out portions (is_in_stock: false) — client renders "Sold Out" badge.
+        // Only is_available: false hides a portion tier.
         const fullItems = await Promise.all(
             items.map(async (item) => {
                 const portions = await MenuItemPortion.find({ menu_item_id: item._id, is_available: true })

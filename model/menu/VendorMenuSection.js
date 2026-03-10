@@ -25,12 +25,18 @@ const vendorMenuSectionSchema = new mongoose.Schema(
             type: Boolean,
             default: true,
         },
+        // Soft delete support — never hard-delete sections
+        deleted_at: {
+            type: Date,
+            default: null,
+        },
     },
     { timestamps: true }
 );
 
 // Sections are scoped by vendor
-vendorMenuSectionSchema.index({ vendor_id: 1, is_visible: 1, sort_order: 1 });
+// Include deleted_at in index so queries scoped to deleted_at: null use it efficiently
+vendorMenuSectionSchema.index({ vendor_id: 1, is_visible: 1, sort_order: 1, deleted_at: 1 });
 
 const VendorMenuSection = mongoose.models.VendorMenuSection || mongoose.model("VendorMenuSection", vendorMenuSectionSchema);
 
