@@ -525,6 +525,245 @@ export const updateMenuItemChoiceOption = async (req, res) => {
 
 
 // =====================================================================
+// VENDOR CATALOGUE MANAGEMENT
+// =====================================================================
+
+export const getVendorMenuItems = async (req, res) => {
+    try {
+        const vendorId = req.vendor._id;
+
+        // Security: Ensure vendorId param matches authenticated vendor
+        if (req.params.vendorId !== req.vendor._id.toString()) {
+            return res.status(403).json({
+                success: false,
+                message: "Access denied. You can only view your own menu items.",
+            });
+        }
+
+        // ── QUERY PARAMS ─────────────────────────────────────
+        const {
+            section,        // filter by vendor_section_id (optional)
+            category,       // filter by platform_category_id (optional)
+            status,         // "active" | "archived" | "all" (default: "all")
+            search,         // name search (optional)
+            page = 1,
+            limit = 50,
+        } = req.query;
+
+        // ── BUILD FILTER ─────────────────────────────────────
+        const filter = { vendor_id: vendorId };
+
+        // Status filter
+        if (status === "active") {
+            filter.is_archived = false;
+        } else if (status === "archived") {
+            filter.is_archived = true;
+        }
+        // status === "all" or undefined → no is_archived filter
+
+        // Section filter
+        if (section) {
+            filter.vendor_section_id = section;
+        }
+
+        // Category filter
+        if (category) {
+            filter.platform_category_id = category;
+        }
+
+        // Name search — case-insensitive partial match
+        if (search && search.trim()) {
+            filter.name = { $regex: search.trim(), $options: "i" };
+        }
+
+        // ── PAGINATION ───────────────────────────────────────
+        const pageNum = Math.max(1, parseInt(page));
+        const limitNum = Math.min(100, Math.max(1, parseInt(limit)));
+        const skip = (pageNum - 1) * limitNum;
+
+        // ── FETCH ITEMS ──────────────────────────────────────
+        const [items, total] = await Promise.all([
+            MenuItem.find(filter)
+                .sort({ is_archived: 1, sort_order: 1, createdAt: -1 })
+                .skip(skip)
+                .limit(limitNum)
+                .populate("platform_category_id", "name slug")
+                .populate("vendor_section_id", "name")
+                .lean(),
+            MenuItem.countDocuments(filter),
+        ]);
+
+        if (items.length === 0) {
+            return res.status(200).json({
+                success: true,
+                items: [],
+                pagination: {
+                    total: 0,
+                    page: pageNum,
+                    limit: limitNum,
+                    pages: 0,
+                    hasMore: false,
+                },
+            });
+        }
+
+        // ── ENRICH WITH COUNTS ───────────────────────────────
+        // Fetch portion counts and choice group counts in bulk.
+        const itemIds = items.map(i => i._id);
+
+        const [portionCounts, choiceGroupCounts] = await Promise.all([
+            // Count portions per item
+            MenuItemPortion.aggregate([
+                {
+                    $match: {
+                        menu_item_id: { $in: itemIds }
+                        // deleted_at: null // Assuming portions don't have soft deletes yet, or add if needed
+                    }
+                },
+                {
+                    $group: {
+                        _id: "$menu_item_id",
+                        count: { $sum: 1 },
+                        // Pull default portion price for display
+                        default_price: {
+                            $max: {
+                                $cond: [
+                                    { $eq: ["$is_default", true] },
+                                    "$price",
+                                    null
+                                ]
+                            }
+                        },
+                        min_price: { $min: "$price" },
+                        max_price: { $max: "$price" },
+                    }
+                }
+            ]),
+
+            // Count choice groups per item
+            MenuItemChoiceGroup.aggregate([
+                {
+                    $match: {
+                        menu_item_id: { $in: itemIds }
+                    }
+                },
+                {
+                    $group: {
+                        _id: "$menu_item_id",
+                        count: { $sum: 1 },
+                    }
+                }
+            ]),
+        ]);
+
+        // Index counts by item _id for O(1) lookup
+        const portionMap = {};
+        const choiceGroupMap = {};
+
+        portionCounts.forEach(p => {
+            portionMap[p._id.toString()] = {
+                count: p.count,
+                default_price: p.default_price,
+                min_price: p.min_price,
+                max_price: p.max_price,
+            };
+        });
+
+        choiceGroupCounts.forEach(c => {
+            choiceGroupMap[c._id.toString()] = c.count;
+        });
+
+        // ── SHAPE RESPONSE ───────────────────────────────────
+        const shaped = items.map(item => {
+            const idStr = item._id.toString();
+            const portions = portionMap[idStr] || { count: 0, default_price: null, min_price: null, max_price: null };
+            const cgCount = choiceGroupMap[idStr] || 0;
+
+            return {
+                _id: item._id,
+                name: item.name,
+                description: item.description,
+                image_url: item.image_url,
+                item_type: item.item_type,
+                dietary_type: item.dietary_type,
+                is_available: item.is_available,
+                is_in_stock: item.is_in_stock,
+                is_archived: item.is_archived,
+                sort_order: item.sort_order,
+                prep_time_minutes: item.prep_time_minutes,
+                tags: item.tags,
+                createdAt: item.createdAt,
+                updatedAt: item.updatedAt,
+
+                // Populated relations — flattened for frontend convenience
+                category: item.platform_category_id
+                    ? {
+                        _id: item.platform_category_id._id,
+                        name: item.platform_category_id.name,
+                        slug: item.platform_category_id.slug,
+                    }
+                    : null,
+                section: item.vendor_section_id
+                    ? {
+                        _id: item.vendor_section_id._id,
+                        name: item.vendor_section_id.name,
+                    }
+                    : null,
+
+                // Counts — never full arrays in list endpoint
+                portions: {
+                    count: portions.count,
+                    default_price: portions.default_price,
+                    // Convert kobo → naira for display
+                    default_price_naira: portions.default_price
+                        ? portions.default_price / 100
+                        : null,
+                    min_price_naira: portions.min_price
+                        ? portions.min_price / 100
+                        : null,
+                    max_price_naira: portions.max_price
+                        ? portions.max_price / 100
+                        : null,
+                },
+                choice_groups: {
+                    count: cgCount,
+                },
+            };
+        });
+
+        // ── SUMMARY STATS ────────────────────────────────────
+        // Useful for the vendor dashboard header cards
+        const allItems = await MenuItem.find({ vendor_id: vendorId }).lean();
+        const stats = {
+            total: allItems.length,
+            active: allItems.filter(i => !i.is_archived && i.is_available).length,
+            archived: allItems.filter(i => i.is_archived).length,
+            out_of_stock: allItems.filter(i => !i.is_in_stock && !i.is_archived).length,
+        };
+
+        return res.status(200).json({
+            success: true,
+            items: shaped,
+            stats,
+            pagination: {
+                total: total,
+                page: pageNum,
+                limit: limitNum,
+                pages: Math.ceil(total / limitNum),
+                hasMore: pageNum * limitNum < total,
+            },
+        });
+
+    } catch (error) {
+        console.error("getVendorMenuItems error:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Failed to fetch menu items",
+        });
+    }
+};
+
+// =====================================================================
 // PLATFORM CATEGORIES — read only for vendors
 // =====================================================================
 export const getPlatformCategories = async (req, res) => {
@@ -537,3 +776,4 @@ export const getPlatformCategories = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
