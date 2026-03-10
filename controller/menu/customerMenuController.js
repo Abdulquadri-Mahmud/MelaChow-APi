@@ -46,6 +46,7 @@ async function buildFullItem(item) {
 
     return {
         ...item,
+        dietary_type: item.dietary_type || "mixed",
         platform_category: platformCategory
             ? {
                 id: platformCategory._id,
@@ -230,7 +231,7 @@ export const getItemsByPlatformCategory = async (req, res) => {
                 const portions = await MenuItemPortion.find({ menu_item_id: item._id, is_available: true })
                     .sort('sort_order')
                     .lean();
-                return { ...item, portions };
+                return { ...item, dietary_type: item.dietary_type || "mixed", portions };
             })
         );
 
