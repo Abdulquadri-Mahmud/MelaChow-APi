@@ -46,6 +46,11 @@ const menuItemChoiceOptionSchema = new mongoose.Schema(
             type: String, // e.g. "Eba", "Amala"
             required: true,
         },
+        image_url: {
+            type: String,
+            trim: true,
+            default: null,
+        },
         price_modifier: {
             type: Number, // SNAPSHOT in kobo
             default: 0,

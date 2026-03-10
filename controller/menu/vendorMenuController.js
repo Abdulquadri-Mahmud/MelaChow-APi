@@ -383,17 +383,93 @@ export const addMenuItemChoiceGroup = async (req, res) => {
 export const addMenuItemChoiceOption = async (req, res) => {
     try {
         const { groupId } = req.params;
-        const { label, price_modifier, is_available, sort_order } = req.body;
+        const { label, price_modifier_naira, image_url, is_available, sort_order } = req.body;
+
+        if (!label || !label.trim()) {
+            return res.status(400).json({ success: false, message: 'label is required' });
+        }
+
+        // Validate image_url format if provided
+        if (image_url && image_url.trim()) {
+            try {
+                new URL(image_url.trim());
+            } catch {
+                return res.status(400).json({
+                    success: false,
+                    message: 'image_url must be a valid URL',
+                });
+            }
+        }
 
         const option = await MenuItemChoiceOption.create({
-            group_id: groupId, label, price_modifier, is_available, sort_order,
+            group_id: groupId,
+            label: label.trim(),
+            price_modifier: Math.round(Number(price_modifier_naira || 0) * 100), // Naira → kobo
+            image_url: image_url?.trim() || null,
+            is_available: is_available !== false,
+            sort_order: sort_order || 0,
         });
 
-        res.status(201).json({ success: true, option });
+        res.status(201).json({
+            success: true,
+            option: {
+                ...option.toObject(),
+                price_modifier_naira: option.price_modifier / 100,
+            },
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+export const updateMenuItemChoiceOption = async (req, res) => {
+    try {
+        const { optionId } = req.params;
+        const { label, price_modifier_naira, image_url, is_available, sort_order } = req.body;
+
+        const updateFields = {};
+
+        if (label !== undefined) updateFields.label = label.trim();
+        if (price_modifier_naira !== undefined) {
+            updateFields.price_modifier = Math.round(Number(price_modifier_naira) * 100);
+        }
+        if (is_available !== undefined) updateFields.is_available = is_available;
+        if (sort_order !== undefined) updateFields.sort_order = sort_order;
+
+        if (image_url !== undefined) {
+            if (image_url && image_url.trim()) {
+                try {
+                    new URL(image_url.trim());
+                } catch {
+                    return res.status(400).json({
+                        success: false,
+                        message: 'image_url must be a valid URL',
+                    });
+                }
+            }
+            updateFields.image_url = image_url?.trim() || null;
+        }
+
+        const option = await MenuItemChoiceOption.findByIdAndUpdate(
+            optionId,
+            updateFields,
+            { new: true }
+        );
+
+        if (!option) return res.status(404).json({ success: false, message: 'Option not found' });
+
+        res.status(200).json({
+            success: true,
+            option: {
+                ...option.toObject(),
+                price_modifier_naira: option.price_modifier / 100,
+            },
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
 
 // =====================================================================
 // PLATFORM CATEGORIES — read only for vendors
