@@ -195,9 +195,12 @@ app.use("/api/transactions", transactionRoutes);
 // Orders
 app.use("/api/orders", orderRoutes);
 
-// --- V1 MENU SYSTEM (NEW) ---
-app.use("/v1/vendor/menu", vendorMenuRoutes);
+// --- V1 MENU SYSTEM ---
+// Vendor-facing: /v1/menu/:vendorId/... (sections, items, portions, variants, choice-groups)
+app.use("/v1/menu", vendorMenuRoutes);
+// Customer-facing: /v1/vendors/:vendorId/menu and /v1/vendors/marketplace/...
 app.use("/v1/vendors", customerMenuRoutes);
+// Cart: /v1/cart/...
 app.use("/v1/cart", cartRoutes);
 
 // ✅ DEBUG: Log registered auth routes (dev only)

@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 
-const menuCategorySchema = new mongoose.Schema(
+const vendorMenuSectionSchema = new mongoose.Schema(
     {
         vendor_id: {
             type: mongoose.Schema.Types.ObjectId,
@@ -9,15 +9,11 @@ const menuCategorySchema = new mongoose.Schema(
             index: true,
         },
         name: {
-            type: String,
+            type: String, // e.g. "Afternoon Specials", "Our Rice Selections"
             required: true,
             trim: true,
         },
         description: {
-            type: String,
-            default: null,
-        },
-        image_url: {
             type: String,
             default: null,
         },
@@ -33,9 +29,9 @@ const menuCategorySchema = new mongoose.Schema(
     { timestamps: true }
 );
 
-// Category lookups are scoped by vendor and visibility
-menuCategorySchema.index({ vendor_id: 1, is_visible: 1 });
+// Sections are scoped by vendor
+vendorMenuSectionSchema.index({ vendor_id: 1, is_visible: 1, sort_order: 1 });
 
-const MenuCategory = mongoose.models.MenuCategory || mongoose.model("MenuCategory", menuCategorySchema);
+const VendorMenuSection = mongoose.models.VendorMenuSection || mongoose.model("VendorMenuSection", vendorMenuSectionSchema);
 
-export default MenuCategory;
+export default VendorMenuSection;

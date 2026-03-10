@@ -8,10 +8,16 @@ const menuItemSchema = new mongoose.Schema(
             required: true,
             index: true,
         },
-        category_id: {
+        platform_category_id: {
             type: mongoose.Schema.Types.ObjectId,
-            ref: "MenuCategory",
+            ref: "Category",
             required: true,
+            index: true,
+        },
+        vendor_section_id: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "VendorMenuSection",
+            default: null,
             index: true,
         },
         name: {
@@ -34,15 +40,19 @@ const menuItemSchema = new mongoose.Schema(
         },
         is_available: {
             type: Boolean,
-            default: true, // VENDOR DECISION: deliberate on/off toggle
+            default: true,
         },
         is_in_stock: {
             type: Boolean,
-            default: true, // OPERATIONAL: sold out today / restocked
+            default: true,
         },
         is_archived: {
             type: Boolean,
-            default: false, // soft delete
+            default: false,
+        },
+        category_deactivated: {
+            type: Boolean,
+            default: false, // Flagged if platform category becomes inactive
         },
         sort_order: {
             type: Number,
@@ -61,23 +71,11 @@ const menuItemSchema = new mongoose.Schema(
     { timestamps: true }
 );
 
-// Fast menu load index
+// fast search indexes
 menuItemSchema.index({ vendor_id: 1, is_archived: 1, is_available: 1, is_in_stock: 1 });
-// Weighted Text Index for Search
-menuItemSchema.index(
-    {
-        name: "text",
-        description: "text",
-        tags: "text",
-    },
-    {
-        weights: {
-            name: 5,
-            tags: 3,
-            description: 1,
-        }
-    }
-);
+menuItemSchema.index({ platform_category_id: 1, is_archived: 1, is_available: 1, is_in_stock: 1 });
+menuItemSchema.index({ vendor_id: 1, vendor_section_id: 1 });
+menuItemSchema.index({ vendor_id: 1, platform_category_id: 1 });
 
 const MenuItem = mongoose.models.MenuItem || mongoose.model("MenuItem", menuItemSchema);
 
