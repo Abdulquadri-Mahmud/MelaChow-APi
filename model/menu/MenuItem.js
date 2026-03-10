@@ -37,6 +37,12 @@ const menuItemSchema = new mongoose.Schema(
             type: String,
             enum: ["FOOD", "DRINK", "SIDE", "PROTEIN", "SWALLOW", "SOUP", "DESSERT", "OTHER"],
             required: true,
+            default: "FOOD",
+        },
+        dietary_type: {
+            type: String,
+            enum: ["veg", "non-veg", "vegan", "halal", "kosher", "mixed"],
+            default: "mixed",
         },
         is_available: {
             type: Boolean,

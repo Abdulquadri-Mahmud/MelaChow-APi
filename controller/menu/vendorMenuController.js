@@ -81,16 +81,41 @@ export const createMenuItem = async (req, res) => {
     try {
         const {
             platform_category_id, vendor_section_id, name, description,
-            image_url, item_type, sort_order, prep_time_minutes, tags,
+            image_url, item_type, dietary_type, sort_order, prep_time_minutes, tags,
         } = req.body;
         const vendor_id = req.vendor._id;
+
+        const VALID_ITEM_TYPES = ["FOOD", "DRINK", "SIDE", "PROTEIN", "SWALLOW", "SOUP", "DESSERT", "OTHER"];
+        const VALID_DIETARY_TYPES = ["veg", "non-veg", "vegan", "halal", "kosher", "mixed"];
+
+        if (item_type && !VALID_ITEM_TYPES.includes(item_type)) {
+            return res.status(400).json({
+                success: false,
+                message: `item_type "${item_type}" is not valid. Must be one of: ${VALID_ITEM_TYPES.join(", ")}`,
+            });
+        }
+
+        if (dietary_type && !VALID_DIETARY_TYPES.includes(dietary_type)) {
+            return res.status(400).json({
+                success: false,
+                message: `dietary_type "${dietary_type}" is not valid. Must be one of: ${VALID_DIETARY_TYPES.join(", ")}`,
+            });
+        }
 
         // Validate: must be a leaf category
         await MenuService.ensureLeafCategory(platform_category_id);
 
         const item = await MenuItem.create({
-            vendor_id, platform_category_id, vendor_section_id,
-            name, description, image_url, item_type, sort_order, prep_time_minutes, tags,
+            vendor_id, platform_category_id,
+            vendor_section_id: vendor_section_id || null,
+            name: name.trim(),
+            description: description || null,
+            image_url: image_url || null,
+            item_type: item_type || "FOOD",
+            dietary_type: dietary_type || "mixed",
+            sort_order: sort_order || 0,
+            prep_time_minutes: prep_time_minutes || null,
+            tags: tags || [],
             is_available: true, is_in_stock: true, is_archived: false,
         });
 
@@ -104,15 +129,43 @@ export const updateMenuItem = async (req, res) => {
     try {
         const { itemId } = req.params;
         const vendor_id = req.vendor._id;
-        const { platform_category_id, ...rest } = req.body;
+        const { platform_category_id, name, description, image_url, item_type, dietary_type, prep_time_minutes, tags, sort_order, vendor_section_id } = req.body;
+
+        const VALID_ITEM_TYPES = ["FOOD", "DRINK", "SIDE", "PROTEIN", "SWALLOW", "SOUP", "DESSERT", "OTHER"];
+        const VALID_DIETARY_TYPES = ["veg", "non-veg", "vegan", "halal", "kosher", "mixed"];
+
+        if (item_type && !VALID_ITEM_TYPES.includes(item_type)) {
+            return res.status(400).json({
+                success: false,
+                message: `item_type "${item_type}" is not valid.`,
+            });
+        }
+
+        if (dietary_type && !VALID_DIETARY_TYPES.includes(dietary_type)) {
+            return res.status(400).json({
+                success: false,
+                message: `dietary_type "${dietary_type}" is not valid.`,
+            });
+        }
+
+        const updateFields = {};
+        if (name !== undefined) updateFields.name = name.trim();
+        if (description !== undefined) updateFields.description = description;
+        if (image_url !== undefined) updateFields.image_url = image_url;
+        if (item_type !== undefined) updateFields.item_type = item_type;
+        if (dietary_type !== undefined) updateFields.dietary_type = dietary_type;
+        if (prep_time_minutes !== undefined) updateFields.prep_time_minutes = prep_time_minutes;
+        if (tags !== undefined) updateFields.tags = tags;
+        if (sort_order !== undefined) updateFields.sort_order = sort_order;
+        if (vendor_section_id !== undefined) updateFields.vendor_section_id = vendor_section_id;
 
         // If reassigning category, validate it's a leaf
         if (platform_category_id) {
             await MenuService.ensureLeafCategory(platform_category_id);
-            rest.platform_category_id = platform_category_id;
+            updateFields.platform_category_id = platform_category_id;
         }
 
-        const item = await MenuItem.findOneAndUpdate({ _id: itemId, vendor_id }, rest, { new: true });
+        const item = await MenuItem.findOneAndUpdate({ _id: itemId, vendor_id }, updateFields, { new: true });
         if (!item) return res.status(404).json({ success: false, message: 'Item not found' });
 
         res.status(200).json({ success: true, item });
