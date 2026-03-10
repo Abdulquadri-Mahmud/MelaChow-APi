@@ -283,7 +283,8 @@ vendorSchema.methods.getPublicProfile = function () {
     address: this.address,
     fullAddress: this.fullAddress,
     verified: this.verified,
-    tags: this.tags,
+    isApproved: this.isApproved,
+    // tags: this.tags,
   };
 };
 
