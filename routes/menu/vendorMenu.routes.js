@@ -23,7 +23,9 @@ import {
     updateMenuVariant,
     addMenuVariantComponent,
     toggleVariantAvailability,
-    // Choice Groups
+    createVariantChoiceGroup,
+    createVariantChoiceOption,
+    // Choice Groups (item-level)
     addMenuItemChoiceGroup,
     addMenuItemChoiceOption,
     updateMenuItemChoiceOption,
@@ -61,6 +63,8 @@ router.post('/:vendorId/variants', vendorAuth, createMenuVariant);
 router.put('/:vendorId/variants/:variantId', vendorAuth, updateMenuVariant);
 router.post('/:vendorId/variants/:variantId/components', vendorAuth, addMenuVariantComponent);
 router.patch('/:vendorId/variants/:variantId/availability', vendorAuth, toggleVariantAvailability);
+router.post('/:vendorId/variants/:variantId/choice-groups', vendorAuth, createVariantChoiceGroup);
+router.post('/variant-choice-groups/:groupId/options', vendorAuth, createVariantChoiceOption);
 
 // ─── Choice Groups (item-level add-ons) ────────────────────────────────────
 router.post('/:vendorId/items/:itemId/choice-groups', vendorAuth, addMenuItemChoiceGroup);
