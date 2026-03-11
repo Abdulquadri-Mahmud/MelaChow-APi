@@ -14,14 +14,17 @@ import {
     moveItemToSection,
     getVendorMenuItems,
     setMenuItemArchiveStatus,
+    deleteMenuItem,
     // Portions
     addMenuItemPortion,
     updateMenuItemPortion,
     togglePortionStock,
+    deleteMenuItemPortion,
     // Variants
     createMenuVariant,
     updateMenuVariant,
     addMenuVariantComponent,
+    deleteMenuVariantComponent,
     toggleVariantAvailability,
     createVariantChoiceGroup,
     createVariantChoiceOption,
@@ -29,6 +32,8 @@ import {
     addMenuItemChoiceGroup,
     addMenuItemChoiceOption,
     updateMenuItemChoiceOption,
+    deleteMenuItemChoiceGroup,
+    deleteMenuItemChoiceOption,
     // Platform categories reference
     getPlatformCategories,
 } from '../../controller/menu/vendorMenuController.js';
@@ -52,23 +57,28 @@ router.patch('/:vendorId/items/:itemId/stock', vendorAuth, toggleMenuItemStock);
 router.patch('/:vendorId/items/:itemId/section', vendorAuth, moveItemToSection);
 router.get('/:vendorId/items', vendorAuth, getVendorMenuItems);
 router.patch('/:vendorId/items/:itemId/archive', vendorAuth, setMenuItemArchiveStatus);
+router.delete('/:vendorId/items/:itemId', vendorAuth, deleteMenuItem);
 
 // ─── Portions ─────────────────────────────────────────────────────────────
 router.post('/:vendorId/items/:itemId/portions', vendorAuth, addMenuItemPortion);
 router.put('/:vendorId/items/:itemId/portions/:portionId', vendorAuth, updateMenuItemPortion);
 router.patch('/:vendorId/items/:itemId/portions/:portionId/stock', vendorAuth, togglePortionStock);
+router.delete('/:vendorId/items/:itemId/portions/:portionId', vendorAuth, deleteMenuItemPortion);
 
 // ─── Variants / Combos ─────────────────────────────────────────────────────
 router.post('/:vendorId/variants', vendorAuth, createMenuVariant);
 router.put('/:vendorId/variants/:variantId', vendorAuth, updateMenuVariant);
 router.post('/:vendorId/variants/:variantId/components', vendorAuth, addMenuVariantComponent);
+router.delete('/:vendorId/variants/:variantId/components/:componentId', vendorAuth, deleteMenuVariantComponent);
 router.patch('/:vendorId/variants/:variantId/availability', vendorAuth, toggleVariantAvailability);
 router.post('/:vendorId/variants/:variantId/choice-groups', vendorAuth, createVariantChoiceGroup);
 router.post('/variant-choice-groups/:groupId/options', vendorAuth, createVariantChoiceOption);
 
 // ─── Choice Groups (item-level add-ons) ────────────────────────────────────
 router.post('/:vendorId/items/:itemId/choice-groups', vendorAuth, addMenuItemChoiceGroup);
+router.delete('/choice-groups/:groupId', vendorAuth, deleteMenuItemChoiceGroup);
 router.post('/choice-groups/:groupId/options', vendorAuth, addMenuItemChoiceOption);
 router.patch('/choice-options/:optionId', vendorAuth, updateMenuItemChoiceOption);
+router.delete('/choice-options/:optionId', vendorAuth, deleteMenuItemChoiceOption);
 
 export default router;
