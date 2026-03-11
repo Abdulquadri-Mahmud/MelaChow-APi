@@ -180,6 +180,17 @@ export const toggleMenuItemAvailability = async (req, res) => {
         const vendor_id = req.vendor._id;
         const { is_available } = req.body;
 
+        const item = await MenuItem.findOne({ _id: itemId, vendor_id });
+        if (!item) return res.status(404).json({ success: false, message: 'Item not found' });
+
+        // Guard: Cannot toggle availability if archived
+        if (item.is_archived && is_available !== false) {
+            return res.status(400).json({
+                success: false,
+                message: "Cannot change availability of an archived item. Restore from archive first."
+            });
+        }
+
         // Cannot mark available if no active portions exist
         if (is_available === true) {
             const activePortion = await MenuItemPortion.findOne({ menu_item_id: itemId, is_available: true });
@@ -188,10 +199,50 @@ export const toggleMenuItemAvailability = async (req, res) => {
             }
         }
 
-        const item = await MenuItem.findOneAndUpdate({ _id: itemId, vendor_id }, { is_available }, { new: true });
-        if (!item) return res.status(404).json({ success: false, message: 'Item not found' });
+        item.is_available = is_available;
+        await item.save();
 
         res.status(200).json({ success: true, item });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+export const setMenuItemArchiveStatus = async (req, res) => {
+    try {
+        const { itemId } = req.params;
+        const { archived } = req.body;
+        const vendor_id = req.vendor._id;
+
+        if (typeof archived !== 'boolean') {
+            return res.status(400).json({ success: false, message: 'archived must be boolean' });
+        }
+
+        const item = await MenuItem.findOne({ _id: itemId, vendor_id });
+        if (!item) return res.status(404).json({ success: false, message: 'Menu item not found' });
+
+        // Idempotency check
+        if (item.is_archived === archived) {
+            return res.status(200).json({
+                success: true,
+                message: archived ? 'Item is already archived' : 'Item is already active',
+                item
+            });
+        }
+
+        const updateFields = { is_archived: archived };
+        // If archiving, automatically hide it too
+        if (archived) {
+            updateFields.is_available = false;
+        }
+
+        const updatedItem = await MenuItem.findByIdAndUpdate(itemId, updateFields, { new: true });
+
+        res.status(200).json({
+            success: true,
+            message: archived ? 'Item archived successfully' : 'Item restored successfully',
+            item: updatedItem
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }

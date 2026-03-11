@@ -13,6 +13,7 @@ import {
     toggleMenuItemStock,
     moveItemToSection,
     getVendorMenuItems,
+    setMenuItemArchiveStatus,
     // Portions
     addMenuItemPortion,
     updateMenuItemPortion,
@@ -48,6 +49,7 @@ router.patch('/:vendorId/items/:itemId/availability', vendorAuth, toggleMenuItem
 router.patch('/:vendorId/items/:itemId/stock', vendorAuth, toggleMenuItemStock);
 router.patch('/:vendorId/items/:itemId/section', vendorAuth, moveItemToSection);
 router.get('/:vendorId/items', vendorAuth, getVendorMenuItems);
+router.patch('/:vendorId/items/:itemId/archive', vendorAuth, setMenuItemArchiveStatus);
 
 // ─── Portions ─────────────────────────────────────────────────────────────
 router.post('/:vendorId/items/:itemId/portions', vendorAuth, addMenuItemPortion);
