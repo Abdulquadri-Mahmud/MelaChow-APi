@@ -535,6 +535,119 @@ export const toggleVariantAvailability = async (req, res) => {
     }
 };
 
+export const createVariantChoiceGroup = async (req, res) => {
+    try {
+        const { variantId } = req.params;
+        const { name, min_selections, max_selections, is_required, sort_order } = req.body;
+        const vendor_id = req.vendor._id;
+
+        // Ownership guard
+        const variant = await MenuVariant.findOne({
+            _id: variantId,
+            vendor_id,
+        });
+
+        if (!variant) {
+            return res.status(404).json({
+                success: false,
+                message: "Variant not found",
+            });
+        }
+
+        if (!name || !name.trim()) {
+            return res.status(400).json({
+                success: false,
+                message: "name is required",
+            });
+        }
+
+        const group = await VariantChoiceGroup.create({
+            variant_id: variantId,
+            name: name.trim(),
+            min_selections: min_selections ?? 1,
+            max_selections: max_selections ?? 1,
+            is_required: is_required !== false,
+            sort_order: sort_order || 0,
+        });
+
+        return res.status(201).json({
+            success: true,
+            group,
+        });
+
+    } catch (error) {
+        console.error("[createVariantChoiceGroup] error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message,
+        });
+    }
+};
+
+export const createVariantChoiceOption = async (req, res) => {
+    try {
+        const { groupId } = req.params;
+        const {
+            label,
+            menu_item_id,     // which item this option swaps in
+            price_modifier,   // price delta in kobo (can be 0)
+            is_available,
+            sort_order,
+        } = req.body;
+        const vendor_id = req.vendor._id;
+
+        if (!label || !label.trim()) {
+            return res.status(400).json({
+                success: false,
+                message: "label is required",
+            });
+        }
+
+        // Verify the group exists and belongs to this vendor's variant
+        const group = await VariantChoiceGroup.findById(groupId).lean();
+        if (!group) {
+            return res.status(404).json({
+                success: false,
+                message: "Choice group not found",
+            });
+        }
+
+        // Verify vendor owns the variant this group belongs to
+        const variant = await MenuVariant.findOne({
+            _id: group.variant_id,
+            vendor_id,
+        });
+
+        if (!variant) {
+            return res.status(403).json({
+                success: false,
+                message: "Access denied",
+            });
+        }
+
+        const option = await VariantChoiceOption.create({
+            group_id: groupId,
+            label: label.trim(),
+            menu_item_id: menu_item_id || null,
+            price_modifier: Number(price_modifier) || 0,
+            is_available: is_available !== false,
+            sort_order: sort_order || 0,
+        });
+
+        return res.status(201).json({
+            success: true,
+            option,
+        });
+
+    } catch (error) {
+        console.error("[createVariantChoiceOption] error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message,
+        });
+    }
+};
+
 // =====================================================================
 // CHOICE GROUPS (item-level add-ons)
 // =====================================================================
