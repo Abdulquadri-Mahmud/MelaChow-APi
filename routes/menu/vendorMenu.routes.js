@@ -57,13 +57,22 @@ router.patch('/:vendorId/items/:itemId/stock', vendorAuth, toggleMenuItemStock);
 router.patch('/:vendorId/items/:itemId/section', vendorAuth, moveItemToSection);
 router.get('/:vendorId/items', vendorAuth, getVendorMenuItems);
 router.patch('/:vendorId/items/:itemId/archive', vendorAuth, setMenuItemArchiveStatus);
-router.delete('/:vendorId/items/:itemId', vendorAuth, deleteMenuItem);
 
 // ─── Portions ─────────────────────────────────────────────────────────────
 router.post('/:vendorId/items/:itemId/portions', vendorAuth, addMenuItemPortion);
 router.put('/:vendorId/items/:itemId/portions/:portionId', vendorAuth, updateMenuItemPortion);
 router.patch('/:vendorId/items/:itemId/portions/:portionId/stock', vendorAuth, togglePortionStock);
 router.delete('/:vendorId/items/:itemId/portions/:portionId', vendorAuth, deleteMenuItemPortion);
+
+// ─── Choice Groups (item-level add-ons) — BEFORE item delete to avoid shadowing ─
+router.post('/:vendorId/items/:itemId/choice-groups', vendorAuth, addMenuItemChoiceGroup);
+router.delete('/:vendorId/items/:itemId/choice-groups/:groupId', vendorAuth, deleteMenuItemChoiceGroup);
+router.post('/choice-groups/:groupId/options', vendorAuth, addMenuItemChoiceOption);
+router.patch('/choice-options/:optionId', vendorAuth, updateMenuItemChoiceOption);
+router.delete('/choice-groups/:groupId/options/:optionId', vendorAuth, deleteMenuItemChoiceOption);
+
+// ─── Hard delete item (least specific — must come AFTER sub-resource routes) ──
+router.delete('/:vendorId/items/:itemId', vendorAuth, deleteMenuItem);
 
 // ─── Variants / Combos ─────────────────────────────────────────────────────
 router.post('/:vendorId/variants', vendorAuth, createMenuVariant);
@@ -73,12 +82,5 @@ router.delete('/:vendorId/variants/:variantId/components/:componentId', vendorAu
 router.patch('/:vendorId/variants/:variantId/availability', vendorAuth, toggleVariantAvailability);
 router.post('/:vendorId/variants/:variantId/choice-groups', vendorAuth, createVariantChoiceGroup);
 router.post('/variant-choice-groups/:groupId/options', vendorAuth, createVariantChoiceOption);
-
-// ─── Choice Groups (item-level add-ons) ────────────────────────────────────
-router.post('/:vendorId/items/:itemId/choice-groups', vendorAuth, addMenuItemChoiceGroup);
-router.delete('/choice-groups/:groupId', vendorAuth, deleteMenuItemChoiceGroup);
-router.post('/choice-groups/:groupId/options', vendorAuth, addMenuItemChoiceOption);
-router.patch('/choice-options/:optionId', vendorAuth, updateMenuItemChoiceOption);
-router.delete('/choice-options/:optionId', vendorAuth, deleteMenuItemChoiceOption);
 
 export default router;
