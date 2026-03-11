@@ -15,23 +15,50 @@ async function resolvePlatformCategory(categoryId) {
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPER: Build full item object with portions, choice_groups, and platform_category
 // ─────────────────────────────────────────────────────────────────────────────
-async function buildFullItem(item) {
-    const [portions, choiceGroups, platformCategory] = await Promise.all([
-        // Fetch all AVAILABLE-tier portions regardless of is_in_stock.
-        // Sold-out portions must still be VISIBLE to customers (shown greyed with "Sold Out").
-        // Only is_available: false hides a portion tier entirely.
-        MenuItemPortion.find({ menu_item_id: item._id, is_available: true }).sort('sort_order').lean(),
-        MenuItemChoiceGroup.find({ menu_item_id: item._id }).sort('sort_order').lean(),
+async function buildFullItem(item, { vendorView = false } = {}) {
+    const itemId = item._id;
+
+    const [portions, rawGroups, platformCategory, comboComponents] = await Promise.all([
+        // Fetch portions — hardware default is filtered by is_available:true for customers
+        MenuItemPortion.find({
+            menu_item_id: itemId,
+            ...(vendorView ? {} : { is_available: true })
+        }).sort('sort_order').lean(),
+
+        // Fetch all choice groups for this item
+        MenuItemChoiceGroup.find({
+            menu_item_id: itemId
+        }).sort('sort_order').lean(),
+
         resolvePlatformCategory(item.platform_category_id),
+
+        // Fetch combo memberships
+        MenuVariantComponent.find({
+            menu_item_id: itemId,
+        }).lean(),
     ]);
 
-    const fullChoiceGroups = await Promise.all(
-        choiceGroups.map(async (group) => {
-            const rawOptions = await MenuItemChoiceOption.find({ group_id: group._id, is_available: true })
-                .sort('sort_order')
-                .lean();
-            // Explicitly shape each option — ensures image_url is always present (null if not set)
-            const options = rawOptions.map(opt => ({
+    // Fetch options for choice groups in bulk
+    let fullChoiceGroups = [];
+    if (rawGroups.length > 0) {
+        const groupIds = rawGroups.map(g => g._id);
+        const optionsFilter = { group_id: { $in: groupIds } };
+
+        // Customers only see available options; vendors see all
+        if (!vendorView) {
+            optionsFilter.is_available = { $ne: false };
+        }
+
+        const allOptions = await MenuItemChoiceOption.find(optionsFilter)
+            .sort('sort_order')
+            .lean();
+
+        // Index options by group_id for efficient merging
+        const optionsByGroup = {};
+        allOptions.forEach(opt => {
+            const key = opt.group_id.toString();
+            if (!optionsByGroup[key]) optionsByGroup[key] = [];
+            optionsByGroup[key].push({
                 _id: opt._id,
                 label: opt.label,
                 image_url: opt.image_url || null,
@@ -39,10 +66,33 @@ async function buildFullItem(item) {
                 price_modifier_naira: opt.price_modifier / 100,
                 is_available: opt.is_available,
                 sort_order: opt.sort_order,
-            }));
-            return { ...group, options };
-        })
-    );
+            });
+        });
+
+        fullChoiceGroups = rawGroups.map(g => ({
+            ...g,
+            options: optionsByGroup[g._id.toString()] || [],
+        }));
+    }
+
+    // Resolve active combos this item belongs to
+    let combos = [];
+    if (comboComponents.length > 0) {
+        const variantIds = comboComponents.map(c => c.variant_id);
+        const variantFilter = { _id: { $in: variantIds } };
+
+        // Customers only see active visible combos
+        if (!vendorView) {
+            variantFilter.is_archived = { $ne: true };
+            variantFilter.is_available = { $ne: false };
+        }
+
+        const activeCombos = await MenuVariant.find(variantFilter)
+            .select('name price is_archived is_available')
+            .lean();
+
+        combos = activeCombos;
+    }
 
     return {
         ...item,
@@ -59,6 +109,7 @@ async function buildFullItem(item) {
             : null,
         portions,
         choice_groups: fullChoiceGroups,
+        combos,
     };
 }
 
