@@ -234,9 +234,9 @@ export const toggleMenuItemAvailability = async (req, res) => {
                 ? "Item is now visible on your menu"
                 : "Item is now hidden from your menu",
             item: {
-                _id:          item._id,
+                _id: item._id,
                 is_available: item.is_available,
-                is_archived:  item.is_archived,
+                is_archived: item.is_archived,
             },
         });
 
@@ -260,6 +260,36 @@ export const setMenuItemArchiveStatus = async (req, res) => {
 
         if (typeof archived !== 'boolean') {
             return res.status(400).json({ success: false, message: 'archived must be boolean' });
+        }
+
+        // Only block archiving — restoring is always allowed
+        if (archived === true) {
+            // Find all active combos that reference this item
+            const comboComponents = await MenuVariantComponent.find({
+                menu_item_id: itemId,
+            }).lean();
+
+            if (comboComponents.length > 0) {
+                // Get the combo names for a useful error message
+                const variantIds = comboComponents.map(c => c.variant_id);
+
+                const combos = await MenuVariant.find({
+                    _id: { $in: variantIds },
+                    is_archived: { $ne: true },
+                })
+                    .select("name")
+                    .lean();
+
+                if (combos.length > 0) {
+                    const comboNames = combos.map(c => `"${c.name}"`).join(", ");
+                    return res.status(400).json({
+                        success: false,
+                        message: `This item is part of ${combos.length === 1 ? "a combo" : "combos"}: ${comboNames}. Archive or remove those combos first, or remove this item from them.`,
+                        combo_count: combos.length,
+                        combos: combos.map(c => ({ _id: c._id, name: c.name })),
+                    });
+                }
+            }
         }
 
         const item = await MenuItem.findOne({ _id: itemId, vendor_id });
@@ -706,7 +736,7 @@ export const getVendorMenuItems = async (req, res) => {
         // Fetch portion counts and choice group counts in bulk.
         const itemIds = items.map(i => i._id);
 
-        const [portionCounts, choiceGroupCounts] = await Promise.all([
+        const [portionCounts, choiceGroupCounts, comboMemberships] = await Promise.all([
             // Count portions per item
             MenuItemPortion.aggregate([
                 {
@@ -749,11 +779,47 @@ export const getVendorMenuItems = async (req, res) => {
                     }
                 }
             ]),
+
+            // Find all combo memberships for this vendor's items
+            MenuVariantComponent.aggregate([
+                {
+                    $match: {
+                        menu_item_id: { $in: itemIds },
+                    }
+                },
+                {
+                    $lookup: {
+                        from: "menuvariants",
+                        localField: "variant_id",
+                        foreignField: "_id",
+                        as: "variant",
+                    }
+                },
+                { $unwind: "$variant" },
+                {
+                    $match: {
+                        "variant.is_archived": { $ne: true },
+                    }
+                },
+                {
+                    $group: {
+                        _id: "$menu_item_id",
+                        combos: {
+                            $push: {
+                                _id: "$variant._id",
+                                name: "$variant.name",
+                                price: "$variant.price",
+                            }
+                        }
+                    }
+                }
+            ]),
         ]);
 
         // Index counts by item _id for O(1) lookup
         const portionMap = {};
         const choiceGroupMap = {};
+        const comboMembershipMap = {};
 
         portionCounts.forEach(p => {
             portionMap[p._id.toString()] = {
@@ -766,6 +832,10 @@ export const getVendorMenuItems = async (req, res) => {
 
         choiceGroupCounts.forEach(c => {
             choiceGroupMap[c._id.toString()] = c.count;
+        });
+
+        comboMemberships.forEach(m => {
+            comboMembershipMap[m._id.toString()] = m.combos;
         });
 
         // ── SHAPE RESPONSE ───────────────────────────────────
@@ -823,6 +893,7 @@ export const getVendorMenuItems = async (req, res) => {
                 choice_groups: {
                     count: cgCount,
                 },
+                combos: comboMembershipMap[idStr] || [],
             };
         });
 
