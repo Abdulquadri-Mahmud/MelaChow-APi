@@ -763,6 +763,185 @@ export const updateMenuItemChoiceOption = async (req, res) => {
 
 
 // =====================================================================
+// DELETE OPERATIONS
+// =====================================================================
+
+// ─── DELETE MenuItem (with combo guard + full cascade) ───────────────────────
+export const deleteMenuItem = async (req, res) => {
+    try {
+        const { itemId } = req.params;
+        const vendor_id = req.vendor._id;
+
+        if (!mongoose.Types.ObjectId.isValid(itemId)) {
+            return res.status(400).json({ success: false, message: 'Invalid item ID' });
+        }
+
+        // 1. Ownership check
+        const item = await MenuItem.findOne({ _id: itemId, vendor_id }).lean();
+        if (!item) return res.status(404).json({ success: false, message: 'Item not found' });
+
+        // 2. Combo membership guard — block if item is a component of an active combo
+        const comboComponents = await MenuVariantComponent.find({ menu_item_id: itemId }).lean();
+        if (comboComponents.length > 0) {
+            const variantIds = comboComponents.map(c => c.variant_id);
+            const activeCombos = await MenuVariant.find({
+                _id: { $in: variantIds },
+                is_archived: { $ne: true },
+            }).select('name').lean();
+
+            if (activeCombos.length > 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: `This item is part of ${activeCombos.length === 1 ? 'a combo' : 'combos'}: ${activeCombos.map(c => `"${c.name}"`).join(', ')}. Remove it from those combos first.`,
+                    combo_count: activeCombos.length,
+                    combos: activeCombos.map(c => ({ _id: c._id, name: c.name })),
+                });
+            }
+        }
+
+        // 3. Cascade delete all sub-documents
+        const groupIds = (await MenuItemChoiceGroup.find({ menu_item_id: itemId }).select('_id').lean()).map(g => g._id);
+
+        await Promise.all([
+            MenuItemPortion.deleteMany({ menu_item_id: itemId }),
+            MenuItemChoiceOption.deleteMany({ group_id: { $in: groupIds } }),
+            MenuItemChoiceGroup.deleteMany({ menu_item_id: itemId }),
+            MenuVariantComponent.deleteMany({ menu_item_id: itemId }), // archived combo refs
+            MenuItem.findByIdAndDelete(itemId),
+        ]);
+
+        return res.status(200).json({ success: true, message: 'Item and all associated data deleted' });
+
+    } catch (error) {
+        console.error('[deleteMenuItem] error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ─── DELETE MenuItemPortion (with last-portion guard + default promotion) ─────
+export const deleteMenuItemPortion = async (req, res) => {
+    try {
+        const { itemId, portionId } = req.params;
+        const vendor_id = req.vendor._id;
+
+        // Ownership check via the parent item
+        const item = await MenuItem.findOne({ _id: itemId, vendor_id }).lean();
+        if (!item) return res.status(404).json({ success: false, message: 'Item not found' });
+
+        const portion = await MenuItemPortion.findOne({ _id: portionId, menu_item_id: itemId }).lean();
+        if (!portion) return res.status(404).json({ success: false, message: 'Portion not found' });
+
+        // Guard: must always have at least one portion (price tier)
+        const portionCount = await MenuItemPortion.countDocuments({ menu_item_id: itemId });
+        if (portionCount <= 1) {
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot delete the last portion. An item must have at least one price.',
+            });
+        }
+
+        await MenuItemPortion.findByIdAndDelete(portionId);
+
+        // If we deleted the default portion, promote the next one (lowest sort_order)
+        if (portion.is_default) {
+            const next = await MenuItemPortion.findOne({ menu_item_id: itemId }).sort('sort_order').lean();
+            if (next) {
+                await MenuItemPortion.findByIdAndUpdate(next._id, { is_default: true });
+            }
+        }
+
+        return res.status(200).json({ success: true, message: 'Portion deleted' });
+
+    } catch (error) {
+        console.error('[deleteMenuItemPortion] error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ─── DELETE MenuItemChoiceGroup (cascades all its options) ────────────────────
+export const deleteMenuItemChoiceGroup = async (req, res) => {
+    try {
+        const { groupId } = req.params;
+        const vendor_id = req.vendor._id;
+
+        const group = await MenuItemChoiceGroup.findById(groupId).lean();
+        if (!group) return res.status(404).json({ success: false, message: 'Choice group not found' });
+
+        // Verify vendor owns the parent item
+        const item = await MenuItem.findOne({ _id: group.menu_item_id, vendor_id }).lean();
+        if (!item) return res.status(403).json({ success: false, message: 'Access denied' });
+
+        // Cascade — delete all options in this group first
+        await MenuItemChoiceOption.deleteMany({ group_id: groupId });
+        await MenuItemChoiceGroup.findByIdAndDelete(groupId);
+
+        return res.status(200).json({ success: true, message: 'Choice group and all its options deleted' });
+
+    } catch (error) {
+        console.error('[deleteMenuItemChoiceGroup] error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ─── DELETE MenuItemChoiceOption (single option only) ────────────────────────
+export const deleteMenuItemChoiceOption = async (req, res) => {
+    try {
+        const { optionId } = req.params;
+        const vendor_id = req.vendor._id;
+
+        const option = await MenuItemChoiceOption.findById(optionId).lean();
+        if (!option) return res.status(404).json({ success: false, message: 'Choice option not found' });
+
+        // Verify vendor owns the parent item via the group
+        const group = await MenuItemChoiceGroup.findById(option.group_id).lean();
+        if (!group) return res.status(404).json({ success: false, message: 'Parent group not found' });
+
+        const item = await MenuItem.findOne({ _id: group.menu_item_id, vendor_id }).lean();
+        if (!item) return res.status(403).json({ success: false, message: 'Access denied' });
+
+        await MenuItemChoiceOption.findByIdAndDelete(optionId);
+
+        return res.status(200).json({ success: true, message: 'Choice option deleted' });
+
+    } catch (error) {
+        console.error('[deleteMenuItemChoiceOption] error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// ─── DELETE MenuVariantComponent (min-component guard) ───────────────────────
+export const deleteMenuVariantComponent = async (req, res) => {
+    try {
+        const { variantId, componentId } = req.params;
+        const vendor_id = req.vendor._id;
+
+        // Ownership check
+        const variant = await MenuVariant.findOne({ _id: variantId, vendor_id }).lean();
+        if (!variant) return res.status(404).json({ success: false, message: 'Combo not found' });
+
+        const component = await MenuVariantComponent.findOne({ _id: componentId, variant_id: variantId }).lean();
+        if (!component) return res.status(404).json({ success: false, message: 'Component not found' });
+
+        // Guard: combo must retain at least 2 components
+        const componentCount = await MenuVariantComponent.countDocuments({ variant_id: variantId });
+        if (componentCount <= 2) {
+            return res.status(400).json({
+                success: false,
+                message: 'A combo must have at least 2 items. Remove or replace one of the other components first.',
+            });
+        }
+
+        await MenuVariantComponent.findByIdAndDelete(componentId);
+
+        return res.status(200).json({ success: true, message: 'Component removed from combo' });
+
+    } catch (error) {
+        console.error('[deleteMenuVariantComponent] error:', error);
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+// =====================================================================
 // VENDOR CATALOGUE MANAGEMENT
 // =====================================================================
 
