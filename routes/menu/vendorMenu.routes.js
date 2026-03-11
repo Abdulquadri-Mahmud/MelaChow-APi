@@ -12,6 +12,7 @@ import {
     toggleMenuItemAvailability,
     toggleMenuItemStock,
     moveItemToSection,
+    getVendorMenuItems,
     // Portions
     addMenuItemPortion,
     updateMenuItemPortion,
@@ -46,6 +47,7 @@ router.put('/:vendorId/items/:itemId', vendorAuth, updateMenuItem);
 router.patch('/:vendorId/items/:itemId/availability', vendorAuth, toggleMenuItemAvailability);
 router.patch('/:vendorId/items/:itemId/stock', vendorAuth, toggleMenuItemStock);
 router.patch('/:vendorId/items/:itemId/section', vendorAuth, moveItemToSection);
+router.get('/:vendorId/items', vendorAuth, getVendorMenuItems);
 
 // ─── Portions ─────────────────────────────────────────────────────────────
 router.post('/:vendorId/items/:itemId/portions', vendorAuth, addMenuItemPortion);
