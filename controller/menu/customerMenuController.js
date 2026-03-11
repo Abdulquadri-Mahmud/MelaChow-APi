@@ -107,9 +107,15 @@ async function buildFullItem(item, { vendorView = false } = {}) {
                     : null,
             }
             : null,
-        portions,
+        portions: portions.map(p => ({
+            ...p,
+            price_naira: p.price / 100,
+        })),
         choice_groups: fullChoiceGroups,
-        combos,
+        combos: combos.map(c => ({
+            ...c,
+            price_naira: c.price ? c.price / 100 : null,
+        })),
     };
 }
 
@@ -219,7 +225,10 @@ export const getMenuItemDetails = async (req, res) => {
         const item = await MenuItem.findOne({ _id: itemId, is_archived: false }).lean();
         if (!item) return res.status(404).json({ success: false, message: 'Item not found' });
 
-        const full = await buildFullItem(item);
+        // Determine if this is a vendor request
+        // vendorId in the URL means vendor is viewing their own item
+        const isVendorRequest = !!req.params.vendorId;
+        const full = await buildFullItem(item, { vendorView: isVendorRequest });
         res.status(200).json({ success: true, item: full });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
