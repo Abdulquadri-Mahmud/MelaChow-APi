@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import VendorMenuSection from '../../model/menu/VendorMenuSection.js';
 import MenuItem from '../../model/menu/MenuItem.js';
 import MenuItemPortion from '../../model/menu/MenuItemPortion.js';
@@ -176,35 +177,78 @@ export const updateMenuItem = async (req, res) => {
 
 export const toggleMenuItemAvailability = async (req, res) => {
     try {
-        const { itemId } = req.params;
-        const vendor_id = req.vendor._id;
-        const { is_available } = req.body;
+        const { vendorId, itemId } = req.params;
 
-        const item = await MenuItem.findOne({ _id: itemId, vendor_id });
-        if (!item) return res.status(404).json({ success: false, message: 'Item not found' });
-
-        // Guard: Cannot toggle availability if archived
-        if (item.is_archived && is_available !== false) {
-            return res.status(400).json({
+        // ── GUARD 1: vendorAuth must have attached req.vendor ──
+        if (!req.vendor || !req.vendor._id) {
+            return res.status(401).json({
                 success: false,
-                message: "Cannot change availability of an archived item. Restore from archive first."
+                message: "Unauthorized — vendor not authenticated",
             });
         }
 
-        // Cannot mark available if no active portions exist
-        if (is_available === true) {
-            const activePortion = await MenuItemPortion.findOne({ menu_item_id: itemId, is_available: true });
-            if (!activePortion) {
-                return res.status(400).json({ success: false, message: 'Cannot activate an item with no portions.' });
-            }
+        // ── GUARD 2: Ownership check ───────────────────────────
+        if (req.vendor._id.toString() !== vendorId) {
+            return res.status(403).json({
+                success: false,
+                message: "Access denied",
+            });
         }
 
-        item.is_available = is_available;
+        // ── GUARD 3: Validate itemId is a valid ObjectId ───────
+        if (!mongoose.Types.ObjectId.isValid(itemId)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid item ID",
+            });
+        }
+
+        // ── FETCH ──────────────────────────────────────────────
+        const item = await MenuItem.findOne({
+            _id: itemId,
+            vendor_id: vendorId,
+        });
+
+        if (!item) {
+            return res.status(404).json({
+                success: false,
+                message: "Menu item not found",
+            });
+        }
+
+        // ── GUARD 4: Cannot enable an archived item ────────────
+        if (item.is_archived) {
+            return res.status(400).json({
+                success: false,
+                message: "Restore this item from archive before making it available",
+            });
+        }
+
+        // ── TOGGLE ─────────────────────────────────────────────
+        item.is_available = !item.is_available;
         await item.save();
 
-        res.status(200).json({ success: true, item });
+        return res.status(200).json({
+            success: true,
+            message: item.is_available
+                ? "Item is now visible on your menu"
+                : "Item is now hidden from your menu",
+            item: {
+                _id:          item._id,
+                is_available: item.is_available,
+                is_archived:  item.is_archived,
+            },
+        });
+
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error("[toggleMenuItemAvailability] error:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Failed to toggle availability",
+            ...(process.env.NODE_ENV === "development" && {
+                detail: error.message
+            }),
+        });
     }
 };
 
