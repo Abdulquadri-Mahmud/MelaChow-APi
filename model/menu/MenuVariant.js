@@ -11,6 +11,7 @@ const menuVariantSchema = new mongoose.Schema(
         name: {
             type: String, // e.g. "Rice Combo", "Amala Special"
             required: true,
+            trim: true,
         },
         description: {
             type: String,
@@ -84,6 +85,7 @@ const menuVariantComponentSchema = new mongoose.Schema(
         },
         label: {
             type: String,
+            trim: true,
             default: null, // "Jollof Rice (Large)"
         },
         // If CHOICE_GROUP - customer picks from options
@@ -113,6 +115,7 @@ const variantChoiceGroupSchema = new mongoose.Schema(
         name: {
             type: String, // "Choose Your Protein", "Pick a Drink"
             required: true,
+            trim: true,
         },
         min_selections: {
             type: Number,
@@ -143,15 +146,17 @@ const variantChoiceOptionSchema = new mongoose.Schema(
         menu_item_id: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "MenuItem",
-            required: true,
+            default: null,
         },
         portion_id: {
             type: mongoose.Schema.Types.ObjectId,
-            required: true,
+            ref: "MenuItemPortion",
+            default: null,
         },
         label: {
             type: String, // override label if different from MenuItem.name
-            default: null,
+            required: true,
+            trim: true,
         },
         price_modifier: {
             type: Number, // SNAPSHOT in kobo
