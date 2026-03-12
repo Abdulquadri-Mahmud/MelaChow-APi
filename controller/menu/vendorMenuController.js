@@ -671,6 +671,56 @@ export const addMenuItemChoiceGroup = async (req, res) => {
     }
 };
 
+export const updateMenuItemChoiceGroup = async (req, res) => {
+    try {
+        const { itemId, groupId } = req.params;
+        const vendor_id = req.vendor._id;
+        const { name, min_selections, max_selections, is_required, sort_order } = req.body;
+
+        // Verify item ownership
+        const item = await MenuItem.findOne({ _id: itemId, vendor_id });
+        if (!item) {
+            return res.status(404).json({
+                success: false,
+                message: "Item not found",
+            });
+        }
+
+        // Build update fields — only update what was sent
+        const updateFields = {};
+        if (name !== undefined) updateFields.name = name.trim();
+        if (min_selections !== undefined) updateFields.min_selections = min_selections;
+        if (max_selections !== undefined) updateFields.max_selections = max_selections;
+        if (is_required !== undefined) updateFields.is_required = is_required;
+        if (sort_order !== undefined) updateFields.sort_order = sort_order;
+
+        const group = await MenuItemChoiceGroup.findOneAndUpdate(
+            { _id: groupId, menu_item_id: itemId },
+            updateFields,
+            { new: true }
+        );
+
+        if (!group) {
+            return res.status(404).json({
+                success: false,
+                message: "Choice group not found",
+            });
+        }
+
+        return res.status(200).json({
+            success: true,
+            group,
+        });
+
+    } catch (error) {
+        console.error("[updateMenuItemChoiceGroup] error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message,
+        });
+    }
+};
+
 export const addMenuItemChoiceOption = async (req, res) => {
     try {
         const { groupId } = req.params;
