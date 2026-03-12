@@ -31,6 +31,7 @@ import {
     // Choice Groups (item-level)
     addMenuItemChoiceGroup,
     addMenuItemChoiceOption,
+    updateMenuItemChoiceGroup,
     updateMenuItemChoiceOption,
     deleteMenuItemChoiceGroup,
     deleteMenuItemChoiceOption,
@@ -66,6 +67,7 @@ router.delete('/:vendorId/items/:itemId/portions/:portionId', vendorAuth, delete
 
 // ─── Choice Groups (item-level add-ons) — BEFORE item delete to avoid shadowing ─
 router.post('/:vendorId/items/:itemId/choice-groups', vendorAuth, addMenuItemChoiceGroup);
+router.put('/:vendorId/items/:itemId/choice-groups/:groupId', vendorAuth, updateMenuItemChoiceGroup);
 router.delete('/:vendorId/items/:itemId/choice-groups/:groupId', vendorAuth, deleteMenuItemChoiceGroup);
 router.post('/choice-groups/:groupId/options', vendorAuth, addMenuItemChoiceOption);
 router.patch('/choice-options/:optionId', vendorAuth, updateMenuItemChoiceOption);
