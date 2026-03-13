@@ -4,6 +4,8 @@ import MenuItemPortion from '../../model/menu/MenuItemPortion.js';
 import { MenuItemChoiceGroup, MenuItemChoiceOption } from '../../model/menu/MenuItemChoice.js';
 import { MenuVariant, MenuVariantComponent, VariantChoiceGroup, VariantChoiceOption } from '../../model/menu/MenuVariant.js';
 import Category from '../../model/category.model.js';
+import Vendor           from "../../model/vendor/vendor.model.js";
+import City from "../../model/location/City.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPER: Resolve platform_category with parent populated
@@ -206,6 +208,40 @@ async function buildFullVariant(variant) {
     return { ...variant, components: resolvedComponents };
 }
 
+/**
+ * Resolves the delivery fee a customer will be charged for
+ * this vendor, using the same logic as the order controller.
+ * Returns fee in NAIRA (not kobo).
+ */
+async function resolveStorefrontDeliveryFee(vendor) {
+    // Case 1: vendor manages own delivery
+    if (vendor.deliveryManagedBy === "vendor") {
+        return vendor.flatRateDeliveryFee ?? 0;
+    }
+
+    // Case 2: admin-managed but vendor has a specific override
+    if (
+        vendor.platformDeliveryFeeOverride != null &&
+        vendor.platformDeliveryFeeOverride > 0
+    ) {
+        return vendor.platformDeliveryFeeOverride;
+    }
+
+    // Case 3: fall back to city-level platform fee
+    try {
+        const cityName = vendor.address?.city;
+        if (!cityName) return 0;
+
+        const city = await City.findOne({
+            name: { $regex: new RegExp(`^${cityName}$`, "i") }
+        }).lean();
+
+        return city?.platformDeliveryFee ?? 0;
+    } catch {
+        return 0;
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /v1/vendors/:vendorId/menu — Full vendor menu grouped by vendor sections
 // ─────────────────────────────────────────────────────────────────────────────
@@ -213,68 +249,123 @@ export const getFullVendorMenu = async (req, res) => {
     try {
         const { vendorId } = req.params;
 
-        // 1. Get all visible vendor sections sorted by sort_order — exclude soft-deleted
-        const sections = await VendorMenuSection.find({ vendor_id: vendorId, is_visible: true, deleted_at: null })
-            .sort('sort_order')
-            .lean();
+        // Step 1 — Fetch the vendor
+        const vendor = await Vendor.findById(vendorId).lean();
+        if (!vendor) {
+            return res.status(404).json({ message: "Vendor not found" });
+        }
 
-        // 2. Fetch all non-archived items for this vendor in one query, then group in JS
-        const allItems = await MenuItem.find({ vendor_id: vendorId, is_archived: false }).sort('sort_order').lean();
+        // Resolve the fee the customer will actually be charged
+        const resolvedDeliveryFee = await resolveStorefrontDeliveryFee(vendor);
 
-        // 3. Group items into their sections
+        const vendorData = {
+            _id:                   vendor._id,
+            storeName:             vendor.storeName,
+            logo:                  vendor.logo,
+            coverImage:            vendor.coverImage || null,
+            description:           vendor.storeDescription,
+            cuisineTypes:          vendor.cuisineTypes || [],
+            address:               vendor.address,
+            isOpen:                vendor.isOpen ?? true,
+            acceptsDelivery:       vendor.acceptsDelivery ?? true,
+            deliveryManagedBy:     vendor.deliveryManagedBy || "admin",
+            deliveryFee:           resolvedDeliveryFee,  // ← resolved, not raw field
+            estimatedDeliveryTime: vendor.estimatedDeliveryTime ?? 30,
+            rating:                vendor.rating ?? null,
+            storeSlug:             vendor.storeSlug,
+        };
+
+        // Step 2 — Fetch all active sections for this vendor
+        const sections = await VendorMenuSection.find({
+            vendor_id:  vendorId,
+            deleted_at: null,
+        }).sort({ sort_order: 1, createdAt: 1 }).lean();
+
+        // Step 3 — Fetch all visible items for this vendor
+        const items = await MenuItem.find({
+            vendor_id:   vendorId,
+            is_archived: false,
+            is_available: true,
+        }).sort({ sort_order: 1, createdAt: 1 }).lean();
+
+        const itemIds = items.map(i => i._id);
+
+        const allPortions = await MenuItemPortion.find({
+            menu_item_id: { $in: itemIds },
+        }).lean();
+
+        // Build a map: itemId → portions array
+        const portionsByItem = {};
+        for (const p of allPortions) {
+            const key = p.menu_item_id.toString();
+            if (!portionsByItem[key]) portionsByItem[key] = [];
+            portionsByItem[key].push(p);
+        }
+
+        const enrichedItems = items.map(item => {
+            const portions = portionsByItem[item._id.toString()] || [];
+            const prices   = portions.map(p => p.price); // kobo
+            const defPortion = portions.find(p => p.is_default) || portions[0];
+
+            return {
+                _id:              item._id,
+                name:             item.name,
+                description:      item.description,
+                image_url:        item.image_url,
+                item_type:        item.item_type,
+                dietary_type:     item.dietary_type,
+                is_available:     item.is_available,
+                is_in_stock:      item.is_in_stock,
+                prep_time_minutes: item.prep_time_minutes,
+                tags:             item.tags,
+                vendor_section_id: item.vendor_section_id,
+                portions: {
+                    count:                portions.length,
+                    default_price_naira:  defPortion
+                        ? Math.round(defPortion.price / 100)
+                        : 0,
+                    min_price_naira: prices.length
+                        ? Math.round(Math.min(...prices) / 100)
+                        : 0,
+                    max_price_naira: prices.length
+                        ? Math.round(Math.max(...prices) / 100)
+                        : 0,
+                },
+            };
+        });
+
+        // Step 4 — Group items into sections
         const sectionMap = {};
-        const unsectionedItems = [];
+        for (const s of sections) {
+            sectionMap[s._id.toString()] = { ...s, items: [] };
+        }
 
-        for (const item of allItems) {
-            const sectionId = item.vendor_section_id ? item.vendor_section_id.toString() : null;
-            if (sectionId) {
-                if (!sectionMap[sectionId]) sectionMap[sectionId] = [];
-                sectionMap[sectionId].push(item);
+        const unsectioned = [];
+
+        for (const item of enrichedItems) {
+            const sid = item.vendor_section_id?.toString();
+            if (sid && sectionMap[sid]) {
+                sectionMap[sid].items.push(item);
             } else {
-                unsectionedItems.push(item);
+                unsectioned.push(item);
             }
         }
 
-        // 4. Build full sections with enriched items
-        const fullSections = await Promise.all(
-            sections.map(async (section) => {
-                const rawItems = sectionMap[section._id.toString()] || [];
-                const items = await Promise.all(rawItems.map(buildFullItem));
-                return {
-                    section_id: section._id,
-                    section_name: section.name,
-                    sort_order: section.sort_order,
-                    is_visible: section.is_visible,
-                    items,
-                };
-            })
-        );
+        const populatedSections = sections
+            .map(s => sectionMap[s._id.toString()])
+            .filter(s => s.items.length > 0); // hide empty sections
 
-        // 5. Virtual "Other" section for unsectioned items
-        if (unsectionedItems.length > 0) {
-            const otherItems = await Promise.all(unsectionedItems.map(buildFullItem));
-            fullSections.push({
-                section_id: null,
-                section_name: 'Other',
-                sort_order: 9999,
-                is_visible: true,
-                items: otherItems,
-            });
-        }
-
-        // 6. Fetch all vendor variants
-        const rawVariants = await MenuVariant.find({ vendor_id: vendorId, is_archived: false })
-            .sort('sort_order')
-            .lean();
-        const variants = await Promise.all(rawVariants.map(buildFullVariant));
-
-        res.status(200).json({
-            success: true,
-            vendor_id: vendorId,
-            sections: fullSections,
-            variants,
+        // Step 5 — Return the response
+        return res.status(200).json({
+            success:    true,
+            vendor:     vendorData,
+            sections:   populatedSections,
+            unsectioned,
+            variants:   [], // combo fetch can be added later
         });
+
     } catch (error) {
+        console.error("getFullVendorMenu error:", error);
         res.status(500).json({ success: false, message: error.message });
     }
 };
