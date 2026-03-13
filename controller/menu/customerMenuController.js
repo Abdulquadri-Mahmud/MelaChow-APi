@@ -275,13 +275,122 @@ export const getFullVendorMenu = async (req, res) => {
             storeSlug:             vendor.storeSlug,
         };
 
-        // Step 2 — Fetch all active sections for this vendor
+        // Step 2 — Fetch all active combos for this vendor
+        const rawCombos = await MenuVariant.find({
+            vendor_id:   vendorId,
+            is_available: true,
+            is_archived:  { $ne: true },
+        }).lean();
+
+        // Bulk-fetch ALL components for all combos in one query
+        const variantIds = rawCombos.map(v => v._id);
+
+        const [allComponents, allSwapGroups] = await Promise.all([
+            MenuVariantComponent.find({
+                variant_id: { $in: variantIds }
+            }).lean(),
+            VariantChoiceGroup.find({
+                variant_id: { $in: variantIds }
+            }).lean(),
+        ]);
+
+        // Bulk-fetch ALL swap options for all swap groups
+        const swapGroupIds = allSwapGroups.map(g => g._id);
+        const allSwapOptions = await VariantChoiceOption.find({
+            group_id: { $in: swapGroupIds }
+        }).lean();
+
+        // Collect all unique item IDs across all combo components
+        const comboItemIds = [
+            ...new Set(
+                allComponents.map(c => c.menu_item_id?.toString()).filter(Boolean)
+            )
+        ];
+
+        // Bulk fetch those items
+        const comboItems = await MenuItem.find({
+            _id: { $in: comboItemIds }
+        }).lean();
+
+        // Build a lookup map: itemId → item
+        const comboItemMap = {};
+        for (const item of comboItems) {
+            comboItemMap[item._id.toString()] = item;
+        }
+
+        // Build lookup maps for efficient grouping
+        const componentsByVariant = {};
+        for (const c of allComponents) {
+            const key = c.variant_id.toString();
+            if (!componentsByVariant[key]) componentsByVariant[key] = [];
+            componentsByVariant[key].push(c);
+        }
+
+        const swapGroupsByVariant = {};
+        for (const g of allSwapGroups) {
+            const key = g.variant_id.toString();
+            if (!swapGroupsByVariant[key]) swapGroupsByVariant[key] = [];
+            swapGroupsByVariant[key].push(g);
+        }
+
+        const swapOptionsByGroup = {};
+        for (const o of allSwapOptions) {
+            const key = o.group_id.toString();
+            if (!swapOptionsByGroup[key]) swapOptionsByGroup[key] = [];
+            swapOptionsByGroup[key].push(o);
+        }
+
+        // Build final combos array
+        const combos = rawCombos.map(variant => {
+            const vid = variant._id.toString();
+
+            const components = (componentsByVariant[vid] || []).map(c => {
+                const item = comboItemMap[c.menu_item_id?.toString()];
+                return {
+                    _id:            c._id,
+                    menu_item_id:   c.menu_item_id,
+                    quantity:       c.quantity || 1,
+                    component_type: c.component_type,
+                    // Denormalised display fields from the item:
+                    name:           item?.name     || "Item",
+                    image_url:      item?.image_url || null,
+                };
+            });
+
+            const swap_groups = (swapGroupsByVariant[vid] || []).map(group => ({
+                _id:         group._id,
+                name:        group.name,
+                is_required: group.is_required,
+                options: (swapOptionsByGroup[group._id.toString()] || []).map(opt => ({
+                    _id:                  opt._id,
+                    label:                opt.label,
+                    price_modifier_naira: Math.round((opt.price_modifier || 0) / 100),
+                    menu_item_id:         opt.menu_item_id || null,
+                    portion_id:           opt.portion_id   || null,
+                })),
+            }));
+
+            return {
+                _id:               variant._id,
+                name:              variant.name,
+                description:       variant.description || null,
+                image_url:         variant.image_url   || null,
+                price_naira:       Math.round(variant.price / 100),
+                is_available:      variant.is_available,
+                prep_time_minutes: variant.prep_time_minutes || null,
+                tags:              variant.tags || [],
+                components,
+                swap_groups,
+            };
+        });
+
+        // Step 3 — Fetch all active sections for this vendor
         const sections = await VendorMenuSection.find({
             vendor_id:  vendorId,
             deleted_at: null,
         }).sort({ sort_order: 1, createdAt: 1 }).lean();
 
-        // Step 3 — Fetch all visible items for this vendor
+        // Step 4 — Fetch all visible items for this vendor
         const items = await MenuItem.find({
             vendor_id:   vendorId,
             is_archived: false,
@@ -334,7 +443,7 @@ export const getFullVendorMenu = async (req, res) => {
             };
         });
 
-        // Step 4 — Group items into sections
+        // Step 5 — Group items into sections
         const sectionMap = {};
         for (const s of sections) {
             sectionMap[s._id.toString()] = { ...s, items: [] };
@@ -355,13 +464,13 @@ export const getFullVendorMenu = async (req, res) => {
             .map(s => sectionMap[s._id.toString()])
             .filter(s => s.items.length > 0); // hide empty sections
 
-        // Step 5 — Return the response
+        // Step 6 — Return the response
         return res.status(200).json({
             success:    true,
             vendor:     vendorData,
+            combos,
             sections:   populatedSections,
             unsectioned,
-            variants:   [], // combo fetch can be added later
         });
 
     } catch (error) {
