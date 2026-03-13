@@ -478,11 +478,66 @@ export const updateMenuVariant = async (req, res) => {
     try {
         const { variantId } = req.params;
         const vendor_id = req.vendor._id;
-        const variant = await MenuVariant.findOneAndUpdate({ _id: variantId, vendor_id }, req.body, { new: true });
-        if (!variant) return res.status(404).json({ success: false, message: 'Variant not found' });
-        res.status(200).json({ success: true, variant });
+        const {
+            name,
+            description,
+            image_url,
+            price_naira,
+            prep_time_minutes,
+            tags,
+        } = req.body;
+
+        const variant = await MenuVariant.findOne({
+            _id: variantId,
+            vendor_id,
+        });
+
+        if (!variant) {
+            return res.status(404).json({
+                success: false,
+                message: "Combo not found",
+            });
+        }
+
+        const updateFields = {};
+        if (name !== undefined)              updateFields.name = name.trim();
+        if (description !== undefined)       updateFields.description = description;
+        if (image_url !== undefined)         updateFields.image_url = image_url;
+        if (prep_time_minutes !== undefined) updateFields.prep_time_minutes = prep_time_minutes;
+        if (tags !== undefined)              updateFields.tags = tags;
+
+        // Price comes in as naira — convert to kobo
+        if (price_naira !== undefined) {
+            if (Number(price_naira) <= 0) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Price must be greater than zero",
+                });
+            }
+            updateFields.price = Math.round(Number(price_naira) * 100);
+        }
+
+        const updated = await MenuVariant.findByIdAndUpdate(
+            variantId,
+            updateFields,
+            { new: true }
+        );
+
+        return res.status(200).json({
+            success: true,
+            message: "Combo updated successfully",
+            variant: {
+                ...updated.toObject(),
+                price_naira: updated.price / 100,
+            },
+        });
+
     } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
+        console.error("[updateMenuVariant] error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message,
+        });
     }
 };
 
