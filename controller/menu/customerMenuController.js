@@ -75,24 +75,90 @@ async function buildFullItem(item, { vendorView = false } = {}) {
         }));
     }
 
-    // Resolve active combos this item belongs to
-    let combos = [];
-    if (comboComponents.length > 0) {
-        const variantIds = comboComponents.map(c => c.variant_id);
-        const variantFilter = { _id: { $in: variantIds } };
+    // ── Resolve active combos this item belongs to ───────────────
+    const [variants, fullComboComponents] = await Promise.all([
+        MenuVariant.find({
+            _id: { $in: comboComponents.map(c => c.variant_id) },
+            ...(vendorView ? {} : { is_archived: { $ne: true }, is_available: { $ne: false } }),
+        }).lean(),
+        MenuVariantComponent.find({
+            variant_id: { $in: comboComponents.map(c => c.variant_id) }
+        }).lean(),
+    ]);
 
-        // Customers only see active visible combos
-        if (!vendorView) {
-            variantFilter.is_archived = { $ne: true };
-            variantFilter.is_available = { $ne: false };
-        }
+    // For each variant, fetch its components and swap groups
+    const fullCombos = await Promise.all(
+        variants.map(async (variant) => {
+            // All FIXED components for this combo
+            const components = fullComboComponents.filter(c => c.variant_id.toString() === variant._id.toString());
 
-        const activeCombos = await MenuVariant.find(variantFilter)
-            .select('name price is_archived is_available')
-            .lean();
+            // Populate each component's menu item name + image
+            const populatedComponents = await Promise.all(
+                components.map(async (comp) => {
+                    const menuItem = comp.menu_item_id
+                        ? await MenuItem.findById(comp.menu_item_id)
+                            .select("name image_url")
+                            .lean()
+                        : null;
+                    return {
+                        _id:            comp._id,
+                        menu_item_id:   comp.menu_item_id,
+                        name:           menuItem?.name || comp.label || null,
+                        image_url:      menuItem?.image_url || null,
+                        quantity:       comp.quantity || 1,
+                        component_type: comp.component_type,
+                        sort_order:     comp.sort_order,
+                    };
+                })
+            );
 
-        combos = activeCombos;
-    }
+            // Swap choice groups for this combo
+            const swapGroups = await VariantChoiceGroup.find({
+                variant_id: variant._id,
+            }).lean();
+
+            const populatedSwapGroups = await Promise.all(
+                swapGroups.map(async (group) => {
+                    const options = await VariantChoiceOption.find({
+                        group_id: group._id,
+                    }).lean();
+
+                    return {
+                        _id:            group._id,
+                        name:           group.name,
+                        is_required:    group.is_required,
+                        min_selections: group.min_selections,
+                        max_selections: group.max_selections,
+                        sort_order:     group.sort_order,
+                        options: options.map(opt => ({
+                            _id:                  opt._id,
+                            label:                opt.label,
+                            menu_item_id:         opt.menu_item_id,
+                            price_modifier:       opt.price_modifier,
+                            price_modifier_naira: opt.price_modifier / 100,
+                            is_available:         opt.is_available,
+                            sort_order:           opt.sort_order,
+                        })),
+                    };
+                })
+            );
+
+            return {
+                _id:               variant._id,
+                name:              variant.name,
+                description:       variant.description || null,
+                image_url:         variant.image_url || null,
+                price:             variant.price,
+                price_naira:       variant.price / 100,
+                is_available:      variant.is_available,
+                is_archived:       variant.is_archived,
+                prep_time_minutes: variant.prep_time_minutes || null,
+                tags:              variant.tags || [],
+                components:        populatedComponents,
+                swap_groups:       populatedSwapGroups,
+            };
+        })
+    );
 
     return {
         ...item,
@@ -112,10 +178,7 @@ async function buildFullItem(item, { vendorView = false } = {}) {
             price_naira: p.price / 100,
         })),
         choice_groups: fullChoiceGroups,
-        combos: combos.map(c => ({
-            ...c,
-            price_naira: c.price ? c.price / 100 : null,
-        })),
+        combos: fullCombos,
     };
 }
 
