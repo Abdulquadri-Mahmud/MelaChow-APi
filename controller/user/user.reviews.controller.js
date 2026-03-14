@@ -1,6 +1,6 @@
 import Reviews from "../../model/reviews/review.model.js";
 import vendorModel from "../../model/vendor/vendor.model.js";
-import Food from "../../model/vendor/food.model.js";
+import MenuItem from "../../model/menu/MenuItem.js";
 
 /**
  * @desc User creates a review for a vendor or food
@@ -23,8 +23,8 @@ export const createReview = async (req, res) => {
 
     // Optional: check if food exists if foodId provided
     if (foodId) {
-      const food = await Food.findById(foodId);
-      if (!food) return res.status(404).json({ success: false, message: "Food not found" });
+      const food = await MenuItem.findById(foodId);
+      if (!food) return res.status(404).json({ success: false, message: "Food item not found" });
     }
 
     // Create review
@@ -35,9 +35,9 @@ export const createReview = async (req, res) => {
 
     // Update Food Rating if foodId was provided
     if (foodId) {
-      const food = await Food.findById(foodId);
-      if (food) {
-        await food.updateRating(Number(rating));
+      const menuItem = await MenuItem.findById(foodId);
+      if (menuItem) {
+        await menuItem.updateRating(Number(rating));
       }
     }
 
@@ -72,7 +72,7 @@ export const getUserReviews = async (req, res) => {
     const reviews = await Reviews
       .find({ userId })
       .populate("vendorId", "storeName")
-      .populate("foodId", "name")
+      .populate("foodId", "name image_url rating")
       .sort({ createdAt: -1 });
 
     res.status(200).json({
@@ -109,7 +109,7 @@ export const getVendorReviews = async (req, res) => {
     const reviews = await Reviews
       .find({ vendorId })
       .populate("userId", "firstname lastname email")
-      .populate("foodId", "name")
+      .populate("foodId", "name image_url rating")
       .sort({ createdAt: -1 });
 
     res.status(200).json({
@@ -144,9 +144,9 @@ export const deleteReview = async (req, res) => {
 
     // Update Food Rating if foodId exists
     if (review.foodId) {
-      const food = await Food.findById(review.foodId);
-      if (food) {
-        await food.removeRating(review.rating);
+      const menuItem = await MenuItem.findById(review.foodId);
+      if (menuItem) {
+        await menuItem.removeRating(review.rating);
       }
     }
 

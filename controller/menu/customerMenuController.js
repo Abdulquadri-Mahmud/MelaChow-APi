@@ -318,6 +318,50 @@ export const getFullVendorMenu = async (req, res) => {
             comboItemMap[item._id.toString()] = item;
         }
 
+        // Bulk-fetch all choice groups for all component items
+        const allComponentChoiceGroups = await MenuItemChoiceGroup.find({
+            menu_item_id: { $in: comboItemIds }
+        }).sort({ sort_order: 1 }).lean();
+
+        // Collect all group ids for bulk option fetch
+        const componentGroupIds = allComponentChoiceGroups.map(g => g._id);
+
+        // Bulk-fetch all options for those groups
+        const allComponentChoiceOptions = await MenuItemChoiceOption.find({
+            group_id:     { $in: componentGroupIds },
+            is_available: { $ne: false },
+        }).sort({ sort_order: 1 }).lean();
+
+        // Build options lookup: groupId → options[]
+        const componentOptionsByGroup = {};
+        for (const opt of allComponentChoiceOptions) {
+            const key = opt.group_id.toString();
+            if (!componentOptionsByGroup[key]) componentOptionsByGroup[key] = [];
+            componentOptionsByGroup[key].push({
+                _id:                  opt._id,
+                label:                opt.label,
+                image_url:            opt.image_url || null,
+                price_modifier_naira: Math.round((opt.price_modifier || 0) / 100),
+                is_available:         opt.is_available,
+            });
+        }
+
+        // Build choice groups lookup: itemId → choiceGroups[]
+        const componentChoiceGroupsByItem = {};
+        for (const group of allComponentChoiceGroups) {
+            const key = group.menu_item_id.toString();
+            if (!componentChoiceGroupsByItem[key]) componentChoiceGroupsByItem[key] = [];
+            componentChoiceGroupsByItem[key].push({
+                _id:            group._id,
+                name:           group.name,
+                is_required:    group.is_required,
+                min_selections: group.min_selections,
+                max_selections: group.max_selections,
+                sort_order:     group.sort_order,
+                options:        componentOptionsByGroup[group._id.toString()] || [],
+            });
+        }
+
         // Build lookup maps for efficient grouping
         const componentsByVariant = {};
         for (const c of allComponents) {
@@ -345,15 +389,18 @@ export const getFullVendorMenu = async (req, res) => {
             const vid = variant._id.toString();
 
             const components = (componentsByVariant[vid] || []).map(c => {
-                const item = comboItemMap[c.menu_item_id?.toString()];
+                const item    = comboItemMap[c.menu_item_id?.toString()];
+                const itemId  = c.menu_item_id?.toString();
                 return {
                     _id:            c._id,
                     menu_item_id:   c.menu_item_id,
                     quantity:       c.quantity || 1,
                     component_type: c.component_type,
-                    // Denormalised display fields from the item:
-                    name:           item?.name     || "Item",
+                    name:           item?.name      || "Item",
                     image_url:      item?.image_url || null,
+                    // Choice groups for this component item.
+                    // Empty array = no customisation for this component.
+                    choice_groups:  componentChoiceGroupsByItem[itemId] || [],
                 };
             });
 
