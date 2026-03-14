@@ -2,6 +2,7 @@ import Reviews from "../../model/reviews/review.model.js";
 import vendorModel from "../../model/vendor/vendor.model.js";
 import MenuItem from "../../model/menu/MenuItem.js";
 import MenuItemPortion from "../../model/menu/MenuItemPortion.js";
+import City from "../../model/location/City.js";
 
 /**
  * @desc Get all reviews for a specific restaurant/vendor (Public)
@@ -157,7 +158,12 @@ export const getFoodReviews = async (req, res) => {
     }
 
     // Check if food exists
-    const food = await MenuItem.findById(foodId).populate("vendor_id", "storeName").lean();
+    const food = await MenuItem.findById(foodId)
+      .populate(
+        "vendor_id", 
+        "storeName address.city deliveryManagedBy flatRateDeliveryFee platformDeliveryFeeOverride"
+      )
+      .lean();
     if (!food) {
       return res.status(404).json({ 
         success: false, 
@@ -234,6 +240,20 @@ export const getFoodReviews = async (req, res) => {
       { price: 1, label: 1 }
     ).sort({ price: 1 }).lean();
 
+    // Resolve delivery fee
+    const v = food.vendor_id || {};
+    let resolvedDeliveryFee = 0;
+    if (v.deliveryManagedBy === "vendor") {
+      resolvedDeliveryFee = v.flatRateDeliveryFee || 0;
+    } else if (v.platformDeliveryFeeOverride != null && v.platformDeliveryFeeOverride > 0) {
+      resolvedDeliveryFee = v.platformDeliveryFeeOverride;
+    } else if (v.address?.city) {
+      const city = await City.findOne({
+        name: { $regex: new RegExp(`^${v.address.city}$`, "i") }
+      }).lean();
+      resolvedDeliveryFee = city?.platformDeliveryFee || 0;
+    }
+
     // Use calculated values or fallback to stored values
     const calculatedRating = overallRatingCalc.length > 0 ? overallRatingCalc[0] : null;
     const accurateAverageRating = calculatedRating 
@@ -252,6 +272,7 @@ export const getFoodReviews = async (req, res) => {
           price_naira: cheapestPortion ? cheapestPortion.price / 100 : null,
           portion_label: cheapestPortion?.label ?? null,
           image: food.image_url || "",
+          deliveryFee: resolvedDeliveryFee,
           averageRating: accurateAverageRating,
           totalReviews: accurateTotalReviews,
           storedRating: food.rating || 0, // For comparison/debugging

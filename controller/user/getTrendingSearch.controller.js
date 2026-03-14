@@ -2,6 +2,7 @@ import MenuItem from "../../model/menu/MenuItem.js";
 import MenuItemPortion from "../../model/menu/MenuItemPortion.js";
 import User from "../../model/user.model.js";
 import Vendor from "../../model/vendor/vendor.model.js";
+import City from "../../model/location/City.js";
 
 /**
  * @desc    Get trending food searches/items
@@ -82,15 +83,43 @@ export const getTrendingSearch = async (req, res) => {
 
     // Bulk fetch vendors and portions for trending items
     const [trendingVendors, trendingPortions] = await Promise.all([
-      Vendor.find({ _id: { $in: trendingVendorIds } }, "storeName logo address openingHours").lean(),
+      Vendor.find(
+        { _id: { $in: trendingVendorIds } },
+        "storeName logo address openingHours " +
+          "deliveryManagedBy flatRateDeliveryFee platformDeliveryFeeOverride"
+      ).lean(),
       MenuItemPortion.find({ menu_item_id: { $in: trendingItemIds } })
         .sort({ price: 1 })
         .lean(),
     ]);
 
+    // Bulk resolve delivery fees for trending vendors
+    const cityNames = [...new Set(trendingVendors.map((v) => v.address?.city).filter(Boolean))];
+    const cities = await City.find({
+      name: { $in: cityNames.map((c) => new RegExp(`^${c}$`, "i")) },
+    }).lean();
+
+    const cityFeeMap = {};
+    cities.forEach((c) => {
+      cityFeeMap[c.name.toLowerCase()] = c.platformDeliveryFee || 0;
+    });
+
     const trendingVendorMap = {};
     trendingVendors.forEach((v) => {
-      trendingVendorMap[v._id.toString()] = v;
+      let resolvedFee = 0;
+      if (v.deliveryManagedBy === "vendor") {
+        resolvedFee = v.flatRateDeliveryFee || 0;
+      } else if (v.platformDeliveryFeeOverride != null && v.platformDeliveryFeeOverride > 0) {
+        resolvedFee = v.platformDeliveryFeeOverride;
+      } else {
+        const cityName = v.address?.city?.toLowerCase();
+        resolvedFee = cityFeeMap[cityName] || 0;
+      }
+
+      trendingVendorMap[v._id.toString()] = {
+        ...v,
+        resolvedDeliveryFee: resolvedFee
+      };
     });
 
     const trendingPriceMap = {};
@@ -110,6 +139,7 @@ export const getTrendingSearch = async (req, res) => {
         image: item.image_url || "",
         price: cheapest ? cheapest.price / 100 : null,
         portionLabel: cheapest?.label ?? null,
+        deliveryFee: vendor.resolvedDeliveryFee || 0,
         item_type: item.item_type,
         dietary_type: item.dietary_type,
         rating: item.rating,
