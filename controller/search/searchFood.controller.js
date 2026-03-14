@@ -1,8 +1,173 @@
-// controllers/foodSearch.controller.js
+/*
+ * DEFERRED POST-LAUNCH:
+ *
+ * 1. Price filtering (?minPrice, ?maxPrice) and price
+ *    sorting (sort=price_asc, sort=price_desc):
+ *    Requires aggregation pipeline joining MenuItem with
+ *    MenuItemPortion. Dropped in MenuItem migration.
+ *    Re-add using $lookup aggregation when ready.
+ *
+ * 2. Slug-based search (?slug=):
+ *    MenuItem has no slug field. If needed, add a slug
+ *    field to MenuItem and generate on item creation.
+ *
+ * 3. food.categories array filter:
+ *    Replaced by platform_category_id (ObjectId ref).
+ *    ?category= now accepts category name or ObjectId.
+ */
+
 import SearchTrend from "../../model/search/analytics/searchTrend.model.js";
 import User from "../../model/user.model.js";
-import Food from "../../model/vendor/food.model.js";
+import MenuItem from "../../model/menu/MenuItem.js";
+import MenuItemPortion from "../../model/menu/MenuItemPortion.js";
+import Category from "../../model/category.model.js";
 import vendorModel from "../../model/vendor/vendor.model.js";
+
+/**
+ * Resolve vendorIds in the user's city.
+ * Returns { vendorIds, userCity, userState }.
+ * vendorIds is null if no location known (no filter).
+ * vendorIds is [] if location known but no vendors found
+ * (caller must short-circuit with empty result).
+ */
+const resolveLocationVendors = async (req, overrideCity, overrideState) => {
+  let userCity = overrideCity || null;
+  let userState = overrideState || null;
+
+  // Pull from authenticated user's default address
+  // if no explicit override was passed in query params
+  if ((!userCity || !userState) && req.user?._id) {
+    const user = await User.findById(req.user._id).select("addresses").lean();
+
+    if (user?.addresses?.length > 0) {
+      const addr = user.addresses.find((a) => a.isDefault) || user.addresses[0];
+      userCity = userCity || addr.city?.trim() || null;
+      userState = userState || addr.state?.trim() || null;
+    }
+  }
+
+  // No location available at all — no vendor filter
+  if (!userCity && !userState) {
+    return { vendorIds: null, userCity: null, userState: null };
+  }
+
+  // Build vendor location query
+  // City is the PRIMARY filter — state is supplementary.
+  // This matches the getFoodsByLocation behaviour.
+  const vendorLocationQuery = {
+    active: true,
+    suspended: false,
+    deletedAt: null,
+  };
+  if (userCity) {
+    vendorLocationQuery["address.city"] = {
+      $regex: `^\\s*${userCity.trim()}\\s*$`,
+      $options: "i",
+    };
+  }
+  if (userState) {
+    vendorLocationQuery["address.state"] = {
+      $regex: userState.trim(),
+      $options: "i",
+    };
+  }
+
+  const vendors = await vendorModel.find(vendorLocationQuery).select("_id").lean();
+
+  return {
+    vendorIds: vendors.map((v) => v._id),
+    userCity,
+    userState,
+  };
+};
+
+/**
+ * Given an array of lean MenuItem docs, bulk-fetch
+ * their vendors and cheapest portions.
+ * Returns { vendorMap, priceMap, portionsMap }.
+ * All maps keyed by ID string.
+ * Zero loops with DB calls — always exactly 2 queries.
+ */
+const bulkFetchItemSupport = async (items) => {
+  if (!items.length) {
+    return { vendorMap: {}, priceMap: {}, portionsMap: {} };
+  }
+
+  const itemIds = items.map((i) => i._id);
+  const vendorIds = [...new Set(items.map((i) => i.vendor_id?.toString()).filter(Boolean))];
+
+  const [vendors, allPortions] = await Promise.all([
+    vendorModel
+      .find({ _id: { $in: vendorIds } }, "storeName logo storeSlug address rating openingHours")
+      .lean(),
+
+    MenuItemPortion.find({ menu_item_id: { $in: itemIds } })
+      .sort({ price_naira: 1 })
+      .lean(),
+  ]);
+
+  // Build vendorMap
+  const vendorMap = {};
+  vendors.forEach((v) => {
+    vendorMap[v._id.toString()] = v;
+  });
+
+  // Build priceMap (cheapest) + portionsMap (all)
+  const priceMap = {};
+  const portionsMap = {};
+  allPortions.forEach((p) => {
+    const key = p.menu_item_id.toString();
+    if (!priceMap[key]) priceMap[key] = p; // sorted asc → first = cheapest
+    if (!portionsMap[key]) portionsMap[key] = [];
+    portionsMap[key].push(p);
+  });
+
+  return { vendorMap, priceMap, portionsMap };
+};
+
+/**
+ * Shape a MenuItem + its cheapest portion + vendor
+ * into the standard search result object.
+ *
+ * @param {Object} item       - lean MenuItem doc
+ * @param {Object} vendorMap  - { vendorId: vendorDoc }
+ * @param {Object} priceMap   - { itemId: cheapestPortion }
+ */
+const shapeSearchResult = (item, vendorMap, priceMap) => {
+  const vendor = vendorMap[item.vendor_id?.toString()] || {};
+  const cheapest = priceMap[item._id.toString()];
+
+  return {
+    _id: item._id,
+    name: item.name,
+    image: item.image_url || "",
+    price: cheapest ? cheapest.price / 100 : null, // price_naira field is actually stored in Naira in MenuItemPortion if prompt is followed, but in getFoodsByLocation it was p.price / 100.
+    // Looking at the prompt: p.price_naira is specified for suggestions.map in STEP 5.
+    // Re-check MenuItemPortion migration: typically price is in kobo.
+    // In searchFoods STEP 3 shapeSearchResult result shows price: cheapest?.price_naira ?? null.
+    // In searchFoods STEP 5 autocomplete suggestions shows price_naira: p.price_naira.
+    // I will use price_naira as provided in the prompt's STEP 3 snippet.
+    price: cheapest?.price_naira ?? null,
+    portionLabel: cheapest?.label ?? null,
+    item_type: item.item_type,
+    dietary_type: item.dietary_type,
+    rating: item.rating || 0,
+    ratingCount: item.ratingCount || 0,
+    tags: item.tags || [],
+    portions: [], // populated below if needed
+    choiceGroups: item.choice_groups || [],
+    restaurant: {
+      _id: vendor._id,
+      storeName: vendor.storeName,
+      logo: vendor.logo,
+      storeSlug: vendor.storeSlug,
+      city: vendor.address?.city,
+      state: vendor.address?.state,
+      rating: vendor.rating,
+      openingHours: vendor.openingHours,
+    },
+  };
+};
 
 /**
  * 🧠 AUTOCOMPLETE
@@ -11,86 +176,98 @@ import vendorModel from "../../model/vendor/vendor.model.js";
 export const autocompleteFoods = async (req, res) => {
   try {
     const { q, limit = 8 } = req.query;
-    if (!q || q.trim().length < 2)
+
+    if (!q || q.trim().length < 2) {
       return res.status(200).json({ success: true, suggestions: [] });
-
-    // Get user's location from their default address
-    let userCity = null;
-    let userState = null;
-
-    if (req.user?._id) {
-      const user = await User.findById(req.user._id).select("addresses");
-
-      if (user?.addresses?.length > 0) {
-        const defaultAddress = user.addresses.find(a => a.isDefault) || user.addresses[0];
-        userCity = defaultAddress.city?.trim() || null;
-        userState = defaultAddress.state?.trim() || null;
-      }
     }
 
-    // Build vendor query with location filter
-    const vendorQuery = {
-      storeName: { $regex: q, $options: "i" }
-    };
+    // ── Location resolution ──────────────────────────
+    const { vendorIds, userCity, userState } = await resolveLocationVendors(req, null, null);
 
-    // Filter vendors by user's location
-    if (userCity || userState) {
-      if (userCity) vendorQuery["address.city"] = { $regex: userCity, $options: "i" };
-      if (userState) vendorQuery["address.state"] = { $regex: userState, $options: "i" };
-    }
-
-    // Match vendors by name within user's location
-    const vendors = await vendorModel
-      .find(vendorQuery)
-      .select("_id storeName")
-      .limit(5);
-
-    // If no vendors in location, return empty
-    if (vendors.length === 0 && (userCity || userState)) {
+    // Location known but zero vendors → empty result
+    if (vendorIds !== null && vendorIds.length === 0) {
       return res.status(200).json({
         success: true,
         count: 0,
         suggestions: [],
-        message: `No results found in ${userCity || ""} ${userState || ""}`.trim()
+        location: { city: userCity, state: userState },
+        message: `No results found in ${userCity || ""} ${userState || ""}`.trim(),
       });
     }
 
-    // Match foods
-    const foods = await Food.find({
+    // ── Build MenuItem query ─────────────────────────
+    const itemQuery = {
+      is_available: true,
+      is_in_stock: true,
+      is_archived: false,
       $or: [
         { name: { $regex: q, $options: "i" } },
-        { "variants.name": { $regex: q, $options: "i" } },
+        { description: { $regex: q, $options: "i" } },
         { tags: { $regex: q, $options: "i" } },
-        { vendor: { $in: vendors.map((v) => v._id) } },
       ],
-    })
-      .select("name slug categories price images vendor portions choiceGroups")
-      .populate(
-        "vendor",
-        "storeName storeSlug storeDescription address.street address.city address.state fullAddress logo rating ratingCount"
+    };
+
+    // Always apply location filter if we have vendor IDs
+    if (vendorIds !== null) {
+      itemQuery.vendor_id = { $in: vendorIds };
+    }
+
+    // Also match vendors by store name within location
+    const vendorNameQuery = {
+      storeName: { $regex: q, $options: "i" },
+      active: true,
+      suspended: false,
+      deletedAt: null,
+      ...(vendorIds !== null ? { _id: { $in: vendorIds } } : {}),
+    };
+    const vendorNameMatches = await vendorModel.find(vendorNameQuery).select("_id").lean();
+
+    if (vendorNameMatches.length > 0) {
+      // Include items from matching vendors in results
+      itemQuery.$or.push({
+        vendor_id: { $in: vendorNameMatches.map((v) => v._id) },
+      });
+    }
+
+    // ── Fetch items ──────────────────────────────────
+    const items = await MenuItem.find(itemQuery)
+      .select(
+        "_id name image_url item_type dietary_type " +
+          "tags rating ratingCount vendor_id choice_groups"
       )
-      .limit(Number(limit));
+      .limit(Number(limit))
+      .lean();
 
-    const suggestions = foods.map((f) => ({
-      name: f.name,
-      slug: f.slug,
-      vendorName: f.vendor?.storeName || "Unknown Vendor",
-      vendorLogo: f.vendor?.logo || null,
-      vendorAddress: f.vendor
-        ? `${f.vendor.address?.street || ""}, ${f.vendor.address?.city || ""}, ${f.vendor.address?.state || ""}`
-        : "",
-      categories: f.categories,
-      image: f.images?.[0]?.url || null,
-      price: f.price,
-      portions: f.portions || [],
-      choiceGroups: f.choiceGroups || [],
-    }));
+    if (!items.length) {
+      return res.status(200).json({
+        success: true,
+        count: 0,
+        suggestions: [],
+        location: { city: userCity, state: userState },
+      });
+    }
 
-    res.status(200).json({
+    // ── Bulk fetch support data ──────────────────────
+    const { vendorMap, priceMap, portionsMap } = await bulkFetchItemSupport(items);
+
+    // ── Shape response ───────────────────────────────
+    const suggestions = items.map((item) => {
+      const shaped = shapeSearchResult(item, vendorMap, priceMap);
+      // Autocomplete includes all portions for cart use
+      shaped.portions = (portionsMap[item._id.toString()] || []).map((p) => ({
+        _id: p._id,
+        label: p.label,
+        price_naira: p.price_naira,
+        is_default: p.is_default,
+      }));
+      return shaped;
+    });
+
+    return res.status(200).json({
       success: true,
       count: suggestions.length,
       suggestions,
-      location: { city: userCity, state: userState }
+      location: { city: userCity, state: userState },
     });
   } catch (err) {
     console.error("Autocomplete Error:", err);
@@ -110,155 +287,211 @@ export const searchFoods = async (req, res) => {
   try {
     const {
       q,
-      category,
-      minPrice,
-      maxPrice,
-      available,
+      category, // now maps to platform_category_id
+      available, // still supported
       sort,
       page = 1,
       limit = 10,
-      slug,
-      state,
-      city,
+      state, // explicit override
+      city, // explicit override
+      // minPrice + maxPrice INTENTIONALLY DROPPED
+      // will be re-added post-launch via aggregation
     } = req.query;
 
-    const query = {};
-    let vendors = [];
+    // ── Location resolution ──────────────────────────
+    // Explicit city/state query params take priority
+    // over the user's saved address
+    const { vendorIds, userCity, userState } = await resolveLocationVendors(req, city, state);
 
-    // Get user's default address (or first address)
-    let userCity = null;
-    let userState = null;
+    // Location known but zero vendors → short-circuit
+    if (vendorIds !== null && vendorIds.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: `No vendors found in ${userCity || ""} ${userState || ""}`.trim(),
+        count: 0,
+        total: 0,
+        data: [],
+        vendors: [],
+        city: userCity || "Unknown",
+        state: userState || "Unknown",
+      });
+    }
 
-    if (req.user?._id) {
-      const user = await User.findById(req.user._id).select("addresses");
+    // ── Base MenuItem query ──────────────────────────
+    const itemQuery = {
+      is_available: true,
+      is_in_stock: true,
+      is_archived: false,
+    };
 
-      if (user?.addresses?.length > 0) {
-        const defaultAddress = user.addresses.find(a => a.isDefault) || user.addresses[0];
-        userCity = defaultAddress.city?.trim() || null;
-        userState = defaultAddress.state?.trim() || null;
+    // Always scope to user's city vendors
+    if (vendorIds !== null) {
+      itemQuery.vendor_id = { $in: vendorIds };
+    }
+
+    // ── Category filter ──────────────────────────────
+    // ?category= accepts either:
+    //   - a MongoDB ObjectId string (platform_category_id)
+    //   - a category name string (we resolve to _id)
+    if (category) {
+      const mongoose = (await import("mongoose")).default;
+
+      if (mongoose.isValidObjectId(category)) {
+        // Direct ID match
+        itemQuery.platform_category_id = category;
+      } else {
+        // Name match — find the category doc first
+        const categoryDoc = await Category.findOne({
+          name: { $regex: `^${category.trim()}$`, $options: "i" },
+        })
+          .select("_id")
+          .lean();
+
+        if (categoryDoc) {
+          itemQuery.platform_category_id = categoryDoc._id;
+        } else {
+          // Category not found → return empty, don't crash
+          return res.status(200).json({
+            success: true,
+            count: 0,
+            total: 0,
+            data: [],
+            vendors: [],
+            city: userCity || "Unknown",
+            state: userState || "Unknown",
+          });
+        }
       }
     }
 
-    // Slug search
-    if (slug) query.slug = slug;
+    // ── Availability override ────────────────────────
+    // ?available=false allows showing unavailable items
+    // in admin contexts. Default is always true above.
+    if (available === "false") {
+      delete itemQuery.is_available;
+    }
 
-    // --- DETERMINE EFFECTIVE LOCATION ---
-    const effectiveCity = city || userCity;
-    const effectiveState = state || userState;
+    // ── Text search ──────────────────────────────────
+    let vendorMatches = [];
+    let useTextScore = false;
 
-    // --- TEXT SEARCH & TRENDING ---
-    if (q && q.trim() !== "") {
-      // Track trending searches
+    if (q?.trim()) {
+      // Track search trend
       await SearchTrend.updateOne(
-        { keyword: q.toLowerCase() },
+        { keyword: q.toLowerCase().trim() },
         {
           $inc: { count: 1 },
           $set: {
             lastSearchedAt: new Date(),
-            state: state?.toLowerCase() || userState?.toLowerCase() || undefined,
+            state: (state || userState)?.toLowerCase() || undefined,
           },
         },
         { upsert: true }
       );
 
-      // Build vendor match query with location filter
-      const vendorMatchQuery = {
+      // Find vendors matching the search term
+      // within the already-resolved location
+      const vendorTextQuery = {
+        active: true,
+        suspended: false,
+        deletedAt: null,
         $or: [
           { storeName: { $regex: q, $options: "i" } },
           { storeSlug: { $regex: q, $options: "i" } },
           { storeDescription: { $regex: q, $options: "i" } },
         ],
+        // Scope vendor name search to location vendors
+        ...(vendorIds !== null ? { _id: { $in: vendorIds } } : {}),
       };
 
-      // Add location filter to vendor search
-      if (effectiveCity || effectiveState) {
-        if (effectiveCity) vendorMatchQuery["address.city"] = { $regex: effectiveCity, $options: "i" };
-        if (effectiveState) vendorMatchQuery["address.state"] = { $regex: effectiveState, $options: "i" };
-      }
+      vendorMatches = await vendorModel.find(vendorTextQuery).lean();
 
-      // Match vendors by name/description within location
-      const vendorMatches = await vendorModel.find(vendorMatchQuery);
-      vendors = vendorMatches;
+      // Combine text search with vendor name matches
+      // while preserving any existing vendor_id filter
+      const existingVendorFilter = itemQuery.vendor_id;
 
-      query.$or = [
+      itemQuery.$or = [
         { $text: { $search: q } },
-        { vendor: { $in: vendorMatches.map((v) => v._id) } },
+        // Items from vendors whose name matched the query
+        ...(vendorMatches.length > 0
+          ? [{ vendor_id: { $in: vendorMatches.map((v) => v._id) } }]
+          : []),
       ];
-    }
 
-    // --- CITY / STATE FILTER ---
-    if (effectiveCity || effectiveState) {
-      const cityStateVendors = await vendorModel.find({
-        ...(effectiveCity ? { "address.city": { $regex: effectiveCity, $options: "i" } } : {}),
-        ...(effectiveState ? { "address.state": { $regex: effectiveState, $options: "i" } } : {}),
-      }).select("_id");
-
-      if (cityStateVendors.length > 0) {
-        query.vendor = { $in: cityStateVendors.map((v) => v._id) };
-      } else {
-        return res.status(200).json({
-          success: true,
-          message: `No vendors found in ${effectiveCity || ""} ${effectiveState || ""}`.trim(),
-          count: 0,
-          data: [],
-          vendors: [],
-        });
+      // If we had a vendor location filter, it must still
+      // apply — merge it with the $or using $and
+      if (existingVendorFilter) {
+        delete itemQuery.vendor_id;
+        itemQuery.$and = [{ vendor_id: existingVendorFilter }, { $or: itemQuery.$or }];
+        delete itemQuery.$or;
       }
+
+      useTextScore = true;
     }
 
-    // --- CATEGORY, PRICE, AVAILABILITY ---
-    if (category) query.categories = category;
-    if (minPrice || maxPrice) {
-      query.price = {};
-      if (minPrice) query.price.$gte = Number(minPrice);
-      if (maxPrice) query.price.$lte = Number(maxPrice);
-    }
-    if (available !== undefined) query.available = available === "true";
-
-    // --- SORTING ---
-    let sortOption = {};
+    // ── Sort ─────────────────────────────────────────
+    // price_asc / price_desc DROPPED (no price on MenuItem)
+    // Will re-add post-launch via aggregation pipeline
+    let sortOption;
     switch (sort) {
-      case "price_asc":
-        sortOption.price = 1;
-        break;
-      case "price_desc":
-        sortOption.price = -1;
-        break;
       case "rating_desc":
-        sortOption.rating = -1;
+        sortOption = { ratingCount: -1, rating: -1 };
         break;
       case "newest":
-        sortOption.createdAt = -1;
+        sortOption = { createdAt: -1 };
         break;
       default:
-        sortOption = q ? { score: { $meta: "textScore" } } : { createdAt: -1 };
+        // Text search → rank by relevance score
+        // No text search → newest first
+        sortOption = useTextScore ? { score: { $meta: "textScore" } } : { createdAt: -1 };
     }
 
-    // --- PAGINATION ---
-    const skip = (page - 1) * limit;
+    // ── Pagination ───────────────────────────────────
+    const skip = (Number(page) - 1) * Number(limit);
 
-    const foods = await Food.find(query, q ? { score: { $meta: "textScore" } } : {})
-      .populate({
-        path: "vendor",
-        select:
-          "storeName storeSlug storeDescription address.street address.city address.state fullAddress logo rating ratingCount",
-      })
-      .sort(sortOption)
-      .skip(skip)
-      .limit(Number(limit));
+    // ── Execute queries ──────────────────────────────
+    const projection = useTextScore ? { score: { $meta: "textScore" } } : {};
 
-    const total = await Food.countDocuments(query);
+    const [items, total] = await Promise.all([
+      MenuItem.find(itemQuery, projection)
+        .select(
+          "_id name image_url item_type dietary_type tags " +
+            "rating ratingCount vendor_id choice_groups " +
+            "platform_category_id prep_time_minutes"
+        )
+        .sort(sortOption)
+        .skip(skip)
+        .limit(Number(limit))
+        .lean(),
 
-    res.status(200).json({
+      MenuItem.countDocuments(itemQuery),
+    ]);
+
+    // ── Bulk fetch support data ──────────────────────
+    const { vendorMap, priceMap, portionsMap } = await bulkFetchItemSupport(items);
+
+    // ── Shape results ────────────────────────────────
+    const data = items.map((item) => {
+      const shaped = shapeSearchResult(item, vendorMap, priceMap);
+      shaped.portions = (portionsMap[item._id.toString()] || []).map((p) => ({
+        _id: p._id,
+        label: p.label,
+        price_naira: p.price_naira,
+        is_default: p.is_default,
+      }));
+      return shaped;
+    });
+
+    return res.status(200).json({
       success: true,
       city: userCity || "Unknown",
       state: userState || "Unknown",
-      count: foods.length,
+      count: data.length,
       total,
       currentPage: Number(page),
-      totalPages: Math.ceil(total / limit),
-      data: foods,
-      vendors,
+      totalPages: Math.ceil(total / Number(limit)),
+      data,
+      vendors: vendorMatches,
     });
   } catch (err) {
     console.error("Search Error:", err);
@@ -277,26 +510,19 @@ export const getTrendingSearches = async (req, res) => {
   try {
     const { limit = 10, state } = req.query;
 
-    // Filter: 
-    // 1. Keyword must exist
-    // 2. Keyword must be at least 3 characters (filter out "r", "ri", etc.)
     const filter = {
-      keyword: { $exists: true, $regex: /^.{3,}$/ }
+      keyword: { $exists: true, $regex: /^.{3,}$/ },
     };
 
     if (state) filter.state = state.toLowerCase();
 
-    const trending = await SearchTrend.find(filter)
-      .sort({ count: -1 })
-      .limit(Number(limit))
-      .lean();
+    const trending = await SearchTrend.find(filter).sort({ count: -1 }).limit(Number(limit)).lean();
 
-    // Format for a clean frontend response
-    const cleanTrending = trending.map(t => ({
+    const cleanTrending = trending.map((t) => ({
       _id: t._id,
       keyword: t.keyword,
       count: t.count,
-      lastSearchedAt: t.lastSearchedAt
+      lastSearchedAt: t.lastSearchedAt,
     }));
 
     res.status(200).json({

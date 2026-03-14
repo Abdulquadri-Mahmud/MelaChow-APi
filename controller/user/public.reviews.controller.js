@@ -1,6 +1,7 @@
 import Reviews from "../../model/reviews/review.model.js";
 import vendorModel from "../../model/vendor/vendor.model.js";
-import Food from "../../model/vendor/food.model.js";
+import MenuItem from "../../model/menu/MenuItem.js";
+import MenuItemPortion from "../../model/menu/MenuItemPortion.js";
 
 /**
  * @desc Get all reviews for a specific restaurant/vendor (Public)
@@ -41,7 +42,7 @@ export const getRestaurantReviews = async (req, res) => {
     const reviews = await Reviews
       .find(query)
       .populate("userId", "firstname lastname avatar")
-      .populate("foodId", "name price images")
+      .populate("foodId", "name image_url rating")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(Number(limit));
@@ -156,7 +157,7 @@ export const getFoodReviews = async (req, res) => {
     }
 
     // Check if food exists
-    const food = await Food.findById(foodId).populate("vendor", "storeName");
+    const food = await MenuItem.findById(foodId).populate("vendor_id", "storeName").lean();
     if (!food) {
       return res.status(404).json({ 
         success: false, 
@@ -227,6 +228,12 @@ export const getFoodReviews = async (req, res) => {
         : 0;
     });
 
+    // Fetch cheapest portion for price
+    const cheapestPortion = await MenuItemPortion.findOne(
+      { menu_item_id: food._id },
+      { price: 1, label: 1 }
+    ).sort({ price: 1 }).lean();
+
     // Use calculated values or fallback to stored values
     const calculatedRating = overallRatingCalc.length > 0 ? overallRatingCalc[0] : null;
     const accurateAverageRating = calculatedRating 
@@ -242,15 +249,16 @@ export const getFoodReviews = async (req, res) => {
         food: {
           id: food._id,
           name: food.name,
-          price: food.price,
-          images: food.images,
+          price_naira: cheapestPortion ? cheapestPortion.price / 100 : null,
+          portion_label: cheapestPortion?.label ?? null,
+          image: food.image_url || "",
           averageRating: accurateAverageRating,
           totalReviews: accurateTotalReviews,
           storedRating: food.rating || 0, // For comparison/debugging
           storedReviewCount: food.ratingCount || 0, // For comparison/debugging
           restaurant: {
-            id: food.vendor._id,
-            name: food.vendor.storeName
+            id: food.vendor_id?._id,
+            name: food.vendor_id?.storeName
           }
         },
         reviews,
@@ -334,7 +342,7 @@ export const getRestaurantReviewsSummary = async (req, res) => {
     const recentReviews = await Reviews
       .find({ vendorId })
       .populate("userId", "firstname lastname avatar")
-      .populate("foodId", "name")
+      .populate("foodId", "name image_url rating")
       .sort({ createdAt: -1 })
       .limit(5);
 
