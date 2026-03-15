@@ -64,11 +64,33 @@ const vendorDeliveryFeeSchema = new mongoose.Schema(
  * Delivery address
  */
 const deliveryAddressSchema = new mongoose.Schema({
-  addressLine: { type: String, required: true },
-  city: { type: String, required: true },
-  state: { type: String, required: true },
-  label: { type: String },
-  phone: { type: String, required: true },
+    addressLine: { type: String },
+
+    // Frontend contract fields (cityName/stateName)
+    cityName:    { type: String },
+    stateName:   { type: String },
+
+    // Schema fields — populated from cityName/stateName
+    // in createOrderV2 before saving.
+    // NOT required — normalization handles the mapping.
+    city:    { type: String },
+    state:   { type: String },
+
+    cityId:  {
+        type: mongoose.Schema.Types.ObjectId,
+        ref:  "City",
+    },
+    stateId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref:  "State",
+    },
+    name:    { type: String },
+    phone:   { type: String },
+    address: { type: String },
+    coordinates: {
+        lat: { type: Number },
+        lng: { type: Number },
+    },
 });
 
 /**
@@ -131,6 +153,13 @@ const orderSchema = new mongoose.Schema(
       type: String,
       unique: true,
       sparse: true,
+    },
+
+    idempotencyKey: {
+      type:   String,
+      sparse: true,   // allows multiple null values
+      unique: true,   // but only one doc per non-null key
+      index:  true,
     },
 
     orderStatus: {

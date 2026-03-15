@@ -3,8 +3,18 @@ import axios from "axios";
 import crypto from "crypto";
 import Order from "../../model/order/Order.js";
 import VendorOrder from "../../model/vendor/VendorOrder.js";
-import Food from "../../model/vendor/food.model.js";
+import MenuItem         from "../../model/menu/MenuItem.js";
+import MenuItemPortion  from "../../model/menu/MenuItemPortion.js";
+import { MenuItemChoiceGroup, MenuItemChoiceOption }
+  from "../../model/menu/MenuItemChoice.js";
+import {
+  MenuVariant,
+  VariantChoiceGroup,
+  VariantChoiceOption,
+} from "../../model/menu/MenuVariant.js";
+import City from "../../model/location/City.js";
 import Vendor from "../../model/vendor/vendor.model.js";
+
 import Wallet from "../../model/wallet/wallet.mode.js";
 import Admin from "../../model/Admin/admin.model.js";
 import discountService from "../../services/discount.service.js";
@@ -13,225 +23,241 @@ import { emitNewOrderToRestaurant } from "../../socket/events/orderEvents.js";
 
 /**
  * ========================================
- * HELPER: Validate Choice Groups
+ * HELPER: Validate MenuItem Availability
  * ========================================
  */
-const validateChoiceGroups = (food, selectedChoices) => {
-    if (!food.choiceGroups || food.choiceGroups.length === 0) {
-        // No choice groups defined, so no validation needed
-        return [];
-    }
-
-    const validatedChoices = [];
-
-    for (const group of food.choiceGroups) {
-        // Find selections for this group from metadata
-        const groupSelections = selectedChoices.filter(c => c.group === group.name);
-
-        // Check min/max constraints
-        if (groupSelections.length < group.minSelect) {
-            throw new Error(
-                `${food.name}: "${group.name}" requires at least ${group.minSelect} selection(s)`
-            );
-        }
-
-        // Validate each choice exists and get price
-        for (const selection of groupSelections) {
-            const option = group.options.find(o => o.name === selection.name);
-
-            if (!option) {
-                throw new Error(
-                    `${food.name}: Invalid choice "${selection.name}" in group "${group.name}"`
-                );
-            }
-
-            // Check stock
-            if (option.stock !== Infinity && option.stock < 1) {
-                throw new Error(
-                    `${food.name}: Choice "${option.name}" is out of stock`
-                );
-            }
-
-            validatedChoices.push({
-                group: group.name,
-                name: option.name,
-                price: option.price || 0,
-                image: option.image || ""
-            });
-        }
-    }
-
-    return validatedChoices;
+const validateMenuItemAvailability = (item) => {
+  if (item.is_archived) {
+    throw new Error(`${item.name} has been removed from the menu`);
+  }
+  if (!item.is_available) {
+    throw new Error(`${item.name} is currently unavailable`);
+  }
+  if (!item.is_in_stock) {
+    throw new Error(`${item.name} is sold out`);
+  }
 };
 
 /**
  * ========================================
- * HELPER: Validate Variant/Portion
+ * HELPER: Validate Portion and Choices
  * ========================================
  */
-const validateVariant = (food, variantData) => {
-    if (!variantData || !variantData.name) {
-        // No variant selected, use base food price
-        return {
-            name: "Standard",
-            price: food.price,
-            image: food.images?.[0]?.url || ""
-        };
+const validatePortionAndChoices = async (menuItem, cartItem) => {
+  // 1. Validate portion exists and belongs to this item
+  const portion = await MenuItemPortion.findOne({
+    _id:          cartItem.portionId,
+    menu_item_id: menuItem._id,
+    is_available: true,
+  }).lean();
+
+  if (!portion) {
+    throw new Error(
+      `${menuItem.name}: Invalid or unavailable portion`
+    );
+  }
+
+  // 2. Validate selected_options against choice groups
+  const normalizedChoices = [];
+  const selectedOptions = cartItem.selected_options || [];
+
+  if (selectedOptions.length > 0) {
+    const groups = await MenuItemChoiceGroup.find({
+      menu_item_id: menuItem._id,
+    }).lean();
+
+    const groupIds = groups.map(g => g._id);
+    const allOptions = await MenuItemChoiceOption.find({
+      group_id:     { $in: groupIds },
+      is_available: { $ne: false },
+    }).lean();
+
+    const optionMap = {};
+    allOptions.forEach(o => {
+      optionMap[o._id.toString()] = o;
+    });
+
+    const groupMap = {};
+    groups.forEach(g => {
+      groupMap[g._id.toString()] = g;
+    });
+
+    for (const sel of selectedOptions) {
+      const option = optionMap[sel.option_id?.toString()];
+      if (!option) {
+        throw new Error(
+          `${menuItem.name}: Invalid option "${sel.label}"`
+        );
+      }
+      const group = groupMap[sel.group_id?.toString()];
+      if (!group) {
+        throw new Error(`${menuItem.name}: Invalid choice group`);
+      }
+      normalizedChoices.push({
+        group_id:             group._id,
+        group_name:           group.name,
+        option_id:            option._id,
+        label:                option.label,
+        price_modifier_naira: Math.round(
+          (option.price_modifier || 0) / 100
+        ),
+      });
     }
 
-    // Check in variants array
-    const variant = food.variants?.find(v => v.name === variantData.name);
-    if (variant) {
-        // Check stock
-        if (variant.stock !== Infinity && variant.stock < 1) {
-            throw new Error(`${food.name}: Variant "${variant.name}" is out of stock`);
-        }
-
-        return {
-            name: variant.name,
-            price: variant.price,
-            image: variant.image || food.images?.[0]?.url || ""
-        };
+    // Check required groups have selections
+    for (const group of groups) {
+      if (!group.is_required) continue;
+      const hasSelection = normalizedChoices.some(
+        c => c.group_id.toString() === group._id.toString()
+      );
+      if (!hasSelection) {
+        throw new Error(
+          `${menuItem.name}: "${group.name}" is required`
+        );
+      }
     }
+  }
 
-    // Check in portions array
-    const portion = food.portions?.find(p => p.label === variantData.name);
-    if (portion) {
-        return {
-            name: portion.label,
-            price: portion.price,
-            image: food.images?.[0]?.url || ""
-        };
-    }
+  // 3. Calculate price
+  // MenuItemPortion.price is stored in KOBO — convert to naira
+  const basePrice    = portion.price / 100;
+  const optionsTotal = normalizedChoices.reduce(
+    (sum, c) => sum + (c.price_modifier_naira || 0), 0
+  );
+  const unitPrice = basePrice + optionsTotal;
 
-    throw new Error(`${food.name}: Invalid variant/portion "${variantData.name}"`);
+  return { unitPrice, normalizedChoices, portion };
 };
 
 /**
  * ========================================
- * HELPER: Validate Availability
+ * HELPER: Validate Combo (MenuVariant)
  * ========================================
  */
-const validateAvailability = (food) => {
-    // Check if food is available
-    if (!food.available) {
-        throw new Error(`${food.name} is currently unavailable`);
+const validateCombo = async (cartItem) => {
+  const combo = await MenuVariant.findOne({
+    _id:          cartItem.variantId,
+    is_available: true,
+    is_archived:  { $ne: true },
+  }).lean();
+
+  if (!combo) {
+    throw new Error(`Combo not found or unavailable`);
+  }
+
+  // Validate selected_swaps
+  const normalizedSwaps = [];
+  const selectedSwaps   = cartItem.selected_swaps || [];
+
+  if (selectedSwaps.length > 0) {
+    const swapGroups = await VariantChoiceGroup.find({
+      variant_id: combo._id,
+    }).lean();
+
+    const swapGroupIds = swapGroups.map(g => g._id);
+    const swapOptions  = await VariantChoiceOption.find({
+      group_id: { $in: swapGroupIds },
+    }).lean();
+
+    const swapOptionMap = {};
+    swapOptions.forEach(o => {
+      swapOptionMap[o._id.toString()] = o;
+    });
+
+    for (const sel of selectedSwaps) {
+      const option = swapOptionMap[sel.option_id?.toString()];
+      if (!option) {
+        throw new Error(
+          `Combo swap: Invalid option "${sel.label}"`
+        );
+      }
+      normalizedSwaps.push({
+        group_id:             sel.group_id,
+        option_id:            option._id,
+        label:                option.label,
+        price_modifier_naira: Math.round(
+          (option.price_modifier || 0) / 100
+        ),
+      });
     }
 
-    // Check availability schedule
-    if (food.availabilitySchedule?.enabled) {
-        const now = new Date();
-        const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-        const currentDay = days[now.getDay()];
-        const currentTime = now.toTimeString().slice(0, 5); // "HH:MM"
-
-        if (!food.availabilitySchedule.days.includes(currentDay)) {
-            throw new Error(`${food.name} is not available on ${currentDay}`);
-        }
-
-        if (
-            currentTime < food.availabilitySchedule.startTime ||
-            currentTime > food.availabilitySchedule.endTime
-        ) {
-            throw new Error(
-                `${food.name} is only available between ${food.availabilitySchedule.startTime} - ${food.availabilitySchedule.endTime}`
-            );
-        }
+    // Check required swap groups
+    for (const group of swapGroups) {
+      if (!group.is_required) continue;
+      const hasSelection = normalizedSwaps.some(
+        s => s.group_id?.toString() === group._id.toString()
+      );
+      if (!hasSelection) {
+        throw new Error(
+          `Combo: "${group.name}" swap is required`
+        );
+      }
     }
+  }
+
+  // Normalize component_choices
+  const normalizedComponentChoices =
+    (cartItem.component_choices || []).map(cc => ({
+      componentId:          cc.componentId,
+      groupId:              cc.groupId,
+      optionId:             cc.optionId,
+      label:                cc.label,
+      price_modifier_naira: cc.price_modifier_naira || 0,
+    }));
+
+  // Price: MenuVariant.price is in KOBO — convert to naira
+  const basePrice          = combo.price / 100;
+  const swapsTotal         = normalizedSwaps.reduce(
+    (sum, s) => sum + (s.price_modifier_naira || 0), 0
+  );
+  const componentChoicesTotal = normalizedComponentChoices.reduce(
+    (sum, c) => sum + (c.price_modifier_naira || 0), 0
+  );
+  const unitPrice = basePrice + swapsTotal + componentChoicesTotal;
+
+  return {
+    combo,
+    unitPrice,
+    normalizedSwaps,
+    normalizedComponentChoices,
+  };
 };
 
-/**
- * ========================================
- * HELPER: Calculate Item Price
- * ========================================
- */
-const calculateItemPrice = (food, variant, choices, quantity) => {
-    // 1. Base price from variant
-    let basePrice = variant.price;
-
-    // 2. Add choice prices
-    const choicesTotal = choices.reduce((sum, choice) => sum + (choice.price || 0), 0);
-
-    // 3. Add packaging fee
-    const packagingFee = food.packagingFee || 0;
-
-    // 4. Calculate subtotal before discount
-    let unitPrice = basePrice + choicesTotal + packagingFee;
-
-    // 5. Apply discount if active
-    let discountAmount = 0;
-    if (food.discount?.active) {
-        // Check if discount is not expired
-        if (!food.discount.expiresAt || new Date(food.discount.expiresAt) > new Date()) {
-            if (food.discount.percentage > 0) {
-                discountAmount = (unitPrice * food.discount.percentage) / 100;
-            } else if (food.discount.flatAmount > 0) {
-                discountAmount = food.discount.flatAmount;
-            }
-        }
-    }
-
-    const finalUnitPrice = Math.max(0, unitPrice - discountAmount);
-
-    return {
-        unitPrice: Number(finalUnitPrice.toFixed(2)),
-        totalPrice: Number((finalUnitPrice * quantity).toFixed(2)),
-        breakdown: {
-            basePrice,
-            choicesTotal,
-            packagingFee,
-            discountAmount: Number(discountAmount.toFixed(2)),
-            subtotalBeforeDiscount: Number(unitPrice.toFixed(2))
-        }
-    };
-};
 
 /**
- * ========================================
- * HELPER: Decrement Stock
- * ========================================
+ * Resolve the correct delivery fee for a vendor.
+ * Mirrors resolveStorefrontDeliveryFee in customerMenuController.
+ * Returns fee in NAIRA.
+ *
+ * Priority:
+ * 1. vendor.deliveryManagedBy === "vendor" → flatRateDeliveryFee
+ * 2. platformDeliveryFeeOverride set → use override
+ * 3. Fall back to City.platformDeliveryFee
  */
-const decrementStock = async (food, variant, choices, quantity, session) => {
-    // 1. Decrement food stock
-    if (food.stock !== Infinity) {
-        food.stock -= quantity;
-        if (food.stock < 0) food.stock = 0;
-    }
+const resolveVendorDeliveryFee = async (vendor) => {
+  if (vendor.deliveryManagedBy === "vendor") {
+    return vendor.flatRateDeliveryFee ?? 0;
+  }
 
-    // 2. Increment order count
-    food.orderCount = (food.orderCount || 0) + 1;
+  if (
+    vendor.platformDeliveryFeeOverride != null &&
+    vendor.platformDeliveryFeeOverride > 0
+  ) {
+    return vendor.platformDeliveryFeeOverride;
+  }
 
-    // 3. Decrement variant stock
-    if (variant.name !== "Standard") {
-        const variantIndex = food.variants?.findIndex(v => v.name === variant.name);
-        if (variantIndex !== -1 && food.variants[variantIndex].stock !== Infinity) {
-            food.variants[variantIndex].stock -= quantity;
-            if (food.variants[variantIndex].stock < 0) {
-                food.variants[variantIndex].stock = 0;
-            }
-        }
-    }
+  try {
+    const cityName = vendor.address?.city;
+    if (!cityName) return 0;
 
-    // 4. Decrement choice options stock
-    for (const choice of choices) {
-        const groupIndex = food.choiceGroups?.findIndex(g => g.name === choice.group);
-        if (groupIndex !== -1) {
-            const optionIndex = food.choiceGroups[groupIndex].options.findIndex(
-                o => o.name === choice.name
-            );
-            if (
-                optionIndex !== -1 &&
-                food.choiceGroups[groupIndex].options[optionIndex].stock !== Infinity
-            ) {
-                food.choiceGroups[groupIndex].options[optionIndex].stock -= quantity;
-                if (food.choiceGroups[groupIndex].options[optionIndex].stock < 0) {
-                    food.choiceGroups[groupIndex].options[optionIndex].stock = 0;
-                }
-            }
-        }
-    }
+    const city = await City.findOne({
+      name: { $regex: new RegExp(`^${cityName}$`, "i") },
+    }).lean();
 
-    await food.save({ session });
+    return city?.platformDeliveryFee ?? 0;
+  } catch {
+    return 0;
+  }
 };
 
 /**
@@ -260,12 +286,33 @@ export const createOrderV2 = async ({
     useWallet = false,   // Optional wallet payment
     paymentReference = null,
     paymentStatus = "pending",
-    orderId = null
+    orderId = null,
+    idempotencyKey = null, // ← ADD THIS
 }) => {
     const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
+        /* ========================================
+         * 0️⃣ IDEMPOTENCY CHECK
+         * If this key was already used to create an order,
+         * return that order immediately without creating
+         * a duplicate.
+         * ======================================== */
+        if (idempotencyKey) {
+            const existingOrder = await Order.findOne({
+                idempotencyKey
+            }).session(session);
+
+            if (existingOrder) {
+                await session.abortTransaction();
+                session.endSession();
+                console.log(
+                    `⚡ Idempotent order return: ${existingOrder.orderId}`
+                );
+                return existingOrder;
+            }
+        }
         /* ========================================
          * 1️⃣ VALIDATION
          * ======================================== */
@@ -280,144 +327,247 @@ export const createOrderV2 = async ({
         }
 
         /* ========================================
-         * 2️⃣ FETCH ALL FOODS
+         * 2️⃣ FETCH ALL MENUITEMS
+         * Only fetch regular food items here.
+         * Combos are fetched individually in STEP 3
+         * via the validateCombo helper.
          * ======================================== */
-        const foodIds = items.map(item => item.foodId);
-        const foods = await Food.find({ _id: { $in: foodIds } }).session(session);
+        const foodItems = items.filter(
+          i => i.type === "item" || (!i.type && i.foodId && !i.variantId)
+        );
+        // comboItems are validated individually in STEP 3
+        // via validateCombo — no bulk pre-fetch needed
 
-        if (foods.length !== foodIds.length) {
-            throw new Error("One or more food items not found");
+        const menuItemIds = foodItems
+          .map(i => i.foodId)
+          .filter(Boolean);
+
+        const menuItems = menuItemIds.length > 0
+          ? await MenuItem.find({
+              _id:         { $in: menuItemIds },
+              is_archived: false,
+            }).session(session).lean()
+          : [];
+
+        if (menuItems.length !== menuItemIds.length) {
+          throw new Error("One or more food items not found");
         }
 
-        const foodMap = {};
-        foods.forEach(food => {
-            foodMap[String(food._id)] = food;
+        const menuItemMap = {};
+        menuItems.forEach(m => {
+          menuItemMap[m._id.toString()] = m;
         });
 
         /* ========================================
          * 3️⃣ VALIDATE & NORMALIZE ITEMS
+         * Branches on item.type:
+         *   "item"  → MenuItem + MenuItemPortion path
+         *   "combo" → MenuVariant path
          * ======================================== */
         const normalizedItems = [];
-        const vendorItemsMap = {}; // Group items by vendor for VendorOrder creation
+        const vendorItemsMap  = {};
 
         for (let i = 0; i < items.length; i++) {
-            const item = items[i];
+          const cartItem = items[i];
 
-            // Basic validation
-            if (!item.foodId) throw new Error(`Item ${i}: foodId is required`);
-            if (!item.restaurantId) throw new Error(`Item ${i}: restaurantId is required`);
-            if (!item.quantity || item.quantity < 1) {
-                throw new Error(`Item ${i}: quantity must be at least 1`);
+          if (!cartItem.restaurantId) {
+            throw new Error(`Item ${i}: restaurantId is required`);
+          }
+          if (!cartItem.quantity || cartItem.quantity < 1) {
+            throw new Error(`Item ${i}: quantity must be at least 1`);
+          }
+
+          const isCombo =
+            cartItem.type === "combo" ||
+            (!cartItem.type && cartItem.variantId && !cartItem.foodId);
+
+          let normalizedItem;
+
+          if (isCombo) {
+            // ── COMBO ITEM ────────────────────────────────
+            if (!cartItem.variantId) {
+              throw new Error(`Item ${i}: variantId required for combo`);
             }
 
-            const food = foodMap[String(item.foodId)];
-            if (!food) throw new Error(`Item ${i}: Food not found`);
+            const {
+              combo,
+              unitPrice,
+              normalizedSwaps,
+              normalizedComponentChoices,
+            } = await validateCombo(cartItem);
 
-            // Validate vendor ownership
-            if (String(food.vendor) !== String(item.restaurantId)) {
-                throw new Error(`Item ${i}: Food does not belong to specified restaurant`);
-            }
-
-            // Validate availability
-            validateAvailability(food);
-
-            // Validate and get variant/portion
-            const validatedVariant = validateVariant(food, item.variant);
-
-            // Validate and get choices
-            const selectedChoices = item.metadata?.choices || [];
-            const validatedChoices = validateChoiceGroups(food, selectedChoices);
-
-            // Calculate price (server-side, ignoring frontend prices)
-            const pricing = calculateItemPrice(
-                food,
-                validatedVariant,
-                validatedChoices,
-                item.quantity
-            );
-
-            // Decrement stock
-            await decrementStock(
-                food,
-                validatedVariant,
-                validatedChoices,
-                item.quantity,
-                session
-            );
-
-            // Build normalized item
-            const normalizedItem = {
-                foodId: food._id,
-                restaurantId: item.restaurantId,
-                variant: {
-                    name: validatedVariant.name,
-                    price: pricing.unitPrice,
-                    image: validatedVariant.image
+            normalizedItem = {
+              type:         "combo",
+              variantId:    combo._id,
+              foodId:       null,
+              restaurantId: cartItem.restaurantId,
+              name:         combo.name,
+              image_url:    combo.image_url || "",
+              variant: {
+                name:  combo.name,
+                price: unitPrice,
+                image: combo.image_url || "",
+              },
+              quantity: Number(cartItem.quantity),
+              price:    unitPrice,
+              note:     cartItem.note || "",
+              metadata: {
+                type:              "combo",
+                selected_swaps:    normalizedSwaps,
+                component_choices: normalizedComponentChoices,
+                pricing: {
+                  base_naira:        combo.price / 100,
+                  swaps_total_naira: normalizedSwaps.reduce(
+                    (s, sw) => s + sw.price_modifier_naira, 0
+                  ),
+                  final_unit_naira:  unitPrice,
                 },
-                quantity: item.quantity,
-                price: pricing.unitPrice,
-                note: item.note || "",
-                metadata: {
-                    ...item.metadata,
-                    choices: validatedChoices,
-                    pricing: pricing.breakdown
-                }
+              },
             };
 
-            normalizedItems.push(normalizedItem);
-
-            // Group by vendor for VendorOrder
-            const vendorId = String(item.restaurantId);
-            if (!vendorItemsMap[vendorId]) {
-                vendorItemsMap[vendorId] = [];
+          } else {
+            // ── REGULAR FOOD ITEM ─────────────────────────
+            if (!cartItem.foodId) {
+              throw new Error(`Item ${i}: foodId required`);
             }
-            vendorItemsMap[vendorId].push(normalizedItem);
+            if (!cartItem.portionId) {
+              throw new Error(
+                `Item ${i}: portionId required — select a portion size`
+              );
+            }
+
+            const menuItem = menuItemMap[cartItem.foodId.toString()];
+            if (!menuItem) {
+              throw new Error(`Item ${i}: Food not found`);
+            }
+
+            // Confirm the item belongs to the stated restaurant
+            if (menuItem.vendor_id?.toString() !== cartItem.restaurantId.toString()) {
+              throw new Error(
+                `Item ${i}: Food does not belong to this restaurant`
+              );
+            }
+
+            // Check is_available, is_in_stock, is_archived
+            validateMenuItemAvailability(menuItem);
+
+            // Validate portion + choice options, derive server-side price
+            const { unitPrice, normalizedChoices, portion } =
+              await validatePortionAndChoices(menuItem, cartItem);
+
+            normalizedItem = {
+              type:         "item",
+              foodId:       menuItem._id,
+              variantId:    null,
+              restaurantId: cartItem.restaurantId,
+              name:         menuItem.name,
+              image_url:    menuItem.image_url || "",
+              variant: {
+                name:  portion.label,
+                price: unitPrice,
+                image: menuItem.image_url || "",
+              },
+              quantity: Number(cartItem.quantity),
+              price:    unitPrice,
+              note:     cartItem.note || "",
+              metadata: {
+                type:             "item",
+                portionId:        portion._id,
+                portion_label:    portion.label,
+                selected_options: normalizedChoices,
+                pricing: {
+                  base_naira:    portion.price / 100,
+                  options_total: normalizedChoices.reduce(
+                    (s, c) => s + c.price_modifier_naira, 0
+                  ),
+                  final_unit_naira: unitPrice,
+                },
+              },
+            };
+          }
+
+          normalizedItems.push(normalizedItem);
+
+          // Group by vendor for VendorOrder creation
+          const vendorId = String(cartItem.restaurantId);
+          if (!vendorItemsMap[vendorId]) vendorItemsMap[vendorId] = [];
+          vendorItemsMap[vendorId].push(normalizedItem);
         }
 
+
         /* ========================================
-         * 4️⃣ CALCULATE TOTALS
+         * 4️⃣ CALCULATE SUBTOTAL
          * ======================================== */
         const subtotal = normalizedItems.reduce(
             (sum, item) => sum + item.price * item.quantity,
             0
         );
 
-        // Validate delivery fees
+        /* ========================================
+         * 5️⃣ VALIDATE & RESOLVE DELIVERY FEES
+         * Do NOT trust frontend fee amounts.
+         * Re-fetch each vendor and resolve the correct
+         * fee server-side. Frontend value is used only
+         * as a sanity reference for logging.
+         * ======================================== */
         const deliveryFeeMap = {};
         let totalDeliveryFee = 0;
 
-        for (const vendorFee of vendorDeliveryFees) {
-            const vendorId = String(vendorFee.restaurantId);
-            const fee = Number(vendorFee.deliveryFee);
+        // Bulk fetch all unique vendors in this order
+        const uniqueVendorIds = Object.keys(vendorItemsMap);
 
-            if (isNaN(fee) || fee < 0) {
-                throw new Error(`Invalid delivery fee for restaurant ${vendorId}`);
-            }
+        const vendorsForFees = await Vendor.find({
+          _id: { $in: uniqueVendorIds },
+        }).select(
+          "storeName deliveryManagedBy flatRateDeliveryFee " +
+          "platformDeliveryFeeOverride address"
+        ).lean();
 
-            if (deliveryFeeMap[vendorId] !== undefined) {
-                throw new Error(`Duplicate delivery fee for restaurant ${vendorId}`);
-            }
-
-            deliveryFeeMap[vendorId] = fee;
-            totalDeliveryFee += fee;
+        if (vendorsForFees.length !== uniqueVendorIds.length) {
+          throw new Error("One or more restaurants not found");
         }
 
-        // Ensure all vendors have delivery fees
-        const vendorIds = Object.keys(vendorItemsMap);
-        for (const vendorId of vendorIds) {
-            if (deliveryFeeMap[vendorId] === undefined) {
-                throw new Error(`Missing delivery fee for restaurant ${vendorId}`);
-            }
+        // Build a map of frontend-submitted fees for comparison
+        const frontendFeeMap = {};
+        for (const vf of vendorDeliveryFees) {
+          frontendFeeMap[String(vf.restaurantId)] = Number(vf.deliveryFee);
         }
 
-        // --- DISCOUNT LOGIC ---
+        // Resolve correct fee per vendor from DB
+        for (const vendor of vendorsForFees) {
+          const vendorId = vendor._id.toString();
+
+          if (!frontendFeeMap.hasOwnProperty(vendorId)) {
+            throw new Error(
+              `Missing delivery fee for restaurant ${vendor.storeName}`
+            );
+          }
+
+          // Server-derived authoritative fee
+          const resolvedFee = await resolveVendorDeliveryFee(vendor);
+
+          // Log mismatch for ops visibility but use server value
+          const frontendFee = frontendFeeMap[vendorId];
+          if (frontendFee !== resolvedFee) {
+            console.warn(
+              `⚠️ Delivery fee mismatch for ${vendor.storeName}: ` +
+              `frontend sent ₦${frontendFee}, server resolved ₦${resolvedFee}. ` +
+              `Using server value.`
+            );
+          }
+
+          deliveryFeeMap[vendorId] = resolvedFee;
+          totalDeliveryFee += resolvedFee;
+        }
+
+        // --- 6️⃣ DISCOUNT LOGIC ---
         let finalTotal = Number((subtotal + totalDeliveryFee).toFixed(2));
         let appliedDiscount = null;
 
         if (discountCode) {
             // Determine vendor context (if single vendor order)
-            const uniqueVendorIds = [...new Set(normalizedItems.map(i => String(i.restaurantId)))];
-            const vendorIdContext = uniqueVendorIds.length === 1 ? uniqueVendorIds[0] : null;
+            const discountVendorIds = [...new Set(normalizedItems.map(i => String(i.restaurantId)))];
+            const vendorIdContext = discountVendorIds.length === 1 ? discountVendorIds[0] : null;
 
             // Validate
             const validation = await discountService.validateDiscount(discountCode, {
@@ -450,7 +600,7 @@ export const createOrderV2 = async ({
         const total = finalTotal;
 
         /* ========================================
-         * 5️⃣ WALLET PAYMENT (OPTIONAL)
+         * 7️⃣ WALLET PAYMENT (OPTIONAL)
          * ======================================== */
         // Calculate Order ID early for reference
         const finalOrderId = orderId || generateOrderId();
@@ -484,30 +634,71 @@ export const createOrderV2 = async ({
         }
 
         /* ========================================
-         * 6️⃣ CREATE ORDER
+         * 8️⃣ CREATE ORDER
          * ======================================== */
-        const [order] = await Order.create(
-            [
-                {
-                    orderId: finalOrderId,
-                    userId,
-                    items: normalizedItems,
-                    vendorDeliveryFees,
-                    deliveryAddress,
-                    phone,
-                    subtotal: Number(subtotal.toFixed(2)),
-                    deliveryFee: Number(totalDeliveryFee.toFixed(2)),
-                    total,
-                    appliedDiscount, // Persist discount snapshot
-                    paymentReference: finalPaymentRef,
-                    paymentStatus: finalPaymentStatus, // "paid" if wallet used
-                    orderStatus: "pending"
-                }
-            ],
-            { session }
+        // Normalize deliveryAddress field names.
+        // Frontend sends cityName/stateName per API contract.
+        // Order schema stores city/state.
+        // Map here so both the schema and the frontend
+        // contract stay valid without changing either.
+        const normalizedDeliveryAddress = {
+          ...deliveryAddress,
+          city:  deliveryAddress.cityName  || deliveryAddress.city  || "",
+          state: deliveryAddress.stateName || deliveryAddress.state || "",
+        };
+        // Keep cityName/stateName as well for forwards
+        // compatibility — they are stored but not required
+
+        // Build resolved vendorDeliveryFees for storage
+        const resolvedVendorDeliveryFees = uniqueVendorIds.map(
+          vendorId => ({
+            restaurantId: vendorId,
+            deliveryFee:  deliveryFeeMap[vendorId],
+          })
         );
 
-        // 7️⃣ ATOMIC FULFILLMENT (For Wallet Payments)
+        let order;
+        try {
+            const [created] = await Order.create(
+                [
+                    {
+                        orderId: finalOrderId,
+                        idempotencyKey: idempotencyKey || undefined, // undefined for sparse index
+                        userId,
+                        items: normalizedItems,
+                        vendorDeliveryFees: resolvedVendorDeliveryFees, // ← use resolved
+                        deliveryAddress: normalizedDeliveryAddress,
+                        phone,
+                        subtotal: Number(subtotal.toFixed(2)),
+                        deliveryFee: Number(totalDeliveryFee.toFixed(2)),
+                        total,
+                        appliedDiscount, // Persist discount snapshot
+                        paymentReference: finalPaymentRef,
+                        paymentStatus: finalPaymentStatus, // "paid" if wallet used
+                        orderStatus: "pending"
+                    }
+                ],
+                { session }
+            );
+            order = created;
+        } catch (createErr) {
+            if (
+                createErr.code === 11000 &&
+                createErr.keyPattern?.idempotencyKey
+            ) {
+                // Race condition — another request won.
+                await session.abortTransaction();
+                session.endSession();
+                console.log(
+                    `⚡ Idempotent race resolved for key: ${idempotencyKey}`
+                );
+                const existing = await Order.findOne({ idempotencyKey });
+                return existing;
+            }
+            throw createErr;
+        }
+
+        // 9️⃣ ATOMIC FULFILLMENT (For Wallet Payments)
         // If paid by wallet, we MUST fulfill (distribute funds) immediately within the same transaction
         let vendorOrderMapping = {};
         if (useWallet) {
@@ -548,7 +739,7 @@ export const createOrderV2 = async ({
                     // Send persistent notification
                     await sendVendorNotification(restaurantId, finalOrderId, 'vendor_new_order', {
                         orderDatabaseId: vendorOrderId || order._id,
-                        customerName: `${req.user?.firstname || ''} ${req.user?.lastname || ''}`.trim() || 'A customer',
+                        customerName: order.deliveryAddress?.name || 'A customer',
                         location: order.deliveryAddress?.addressLine || 'specified location',
                         totalAmount: total,
                         items: normalizedItems.filter(i => String(i.restaurantId) === String(restaurantId))
@@ -781,31 +972,54 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
     session.startTransaction();
 
     try {
-        // 1. Find existing order
-        const order = await Order.findOne({
-            $or: [
-                { _id: orderId },
-                { orderId: orderId },
-                { paymentReference: paymentReference }
-            ]
-        }).session(session);
+        /* ============================================
+         * ATOMIC STATUS TRANSITION
+         * findOneAndUpdate with a condition ensures only
+         * ONE concurrent call can transition from pending
+         * to paid. If the condition doesn't match (because
+         * another request already paid it), returns null.
+         * ============================================ */
+        const order = await Order.findOneAndUpdate(
+            {
+                $or: [
+                    { _id: orderId },
+                    { orderId: orderId },
+                    { paymentReference: paymentReference }
+                ],
+                // Only update if STILL in a non-terminal state
+                // Prevents double-crediting if two callers
+                // somehow both reach this point
+                paymentStatus: { $nin: ["paid", "failed", "refunded"] },
+            },
+            {
+                $set: {
+                    paymentStatus: "paid",
+                    orderStatus:   "accepted",
+                },
+            },
+            {
+                new:     true,   // return the updated document
+                session,
+            }
+        );
 
         if (!order) {
-            throw new Error("Order not found");
-        }
-
-        // 2. Check if already processed (idempotency)
-        if (order.paymentStatus === "paid") {
-            console.log(`⚠️ Order ${order.orderId} already paid. Skipping.`);
+            // Atomic update returned null — another request
+            // already transitioned this order. Clean exit.
             await session.commitTransaction();
             session.endSession();
-            return order;
+            console.log(
+                `⚡ Atomic idempotency: order ${orderId} already processed`
+            );
+            const current = await Order.findOne({
+                $or: [
+                    { _id: orderId },
+                    { orderId: orderId },
+                    { paymentReference: paymentReference }
+                ]
+            });
+            return current;
         }
-
-        // 3. Update order status
-        order.paymentStatus = "paid";
-        order.orderStatus = "accepted";
-        await order.save({ session });
 
         // 4. Create VendorOrders and update wallets
         const vendorOrderMapping = await createVendorOrdersAndUpdateWallets(order, session);
@@ -837,7 +1051,7 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
                 // Persistent notification
                 await sendVendorNotification(restaurantId, order.orderId, 'vendor_new_order', {
                     orderDatabaseId: vendorOrderId || order._id,
-                    customerName: order.deliveryAddress?.contactName || 'A customer',
+                    customerName: order.deliveryAddress?.name || 'A customer',
                     location: order.deliveryAddress?.addressLine || 'specified location',
                     totalAmount: order.total,
                     items: order.items.filter(i => String(i.restaurantId) === String(restaurantId))
@@ -874,7 +1088,7 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
  */
 export const createOrderController = async (req, res) => {
     try {
-        const { items, vendorDeliveryFees, deliveryAddress, phone, discountCode, useWallet } = req.body;
+        const { items, vendorDeliveryFees, deliveryAddress, phone, discountCode, useWallet, idempotencyKey } = req.body;
         const userId = req.userId; // From auth middleware
 
         const order = await createOrderV2({
@@ -885,7 +1099,8 @@ export const createOrderController = async (req, res) => {
             phone,
             discountCode,
             useWallet, // Pass wallet flag
-            paymentStatus: "pending" // Will be updated if wallet used
+            paymentStatus: "pending", // Will be updated if wallet used
+            idempotencyKey: idempotencyKey || null, // ← PASS THROUGH
         });
 
         // If paid via wallet, it's already fulfilled atomically in createOrderV2
