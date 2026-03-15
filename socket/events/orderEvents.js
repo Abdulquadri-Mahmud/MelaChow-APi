@@ -35,20 +35,29 @@ export function emitOrderStatusUpdate(order, previousStatus) {
 /**
  * Emit new order notification to restaurant
  */
-export function emitNewOrderToRestaurant(order) {
+export function emitNewOrderToRestaurant(orderAndMetadata) {
+    // If we're passing in `{ ...order.toObject(), restaurantId }`,
+    // the target restaurantId is exactly that explicitly passed one.
+    const targetRestaurantId = String(orderAndMetadata.restaurantId);
+
+    // Filter items to only show the items meant for THIS vendor
+    const itemsForThisVendor = (orderAndMetadata.items || []).filter(
+        i => String(i.restaurantId) === targetRestaurantId
+    );
+
     const eventData = {
-        orderId: order.orderId || order._id,
-        customerName: order.deliveryAddress?.name,
-        customerPhone: order.phone,
-        items: order.items,
-        totalAmount: order.totalAmount || order.total,
-        deliveryAddress: order.deliveryAddress,
-        notes: order.notes,
-        timestamp: new Date().toISOString()
+        orderId:         orderAndMetadata.orderId || orderAndMetadata._id,
+        customerName:    orderAndMetadata.deliveryAddress?.name,
+        customerPhone:   orderAndMetadata.phone,
+        items:           itemsForThisVendor,
+        totalAmount:     orderAndMetadata.totalAmount || orderAndMetadata.total,
+        deliveryAddress: orderAndMetadata.deliveryAddress,
+        notes:           orderAndMetadata.notes,
+        timestamp:       new Date().toISOString(),
     };
 
-    emitToRestaurant(order.restaurantId, 'new_order', eventData);
-    console.log(`🔔 New order notification sent to restaurant ${order.restaurantId}`);
+    emitToRestaurant(targetRestaurantId, 'new_order', eventData);
+    console.log(`🔔 New order notification sent to restaurant ${targetRestaurantId}`);
 }
 
 /**
