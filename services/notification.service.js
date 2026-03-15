@@ -4,6 +4,7 @@ import PushSubscription from '../model/notification/pushSubscription.model.js';
 import VendorPushSubscription from '../model/notification/vendorPushSubscription.model.js';
 import AdminPushSubscription from '../model/notification/adminPushSubscription.model.js';
 import { emitToUser, emitToRestaurant, emitToAdmin } from '../socket/socketServer.js';
+import { redisClient, isRedisReady, safeRedisGet, safeRedisSet } from '../config/redis.js';
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -187,10 +188,21 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
                 console.log(`✅ WebSocket notification emitted to user ${recipientId}`);
 
                 // 3. Emit unread count update
-                const unreadCount = await Notification.countDocuments({
-                    userId: recipientId,
-                    read: false
-                });
+                // Use Redis counter if available, fall back to MongoDB
+                let unreadCount = 0;
+                const redisKey = `user:${recipientId}:unread_count`;
+                if (isRedisReady()) {
+                    try {
+                        unreadCount = await redisClient.incr(redisKey);
+                        // Set expiry of 7 days so stale keys don't accumulate
+                        await redisClient.expire(redisKey, 604800);
+                    } catch (err) {
+                        console.warn('⚠️ Redis INCR failed, falling back to MongoDB count');
+                        unreadCount = await Notification.countDocuments({ userId: recipientId, read: false });
+                    }
+                } else {
+                    unreadCount = await Notification.countDocuments({ userId: recipientId, read: false });
+                }
                 emitToUser(recipientId, 'notification_count_update', { count: unreadCount });
                 console.log(`✅ Unread count updated for user: ${unreadCount}`);
             }
@@ -387,11 +399,41 @@ export async function sendVendorNotification(restaurantId, orderId, type, data =
     // 2. Notify the owner users (if any)
     try {
         const Vendor = (await import('../model/vendor/vendor.model.js')).default;
-        const vendor = await Vendor.findById(restaurantIdString).select('owners');
+        
+        let vendorOwners = null;
+        const ownerCacheKey = `vendor:${restaurantIdString}:owners`;
+        
+        if (isRedisReady()) {
+            try {
+                const cached = await redisClient.get(ownerCacheKey);
+                if (cached) {
+                    vendorOwners = JSON.parse(cached);
+                    console.log(`✅ Vendor owners served from Redis cache`);
+                }
+            } catch (err) {
+                console.warn('⚠️ Redis vendor owner cache read failed');
+            }
+        }
+        
+        if (!vendorOwners) {
+            const vendor = await Vendor.findById(restaurantIdString).select('owners');
+            vendorOwners = vendor?.owners || [];
+            if (isRedisReady() && vendorOwners.length > 0) {
+                try {
+                    // Cache for 30 minutes — vendor ownership changes are infrequent
+                    // IMPORTANT: When a vendor's profile is updated (ownership change), 
+                    // the calling controller must invalidate this cache key:
+                    // await redisClient.del(`vendor:${vendorId}:owners`);
+                    await redisClient.set(ownerCacheKey, JSON.stringify(vendorOwners), 'EX', 1800);
+                } catch (err) {
+                    console.warn('⚠️ Redis vendor owner cache write failed');
+                }
+            }
+        }
 
-        if (vendor && vendor.owners && vendor.owners.length > 0) {
-            console.log(`👥 Notifying ${vendor.owners.length} vendor owner(s)`);
-            const ownerPromises = vendor.owners.map(ownerId =>
+        if (vendorOwners && vendorOwners.length > 0) {
+            console.log(`👥 Notifying ${vendorOwners.length} vendor owner(s)`);
+            const ownerPromises = vendorOwners.map(ownerId =>
                 sendNotification(String(ownerId), type, {
                     orderId,
                     restaurantId: restaurantIdString,
@@ -425,4 +467,25 @@ export async function saveSubscription(userId, subscription, deviceType = 'unkno
  */
 export async function removeSubscription(endpoint) {
     return await PushSubscription.deleteOne({ 'subscription.endpoint': endpoint });
+}
+
+/**
+ * Sync unread count to Redis from MongoDB
+ * Called during reconciliation or when resetting counts
+ */
+export async function syncUnreadCountToRedis(userId) {
+    try {
+        const trueCount = await Notification.countDocuments({
+            userId: String(userId),
+            read: false
+        });
+        const redisKey = `user:${userId}:unread_count`;
+        if (isRedisReady()) {
+            await redisClient.set(redisKey, trueCount, 'EX', 604800);
+        }
+        return trueCount;
+    } catch (err) {
+        console.error('❌ syncUnreadCountToRedis failed:', err.message);
+        return null;
+    }
 }

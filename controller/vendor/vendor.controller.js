@@ -4,6 +4,7 @@ import vendorModel from "../../model/vendor/vendor.model.js";
 import walletMode from "../../model/wallet/wallet.mode.js";
 import VendorOrder from "../../model/vendor/VendorOrder.js";
 import { validateVendorLocation } from "../../services/locationService.js";
+import { redisClient, isRedisReady } from "../../config/redis.js";
 
 // ----------------------------------------------
 // ✅ CREATE NEW VENDOR WITH AUTO WALLET CREATION
@@ -221,6 +222,16 @@ export const updateVendor = async (req, res) => {
       { $set: updates }, // <-- Important: allows partial nested updates
       { new: true, runValidators: true }
     );
+
+    // Invalidate vendor owners cache if owners were updated
+    if (vendor && updates.owners && isRedisReady()) {
+      try {
+        await redisClient.del(`vendor:${id}:owners`);
+        console.log(`🧹 Invalidated owners cache for vendor ${id}`);
+      } catch (err) {
+        console.warn('⚠️ Failed to invalidate vendor owners cache:', err.message);
+      }
+    }
 
     if (!vendor)
       return res.status(404).json({ success: false, message: "Vendor not found" });

@@ -41,6 +41,7 @@ import cartRoutes from "./routes/menu/cart.routes.js";
 import socketHealthRoutes from './routes/socket.routes.js';
 import riderNotificationRoutes from './routes/riderNotification.routes.js';
 import http from 'http';
+import redisClient from './config/redis.js';
 import { initializeSocket } from './socket/socketServer.js';
 
 dotenv.config();
@@ -269,11 +270,23 @@ const startServer = async () => {
       console.warn("⚠️ Category seed skipped:", seedErr.message);
     }
 
+    // 2b. Connect Redis main client
+    // pubClient and subClient connect inside initializeSocket via socketServer.js
+    // redisClient (used for caching in notification.service and vendor.controller)
+    // requires its own explicit connect call because lazyConnect: true is set
+    try {
+      await redisClient.connect();
+      console.log('✅ Redis main client connected and ready');
+    } catch (redisErr) {
+      console.warn('⚠️ Redis unavailable — caching disabled, falling back to MongoDB:', redisErr.message);
+      // Non-fatal: platform continues without caching
+    }
+
     // 3. Create HTTP server and attach Socket.IO
     // Must use http.createServer — app.listen does not
     // expose the underlying server to Socket.IO
     const server = http.createServer(app);
-    const io     = initializeSocket(server);
+    const io     = await initializeSocket(server);
     app.set("io", io);
 
     // 4. Start listening
@@ -287,7 +300,13 @@ const startServer = async () => {
     // Render sends SIGTERM before stopping the instance
     process.on("SIGTERM", () => {
       console.log("SIGTERM received — shutting down gracefully...");
-      server.close(() => {
+      server.close(async () => {
+        try {
+          await redisClient.quit();
+          console.log("✅ Redis main client disconnected");
+        } catch (e) {
+          console.warn("⚠️ Redis quit error:", e.message);
+        }
         console.log("✅ Server closed");
         process.exit(0);
       });
@@ -295,7 +314,10 @@ const startServer = async () => {
 
     process.on("SIGINT", () => {
       console.log("SIGINT received — shutting down...");
-      server.close(() => {
+      server.close(async () => {
+        try {
+          await redisClient.quit();
+        } catch (e) {}
         process.exit(0);
       });
     });
