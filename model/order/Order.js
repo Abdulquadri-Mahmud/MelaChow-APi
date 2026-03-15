@@ -133,6 +133,13 @@ const orderSchema = new mongoose.Schema(
       sparse: true,
     },
 
+    idempotencyKey: {
+      type:   String,
+      sparse: true,   // allows multiple null values
+      unique: true,   // but only one doc per non-null key
+      index:  true,
+    },
+
     orderStatus: {
       type: String,
       enum: [

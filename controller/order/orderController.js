@@ -11,6 +11,7 @@ import Admin from "../../model/Admin/admin.model.js";
 import { createOrderV2, updateOrderAfterPayment } from "./createOrderV2.controller.js";
 import { sendOrderNotification } from "../../services/notification.service.js";
 import { emitOrderStatusUpdate } from "../../socket/events/orderEvents.js";
+import PaymentLock from "../../model/order/PaymentLock.js";
 
 // Helper function to normalize metadata from Paystack (Object or String)
 // Kept for backward compatibility if needed, though pendingOrder strategy supercedes it.
@@ -679,7 +680,7 @@ export const createOrder = async ({
  */
 export const initializePayment = async (req, res) => {
   try {
-    const { items, deliveryAddress, phone, email, vendorDeliveryFees } = req.body;
+    const { items, deliveryAddress, phone, email, vendorDeliveryFees, idempotencyKey } = req.body;
     const userId = req.userId;
 
     // Validation
@@ -703,7 +704,8 @@ export const initializePayment = async (req, res) => {
       deliveryAddress,
       phone: phone || deliveryAddress?.phone,
       paymentStatus: "pending",
-      orderStatus: "pending"
+      orderStatus: "pending",
+      idempotencyKey: idempotencyKey || null, // ← PASS THROUGH
     });
 
     console.log(`✅ Order created: ${order.orderId} (pending payment)`);
@@ -803,20 +805,54 @@ export const verifyPayment = async (req, res) => {
     }
 
     /* ========================================
-     * 2️⃣ IDEMPOTENCY CHECK
-     * ========================================
-     * Prevent duplicate processing
+     * 2️⃣ IDEMPOTENCY — CHECK BEFORE LOCK
+     * Fast path: if already paid, return immediately
+     * without acquiring a lock.
      * ======================================== */
     if (order.paymentStatus === "paid") {
-      console.log(`⚠️ Order ${order.orderId} already paid`);
+      console.log(`⚡ Order ${order.orderId} already paid`);
       return res.status(200).json({
+        success: true,
         message: "Order already processed",
         order,
       });
     }
 
     /* ========================================
-     * 3️⃣ VERIFY WITH PAYSTACK
+     * 3️⃣ ACQUIRE DISTRIBUTED LOCK
+     * Prevents two simultaneous verify requests from
+     * both entering updateOrderAfterPayment.
+     * ======================================== */
+    let lockAcquired = false;
+    try {
+      await PaymentLock.create({ reference });
+      lockAcquired = true;
+    } catch (lockErr) {
+      if (lockErr.code === 11000) {
+        // Another request is currently processing
+        // this reference. Wait for it to finish
+        // then return whatever state the order is in.
+        console.log(
+          `🔒 Lock contention for reference: ${reference}`
+        );
+        await new Promise(r => setTimeout(r, 2000));
+        const currentOrder = await Order.findOne({
+          paymentReference: reference
+        });
+        return res.status(200).json({
+          success: true,
+          message: currentOrder?.paymentStatus === "paid"
+            ? "Payment already processed"
+            : "Payment processing in progress — please check order status",
+          order: currentOrder,
+        });
+      }
+      // Unexpected lock error — don't block payment
+      console.error("Lock creation error (non-blocking):", lockErr.message);
+    }
+
+    /* ========================================
+     * 4️⃣ VERIFY WITH PAYSTACK
      * ======================================== */
     const verifyResp = await axios.get(
       `https://api.paystack.co/transaction/verify/${reference}`,
@@ -830,9 +866,11 @@ export const verifyPayment = async (req, res) => {
     const payData = verifyResp.data?.data;
 
     if (!payData || payData.status !== "success") {
-      /* ========================================
-       * 4a️⃣ PAYMENT FAILED - Update Order
-       * ======================================== */
+      // Payment failed
+      if (lockAcquired) {
+        await PaymentLock.deleteOne({ reference }).catch(e => console.error("Lock release failed:", e.message));
+      }
+
       order.paymentStatus = "failed";
       order.orderStatus = "failed";
       await order.save();
@@ -845,9 +883,23 @@ export const verifyPayment = async (req, res) => {
     }
 
     /* ========================================
-     * 4b️⃣ PAYMENT SUCCESS - Update Order and Create VendorOrders
+     * 5️⃣ ATOMIC STATUS TRANSITION
      * ======================================== */
-    const updatedOrder = await updateOrderAfterPayment(order._id, reference);
+    let updatedOrder;
+    try {
+      updatedOrder = await updateOrderAfterPayment(
+        order._id,
+        reference
+      );
+    } finally {
+      // ALWAYS release lock regardless of success/failure
+      if (lockAcquired) {
+        await PaymentLock.deleteOne({ reference })
+          .catch(e =>
+            console.error("Lock release failed:", e.message)
+          );
+      }
+    }
 
     console.log(`✅ Payment verified and Order ${updatedOrder.orderId} updated`);
 
@@ -903,7 +955,9 @@ export const verifyPaymentV2 = async (req, res) => {
     }
 
     /* ========================================
-     * 2️⃣ IDEMPOTENCY CHECK
+     * 2️⃣ IDEMPOTENCY — CHECK BEFORE LOCK
+     * Fast path: if already paid, return immediately
+     * without acquiring a lock.
      * ======================================== */
     if (order.paymentStatus === "paid") {
       console.log(`⚠️ [V2] Order ${order.orderId} already paid`);
@@ -915,7 +969,40 @@ export const verifyPaymentV2 = async (req, res) => {
     }
 
     /* ========================================
-     * 3️⃣ VERIFY WITH PAYSTACK
+     * 3️⃣ ACQUIRE DISTRIBUTED LOCK
+     * Prevents two simultaneous verify requests from
+     * both entering updateOrderAfterPayment.
+     * ======================================== */
+    let lockAcquired = false;
+    try {
+      await PaymentLock.create({ reference });
+      lockAcquired = true;
+    } catch (lockErr) {
+      if (lockErr.code === 11000) {
+        // Another request is currently processing
+        // this reference. Wait for it to finish
+        // then return whatever state the order is in.
+        console.log(
+          `🔒 Lock contention for reference: ${reference}`
+        );
+        await new Promise(r => setTimeout(r, 2000));
+        const currentOrder = await Order.findOne({
+          paymentReference: reference
+        });
+        return res.status(200).json({
+          success: true,
+          message: currentOrder?.paymentStatus === "paid"
+            ? "Payment already processed"
+            : "Payment processing in progress — please check order status",
+          order: currentOrder,
+        });
+      }
+      // Unexpected lock error — don't block payment
+      console.error("Lock creation error (non-blocking):", lockErr.message);
+    }
+
+    /* ========================================
+     * 4️⃣ VERIFY WITH PAYSTACK
      * ======================================== */
     const verifyResp = await axios.get(
       `https://api.paystack.co/transaction/verify/${reference}`,
@@ -929,7 +1016,11 @@ export const verifyPaymentV2 = async (req, res) => {
     const payData = verifyResp.data?.data;
 
     if (!payData || payData.status !== "success") {
-      // Payment failed - update order
+      // Payment failed
+      if (lockAcquired) {
+        await PaymentLock.deleteOne({ reference }).catch(e => console.error("Lock release failed:", e.message));
+      }
+
       order.paymentStatus = "failed";
       order.orderStatus = "failed";
       await order.save();
@@ -943,9 +1034,23 @@ export const verifyPaymentV2 = async (req, res) => {
     }
 
     /* ========================================
-     * 4️⃣ UPDATE ORDER AND CREATE VENDOR ORDERS
+     * 5️⃣ ATOMIC STATUS TRANSITION
      * ======================================== */
-    const updatedOrder = await updateOrderAfterPayment(order._id, reference);
+    let updatedOrder;
+    try {
+      updatedOrder = await updateOrderAfterPayment(
+        order._id,
+        reference
+      );
+    } finally {
+      // ALWAYS release lock regardless of success/failure
+      if (lockAcquired) {
+        await PaymentLock.deleteOne({ reference })
+          .catch(e =>
+            console.error("Lock release failed:", e.message)
+          );
+      }
+    }
 
     console.log(`✅ [V2] Payment verified and Order ${updatedOrder.orderId} updated`);
 
