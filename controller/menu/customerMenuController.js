@@ -383,6 +383,55 @@ export const getFullVendorMenu = async (req, res) => {
             if (!swapOptionsByGroup[key]) swapOptionsByGroup[key] = [];
             swapOptionsByGroup[key].push(o);
         }
+        // Step 3 — Fetch all active sections for this vendor
+        const sections = await VendorMenuSection.find({
+            vendor_id:  vendorId,
+            deleted_at: null,
+        }).sort({ sort_order: 1, createdAt: 1 }).lean();
+
+        // Step 4 — Fetch all visible items for this vendor
+        const items = await MenuItem.find({
+            vendor_id:   vendorId,
+            is_archived: false,
+            is_available: true,
+        }).sort({ sort_order: 1, createdAt: 1 }).lean();
+
+        const itemIds = items.map(i => i._id);
+
+        const allPortions = await MenuItemPortion.find({
+            menu_item_id: { $in: itemIds },
+        }).lean();
+
+        // Collect all unique platform category IDs for bulk fetching
+        const allCategoryIds = [
+            ...new Set([
+                ...items.map(i => i.platform_category_id?.toString()),
+                ...comboItems.map(i => i.platform_category_id?.toString())
+            ].filter(Boolean))
+        ];
+
+        const allCategories = await Category.find({
+            _id: { $in: allCategoryIds }
+        }).populate('parent').lean();
+
+        // Build a category map
+        const categoryMap = {};
+        allCategories.forEach(cat => {
+            categoryMap[cat._id.toString()] = {
+                id: cat._id,
+                name: cat.name,
+                slug: cat.slug,
+                parent: cat.parent ? { id: cat.parent._id, name: cat.parent.name, slug: cat.parent.slug } : null
+            };
+        });
+
+        // Build a map: itemId → portions array
+        const portionsByItem = {};
+        for (const p of allPortions) {
+            const key = p.menu_item_id.toString();
+            if (!portionsByItem[key]) portionsByItem[key] = [];
+            portionsByItem[key].push(p);
+        }
 
         // Build final combos array
         const combos = rawCombos.map(variant => {
@@ -437,55 +486,6 @@ export const getFullVendorMenu = async (req, res) => {
             };
         });
 
-        // Step 3 — Fetch all active sections for this vendor
-        const sections = await VendorMenuSection.find({
-            vendor_id:  vendorId,
-            deleted_at: null,
-        }).sort({ sort_order: 1, createdAt: 1 }).lean();
-
-        // Step 4 — Fetch all visible items for this vendor
-        const items = await MenuItem.find({
-            vendor_id:   vendorId,
-            is_archived: false,
-            is_available: true,
-        }).sort({ sort_order: 1, createdAt: 1 }).lean();
-
-        const itemIds = items.map(i => i._id);
-
-        const allPortions = await MenuItemPortion.find({
-            menu_item_id: { $in: itemIds },
-        }).lean();
-
-        // Collect all unique platform category IDs for bulk fetching
-        const allCategoryIds = [
-            ...new Set([
-                ...items.map(i => i.platform_category_id?.toString()),
-                ...comboItems.map(i => i.platform_category_id?.toString())
-            ].filter(Boolean))
-        ];
-
-        const allCategories = await Category.find({
-            _id: { $in: allCategoryIds }
-        }).populate('parent').lean();
-
-        // Build a category map
-        const categoryMap = {};
-        allCategories.forEach(cat => {
-            categoryMap[cat._id.toString()] = {
-                id: cat._id,
-                name: cat.name,
-                slug: cat.slug,
-                parent: cat.parent ? { id: cat.parent._id, name: cat.parent.name, slug: cat.parent.slug } : null
-            };
-        });
-
-        // Build a map: itemId → portions array
-        const portionsByItem = {};
-        for (const p of allPortions) {
-            const key = p.menu_item_id.toString();
-            if (!portionsByItem[key]) portionsByItem[key] = [];
-            portionsByItem[key].push(p);
-        }
 
         const enrichedItems = items.map(item => {
             const portions = portionsByItem[item._id.toString()] || [];
