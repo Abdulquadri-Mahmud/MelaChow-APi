@@ -7,37 +7,37 @@ import mongoose from "mongoose";
 const orderItemSchema = new mongoose.Schema({
   // ─── Type discriminator ───────────────────────
   type: {
-    type:    String,
-    enum:    ["item", "combo"],
+    type: String,
+    enum: ["item", "combo"],
     default: "item",
   },
 
   // ─── Food item fields ─────────────────────────
   // foodId refs MenuItem (not legacy Food model)
   foodId: {
-    type:    mongoose.Schema.Types.ObjectId,
-    ref:     "MenuItem",
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "MenuItem",
     default: null,
   },
 
   // ─── Combo fields ─────────────────────────────
   variantId: {
-    type:    mongoose.Schema.Types.ObjectId,
-    ref:     "MenuVariant",
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "MenuVariant",
     default: null,
   },
 
   // ─── Shared fields ────────────────────────────
   restaurantId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref:  "Vendor",
+    ref: "Vendor",
   },
-  variant:  { type: Object, default: {} },
-  name:     { type: String },
+  variant: { type: Object, default: {} },
+  name: { type: String },
   image_url: { type: String, default: "" },
   quantity: { type: Number, required: true },
-  price:    { type: Number, required: true },
-  note:     { type: String, default: "" },
+  price: { type: Number, required: true },
+  note: { type: String, default: "" },
   metadata: { type: Object, default: {} },
 });
 
@@ -64,33 +64,33 @@ const vendorDeliveryFeeSchema = new mongoose.Schema(
  * Delivery address
  */
 const deliveryAddressSchema = new mongoose.Schema({
-    addressLine: { type: String },
+  addressLine: { type: String },
 
-    // Frontend contract fields (cityName/stateName)
-    cityName:    { type: String },
-    stateName:   { type: String },
+  // Frontend contract fields (cityName/stateName)
+  cityName: { type: String },
+  stateName: { type: String },
 
-    // Schema fields — populated from cityName/stateName
-    // in createOrderV2 before saving.
-    // NOT required — normalization handles the mapping.
-    city:    { type: String },
-    state:   { type: String },
+  // Schema fields — populated from cityName/stateName
+  // in createOrderV2 before saving.
+  // NOT required — normalization handles the mapping.
+  city: { type: String },
+  state: { type: String },
 
-    cityId:  {
-        type: mongoose.Schema.Types.ObjectId,
-        ref:  "City",
-    },
-    stateId: {
-        type: mongoose.Schema.Types.ObjectId,
-        ref:  "State",
-    },
-    name:    { type: String },
-    phone:   { type: String },
-    address: { type: String },
-    coordinates: {
-        lat: { type: Number },
-        lng: { type: Number },
-    },
+  cityId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "City",
+  },
+  stateId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "State",
+  },
+  name: { type: String },
+  phone: { type: String },
+  address: { type: String },
+  coordinates: {
+    lat: { type: Number },
+    lng: { type: Number },
+  },
 });
 
 /**
@@ -156,10 +156,10 @@ const orderSchema = new mongoose.Schema(
     },
 
     idempotencyKey: {
-      type:   String,
+      type: String,
       sparse: true,   // allows multiple null values
       unique: true,   // but only one doc per non-null key
-      index:  true,
+      index: true,
     },
 
     orderStatus: {
