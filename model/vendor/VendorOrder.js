@@ -7,10 +7,23 @@ const vendorOrderSchema = new mongoose.Schema(
 
     items: [
       {
-        foodId: { type: mongoose.Schema.Types.ObjectId, ref: "Food" },
-        variantId: { type: mongoose.Schema.Types.ObjectId, ref: "Variant" },
-        variant: Object,
-        quantity: Number,
+        type: {
+          type:    String,
+          enum:    ["item", "combo"],
+          default: "item",
+        },
+        foodId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref:  "MenuItem",
+        },
+        variantId: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref:  "MenuVariant",
+        },
+        name:          { type: String },
+        image_url:     { type: String, default: "" },
+        variant:       Object,
+        quantity:      Number,
         originalPrice: Number,
         vendorEarning: Number,
         metadata: { type: Object, default: {} },

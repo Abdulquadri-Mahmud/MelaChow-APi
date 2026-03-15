@@ -54,7 +54,7 @@ export const getAllOrders = async (req, res) => {
             .populate("userId", "firstname lastname email phone")
             .populate("riderId", "firstname lastname phone")
             .populate("items.restaurantId", "storeName logo deliveryManagedBy")
-            .populate("items.foodId", "name")
+            .populate("items.foodId", "name image_url item_type")
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit))
@@ -92,7 +92,7 @@ export const getSingleOrder = async (req, res) => {
             .populate("userId", "firstname lastname email phone")
             .populate("riderId", "firstname lastname phone email profileImage vehicleType")
             .populate("items.restaurantId", "storeName logo deliveryManagedBy")
-            .populate("items.foodId", "name")
+            .populate("items.foodId", "name image_url item_type")
             .lean();
 
         if (!order) {

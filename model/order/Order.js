@@ -5,30 +5,40 @@ import mongoose from "mongoose";
  * (NO delivery fee here)
  */
 const orderItemSchema = new mongoose.Schema({
+  // ─── Type discriminator ───────────────────────
+  type: {
+    type:    String,
+    enum:    ["item", "combo"],
+    default: "item",
+  },
+
+  // ─── Food item fields ─────────────────────────
+  // foodId refs MenuItem (not legacy Food model)
   foodId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "Food",
-    required: true,
+    type:    mongoose.Schema.Types.ObjectId,
+    ref:     "MenuItem",
+    default: null,
   },
 
-  variant: {
-    name: { type: String, required: true },
-    price: { type: Number, required: true },
-    image: { type: String },
+  // ─── Combo fields ─────────────────────────────
+  variantId: {
+    type:    mongoose.Schema.Types.ObjectId,
+    ref:     "MenuVariant",
+    default: null,
   },
 
-  note: { type: String, default: "" },
-
-  quantity: { type: Number, required: true },
-  price: { type: Number, required: true },
-
+  // ─── Shared fields ────────────────────────────
   restaurantId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "Vendor",
-    required: true,
+    ref:  "Vendor",
   },
-
-  metadata: { type: Object, default: {} }, // Stores choices, etc.
+  variant:  { type: Object, default: {} },
+  name:     { type: String },
+  image_url: { type: String, default: "" },
+  quantity: { type: Number, required: true },
+  price:    { type: Number, required: true },
+  note:     { type: String, default: "" },
+  metadata: { type: Object, default: {} },
 });
 
 /**
