@@ -1189,6 +1189,18 @@ export const getVendorOrders = async (req, res) => {
           path: "userId",
           select: "firstname lastname email phone"
         }
+      })
+      // Populate food item details for regular items
+      .populate({
+        path: "items.foodId",
+        select: "name image_url item_type dietary_type",
+        model: "MenuItem",
+      })
+      // Populate combo details
+      .populate({
+        path: "items.variantId",
+        select: "name image_url price",
+        model: "MenuVariant",
       });
 
     return res.json({ vendorOrders });
@@ -1210,6 +1222,18 @@ export const getVendorOrdersByStatus = async (req, res) => {
           path: "userId",
           select: "firstname lastname email phone"
         }
+      })
+      // Populate food item details for regular items
+      .populate({
+        path: "items.foodId",
+        select: "name image_url item_type dietary_type",
+        model: "MenuItem",
+      })
+      // Populate combo details
+      .populate({
+        path: "items.variantId",
+        select: "name image_url price",
+        model: "MenuVariant",
       });
 
     const grouped = {
