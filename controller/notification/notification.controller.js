@@ -1,7 +1,8 @@
 import {
     sendNotification,
     saveSubscription,
-    removeSubscription
+    removeSubscription,
+    syncUnreadCountToRedis
 } from '../../services/notification.service.js';
 import PushSubscription from '../../model/notification/pushSubscription.model.js';
 import Notification from '../../model/notification/notification.model.js';
@@ -183,6 +184,9 @@ export const markAsRead = async (req, res) => {
             });
         }
 
+        // Reconciliation with Redis counter
+        await syncUnreadCountToRedis(req.userId);
+
         res.json({ success: true, notification });
 
     } catch (error) {
@@ -204,6 +208,9 @@ export const markAllAsRead = async (req, res) => {
             { userId: req.userId, read: false },
             { read: true }
         );
+
+        // Reconciliation with Redis counter
+        await syncUnreadCountToRedis(req.userId);
 
         res.json({
             success: true,

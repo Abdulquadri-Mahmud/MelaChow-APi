@@ -5,13 +5,15 @@ import Vendor from '../model/vendor/vendor.model.js';
 import Admin from '../model/Admin/admin.model.js';
 import Rider from '../model/rider.model.js';
 import { registerRiderSocketHandlers } from './rider.socket.js';
+import { createAdapter } from '@socket.io/redis-adapter';
+import { pubClient, subClient, isRedisReady } from '../config/redis.js';
 
 let io;
 
 /**
  * Initialize Socket.IO server
  */
-export function initializeSocket(server) {
+export async function initializeSocket(server) {
     io = new Server(server, {
         cors: {
             origin: [
@@ -28,6 +30,16 @@ export function initializeSocket(server) {
         pingInterval: 25000,
         transports: ['websocket', 'polling'],
     });
+
+    // Redis adapter setup for multi-instance support
+    try {
+        await Promise.all([pubClient.connect(), subClient.connect()]);
+        io.adapter(createAdapter(pubClient, subClient));
+        console.log('✅ Socket.IO Redis adapter active — multi-instance broadcasting enabled');
+    } catch (err) {
+        console.warn('⚠️ Redis adapter unavailable — falling back to in-memory adapter:', err.message);
+        // System continues working on single instance without Redis
+    }
 
     // Authentication middleware
     io.use(async (socket, next) => {
@@ -120,13 +132,35 @@ export function initializeSocket(server) {
 
         // ── Vendor room handlers ───────────────────────────────────────────
         // Called by vendor frontend: socket.emit('vendor_connect', { vendorId })
-        socket.on('vendor_connect', ({ vendorId } = {}) => {
+        socket.on('vendor_connect', async ({ vendorId } = {}) => {
             if (!vendorId) return;
             // ✅ FIX: Use "vendor:{id}" colon format to match SOCKET_ROOMS.vendor()
             // The old subscribe_restaurant handler used "restaurant_{id}" (underscore)
             // which doesn't match what rider.controller.js emits to.
             socket.join(`vendor:${vendorId}`);
             console.log(`🏪 Vendor ${vendorId} joined room: vendor:${vendorId}`);
+
+            // Deliver any notifications that arrived while vendor was disconnected
+            try {
+                const Notification = (await import('../model/notification/notification.model.js')).default;
+                const missedNotifications = await Notification.find({
+                    restaurantId: vendorId,
+                    read: false
+                })
+                    .sort({ createdAt: -1 })
+                    .limit(20)
+                    .lean();
+
+                if (missedNotifications.length > 0) {
+                    socket.emit('missed_notifications', {
+                        notifications: missedNotifications,
+                        count: missedNotifications.length
+                    });
+                    console.log(`📬 Delivered ${missedNotifications.length} missed notification(s) to vendor ${vendorId}`);
+                }
+            } catch (err) {
+                console.error('❌ Failed to deliver missed notifications:', err.message);
+            }
         });
 
         // Called by socketService.subscribeToRestaurant(restaurantId)
@@ -139,10 +173,32 @@ export function initializeSocket(server) {
 
         // ── Customer / Order room handlers ────────────────────────────────
         // Customer joins their personal delivery-tracking room
-        socket.on('customer_connect', ({ userId } = {}) => {
+        socket.on('customer_connect', async ({ userId } = {}) => {
             if (!userId) return;
             socket.join(`customer:${userId}`);
             console.log(`👤 Customer ${userId} joined room: customer:${userId}`);
+
+            // Deliver missed notifications for customer
+            try {
+                const Notification = (await import('../model/notification/notification.model.js')).default;
+                const missedNotifications = await Notification.find({
+                    userId: userId,
+                    read: false
+                })
+                    .sort({ createdAt: -1 })
+                    .limit(20)
+                    .lean();
+
+                if (missedNotifications.length > 0) {
+                    socket.emit('missed_notifications', {
+                        notifications: missedNotifications,
+                        count: missedNotifications.length
+                    });
+                    console.log(`📬 Delivered ${missedNotifications.length} missed notification(s) to customer ${userId}`);
+                }
+            } catch (err) {
+                console.error('❌ Failed to deliver missed notifications:', err.message);
+            }
         });
 
         // Subscribe to order-specific updates
