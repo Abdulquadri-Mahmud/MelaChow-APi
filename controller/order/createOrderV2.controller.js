@@ -841,6 +841,21 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
             continue;
         }
 
+        const vendor = await Vendor.findById(vendorId).session(session);
+        const deliveryManagedBy = vendor?.deliveryManagedBy || "admin";
+
+        // Only credit delivery fee to vendor if THEY manage delivery.
+        // If platform manages delivery, delivery fee goes to admin
+        // wallet and vendor deliveryShare on their order is 0.
+        const vendorOwnDelivery = deliveryManagedBy === "vendor";
+
+        let vendorCredit;
+        if (vendorOwnDelivery) {
+            vendorCredit = Number((vendorTotal + vendorDeliveryShare).toFixed(2));
+        } else {
+            vendorCredit = Number(vendorTotal.toFixed(2));
+        }
+
         // Create VendorOrder
         const [vendorOrder] = await VendorOrder.create(
             [
@@ -857,7 +872,9 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
                     })),
                     commission,
                     vendorTotal,
-                    deliveryShare: vendorDeliveryShare,
+                    // deliveryShare only shown on vendor's order if
+                    // THEY handle delivery — otherwise 0 (platform keeps it)
+                    deliveryShare: vendorOwnDelivery ? vendorDeliveryShare : 0,
                     orderStatus: "pending"
                 }
             ],
@@ -867,7 +884,6 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
         vendorOrderMapping[vendorId] = vendorOrder._id;
 
         // Update vendor stats
-        // ... (rest of the stats/wallet logic)
         await Vendor.findByIdAndUpdate(
             vendorId,
             {
@@ -893,13 +909,8 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
             );
         }
 
-        const vendor = await Vendor.findById(vendorId).session(session);
-        const deliveryManagedBy = vendor?.deliveryManagedBy || "admin";
-
-        let vendorCredit;
-        if (deliveryManagedBy === "vendor") {
+        if (vendorOwnDelivery) {
             // Vendor handles delivery — they get food revenue + delivery fee
-            vendorCredit = Number((vendorTotal + vendorDeliveryShare).toFixed(2));
             vendorWallet.transactions.push({
                 type: "credit",
                 amount: vendorCredit,
@@ -908,7 +919,6 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
             });
         } else {
             // Admin handles delivery — vendor gets food revenue only
-            vendorCredit = Number(vendorTotal.toFixed(2));
             vendorWallet.transactions.push({
                 type: "credit",
                 amount: vendorCredit,
