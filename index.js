@@ -58,7 +58,7 @@ const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:3001', // Backend URL
   process.env.CLIENT_URL, // Dynamic from env
-];
+].filter(Boolean);
 
 const corsOptions = {
   origin: (origin, callback) => {
@@ -94,7 +94,11 @@ app.use(helmet({
       scriptSrc: ["'self'", "https://grub-dash-frontend-xi.vercel.app"],
       styleSrc: ["'self'", "'unsafe-inline'"], // Required for inline styles
       imgSrc: ["'self'", "data:", "https:"], // Allow external images
-      connectSrc: ["'self'", "https://grub-dash-frontend-xi.vercel.app", "https://grub-dash-api.vercel.app"],
+      connectSrc: [
+        "'self'",
+        "https://grub-dash-frontend-xi.vercel.app",
+        process.env.CLIENT_URL,
+      ].filter(Boolean),
       fontSrc: ["'self'", "data:"],
       objectSrc: ["'none'"],
       upgradeInsecureRequests: [],
@@ -244,56 +248,63 @@ app.use((err, req, res, next) => {
   });
 });
 
-// -----------------------------
-// Start Server AFTER Connecting to DB
-// -----------------------------
-// -----------------------------
-// Start Server Logic (Vercel vs Local)
-// -----------------------------
+// ─────────────────────────────────────────────────────
+// SERVER STARTUP
+// Render runs node index.js directly as a persistent
+// process. Vercel serverless export removed —
+// incompatible with persistent WebSocket connections.
+// ─────────────────────────────────────────────────────
+const startServer = async () => {
+  try {
+    // 1. Connect to MongoDB
+    await connectDB();
 
-// 1. Export for Vercel (Serverless)
-export default async (req, res) => {
-  await connectDB(); // Ensure DB is connected for every request (cached in Lambda)
-  return app(req, res);
+    const PORT = process.env.PORT || 5000;
+
+    // 2. Run category seeder
+    // Wrapped so a seed failure never blocks startup
+    try {
+      await seedCategories();
+    } catch (seedErr) {
+      console.warn("⚠️ Category seed skipped:", seedErr.message);
+    }
+
+    // 3. Create HTTP server and attach Socket.IO
+    // Must use http.createServer — app.listen does not
+    // expose the underlying server to Socket.IO
+    const server = http.createServer(app);
+    const io     = initializeSocket(server);
+    app.set("io", io);
+
+    // 4. Start listening
+    server.listen(PORT, () => {
+      console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`🔌 Socket.IO ready for connections`);
+      console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
+    });
+
+    // 5. Graceful shutdown
+    // Render sends SIGTERM before stopping the instance
+    process.on("SIGTERM", () => {
+      console.log("SIGTERM received — shutting down gracefully...");
+      server.close(() => {
+        console.log("✅ Server closed");
+        process.exit(0);
+      });
+    });
+
+    process.on("SIGINT", () => {
+      console.log("SIGINT received — shutting down...");
+      server.close(() => {
+        process.exit(0);
+      });
+    });
+
+  } catch (error) {
+    console.error("❌ Failed to start server:", error.message);
+    process.exit(1);
+  }
 };
 
-// 2. Start Local Server (if not Vercel)
-if (!process.env.VERCEL) {
-  const startServer = async () => {
-    try {
-      await connectDB();
-
-      const PORT = process.env.PORT || 5000;
-
-      // Run seeders (only locally/VPS, avoid on serverless requests)
-      await seedCategories();
-
-      // Create HTTP server (CRITICAL: Don't use app.listen directly for Socket.IO)
-      // ✅ After
-      const server = http.createServer(app);
-      const io = initializeSocket(server);
-      app.set("io", io);
-
-      server.listen(PORT, () => {
-        console.log(`🚀 Server running at http://localhost:${PORT}`);
-        console.log(`🔌 Socket.IO ready for connections`);
-      });
-
-      // Graceful shutdown
-      process.on('SIGTERM', () => {
-        console.log('SIGTERM received, closing server...');
-        server.close(() => {
-          console.log('Server closed');
-          process.exit(0);
-        });
-      });
-
-    } catch (error) {
-      console.error('Failed to connect to MongoDB:', error.message);
-      process.exit(1);
-    }
-  };
-
-  startServer();
-}
+startServer();
 
