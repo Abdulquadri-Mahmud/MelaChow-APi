@@ -636,6 +636,19 @@ export const createOrderV2 = async ({
         /* ========================================
          * 8️⃣ CREATE ORDER
          * ======================================== */
+        // Normalize deliveryAddress field names.
+        // Frontend sends cityName/stateName per API contract.
+        // Order schema stores city/state.
+        // Map here so both the schema and the frontend
+        // contract stay valid without changing either.
+        const normalizedDeliveryAddress = {
+          ...deliveryAddress,
+          city:  deliveryAddress.cityName  || deliveryAddress.city  || "",
+          state: deliveryAddress.stateName || deliveryAddress.state || "",
+        };
+        // Keep cityName/stateName as well for forwards
+        // compatibility — they are stored but not required
+
         // Build resolved vendorDeliveryFees for storage
         const resolvedVendorDeliveryFees = uniqueVendorIds.map(
           vendorId => ({
@@ -654,7 +667,7 @@ export const createOrderV2 = async ({
                         userId,
                         items: normalizedItems,
                         vendorDeliveryFees: resolvedVendorDeliveryFees, // ← use resolved
-                        deliveryAddress,
+                        deliveryAddress: normalizedDeliveryAddress,
                         phone,
                         subtotal: Number(subtotal.toFixed(2)),
                         deliveryFee: Number(totalDeliveryFee.toFixed(2)),
