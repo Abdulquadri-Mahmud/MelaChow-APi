@@ -11,7 +11,7 @@ const orderItemSchema = new mongoose.Schema({
     enum: ["item", "combo"],
     default: "item",
   },
-
+  
   // ─── Food item fields ─────────────────────────
   // foodId refs MenuItem (not legacy Food model)
   foodId: {
