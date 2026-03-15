@@ -1,4 +1,4 @@
-import Order from "../../../model/order/order.model.js";
+import Order from "../../../model/order/Order.js";
 import VendorOrder from "../../../model/vendor/VendorOrder.js";
 import Vendor from "../../../model/vendor/vendor.model.js";
 import Wallet from "../../../model/wallet/wallet.mode.js";
