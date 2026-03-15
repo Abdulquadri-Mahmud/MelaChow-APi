@@ -1,6 +1,119 @@
-import Food from "../../model/vendor/food.model.js";
+import MenuItem from "../../model/menu/MenuItem.js";
+import MenuItemPortion from "../../model/menu/MenuItemPortion.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 import Order from "../../model/order/Order.js";
+import City from "../../model/location/City.js";
+
+/**
+ * 🛠 SHARED HELPERS
+ */
+
+/**
+ * Bulk-resolves delivery fees for an array of vendor docs.
+ * Returns a map: vendorId → resolvedFee (naira).
+ */
+const resolveDeliveryFees = async (vendors) => {
+  const cityNames = [
+    ...new Set(vendors.map(v => v.address?.city).filter(Boolean))
+  ];
+
+  const cities = await City.find({
+    name: { $in: cityNames.map(c => new RegExp(`^${c}$`, "i")) }
+  }).lean();
+
+  const cityFeeMap = {};
+  cities.forEach(c => {
+    cityFeeMap[c.name.toLowerCase()] = c.platformDeliveryFee || 0;
+  });
+
+  const feeMap = {};
+  vendors.forEach(v => {
+    let fee = 0;
+    if (v.deliveryManagedBy === "vendor") {
+      fee = v.flatRateDeliveryFee || 0;
+    } else if (v.platformDeliveryFeeOverride > 0) {
+      fee = v.platformDeliveryFeeOverride;
+    } else {
+      const key = v.address?.city?.toLowerCase();
+      fee = cityFeeMap[key] || 0;
+    }
+    feeMap[v._id.toString()] = fee;
+  });
+
+  return feeMap;
+};
+
+/**
+ * Given an array of lean MenuItem docs, bulk-fetches vendors + cheapest portions 
+ * and shapes each item into the standard response object.
+ */
+const buildRecommendationItems = async (items) => {
+  if (!items.length) return [];
+
+  const itemIds = items.map(i => i._id);
+  const vendorIds = [
+    ...new Set(items.map(i => i.vendor_id?.toString()).filter(Boolean))
+  ];
+
+  // Bulk fetch vendors + portions in parallel
+  const [vendors, allPortions] = await Promise.all([
+    Vendor.find(
+      { _id: { $in: vendorIds } },
+      "storeName logo address openingHours " +
+      "deliveryManagedBy flatRateDeliveryFee " +
+      "platformDeliveryFeeOverride"
+    ).lean(),
+
+    MenuItemPortion.find(
+      { menu_item_id: { $in: itemIds }, is_available: true }
+    ).sort({ price: 1 }).lean(),
+  ]);
+
+  // Resolve delivery fees for all vendors at once
+  const feeMap = await resolveDeliveryFees(vendors);
+
+  // Build vendorMap
+  const vendorMap = {};
+  vendors.forEach(v => {
+    vendorMap[v._id.toString()] = v;
+  });
+
+  // Build cheapestMap — first entry per item is cheapest
+  // because we sorted by price asc
+  const cheapestMap = {};
+  allPortions.forEach(p => {
+    const key = p.menu_item_id.toString();
+    if (!cheapestMap[key]) cheapestMap[key] = p;
+  });
+
+  return items.map(item => {
+    const key      = item._id.toString();
+    const vendor   = vendorMap[item.vendor_id?.toString()] || {};
+    const cheapest = cheapestMap[key];
+
+    return {
+      _id:              item._id,
+      name:             item.name,
+      image:            item.image_url || "",
+      price:            cheapest ? cheapest.price / 100 : null,
+      portionLabel:     cheapest?.label || null,
+      item_type:        item.item_type,
+      dietary_type:     item.dietary_type || "mixed",
+      tags:             item.tags || [],
+      rating:           item.rating      || 0,
+      ratingCount:      item.ratingCount || 0,
+      deliveryFee:      feeMap[vendor._id?.toString()] ?? 0,
+      restaurant: {
+        _id:          vendor._id,
+        storeName:    vendor.storeName,
+        logo:         vendor.logo,
+        city:         vendor.address?.city,
+        state:        vendor.address?.state,
+        openingHours: vendor.openingHours,
+      },
+    };
+  });
+};
 
 /**
  * 🛠 Time-of-Day Logic
@@ -54,177 +167,228 @@ export const getRecommendations = async (req, res) => {
         const cityRegex = city ? new RegExp(city.trim(), "i") : null;
         const stateRegex = state ? new RegExp(state.trim(), "i") : null;
 
-        // If no location context is found, we can't do location-based recs effectively.
-        // We will return generic global results or empty arrays for location-specific sections.
-        const hasLocation = cityRegex || stateRegex;
-
         // Parallel fetch preparation
         const promises = {};
+
+        // STEP 3 — LOCATION VENDOR RESOLUTION
+        const vendorQuery = {
+            active:    true,
+            suspended: false,
+            deletedAt: null,
+        };
+        if (cityRegex)  vendorQuery["address.city"]  = cityRegex;
+        if (stateRegex) vendorQuery["address.state"] = stateRegex;
+
+        const vendors = await Vendor.find(vendorQuery)
+            .select("_id")
+            .lean();
+        
+        const locationVendorIds = vendors.map(v => v._id);
+
+        if (locationVendorIds.length === 0 && (cityRegex || stateRegex)) {
+            // Location provided but no vendors? Return early with empty sections.
+            return res.status(200).json({
+                success: true,
+                meta: {
+                    timeOfDayLabel: getTimeOfDayContext().label,
+                    weatherCondition: weather || null,
+                    location: { city, state },
+                },
+                data: {
+                    timeOfDay:      [],
+                    underrated:     [],
+                    weatherBased:   [],
+                    trendingNearby: [],
+                    budgetFriendly: [],
+                }
+            });
+        }
 
         // --- A. Time-of-Day Recommendations ---
         const timeContext = getTimeOfDayContext();
         const timeQuery = {
-            available: true,
-            tags: { $in: timeContext.tags.map(t => new RegExp(t, "i")) }
-        };
-        // If we have location, find vendors in that location first
-        // Note: To be efficient, we might want to query Foods directly and populate Vendor.
-        // However, filtering Food by Vendor's location requires knowing Vendor IDs or populating.
-        // Efficient strategy: Find active vendors in location first.
-        let locationVendorIds = [];
-        if (hasLocation) {
-            const vendorQuery = { active: true, suspended: false, deletedAt: null };
-            if (cityRegex) vendorQuery["address.city"] = cityRegex;
-            if (stateRegex) vendorQuery["address.state"] = stateRegex;
-
-            const vendors = await Vendor.find(vendorQuery).select("_id").lean();
-            locationVendorIds = vendors.map(v => v._id);
-
-            // If no vendors in location, we might return empty for all location-based fields
-            if (locationVendorIds.length > 0) {
-                timeQuery.vendor = { $in: locationVendorIds };
-            } else {
-                // Location provided but no vendors? Return empty.
-                return res.json({
-                    timeOfDay: [], underrated: [], weatherBased: [], trendingNearby: [], budgetFriendly: [],
-                    meta: { ...timeContext, city, state }
-                });
-            }
-        }
-
-        promises.timeOfDay = Food.find(timeQuery)
-            .select("name slug price deliveryFee images vendor rating ratingCount tags")
-            .populate("vendor", "storeName logo address openingHours flatRateDeliveryFee")
-            .sort({ ratingCount: -1 }) // simple popularity sort
-            .limit(6)
-            .lean();
-
-
-        // --- B. Nearby Underrated Vendors (Foods from them) ---
-        // Logic: Vendors in location with Rating >= 4.0 AND RatingCount < 50
-        const underratedQuery = {
-            available: true,
-            rating: { $gte: 4.0 },
-            ratingCount: { $lt: 50 } // "Hidden gems"
+            is_available: true,
+            is_in_stock:  true,
+            is_archived:  false,
+            tags: {
+                $in: timeContext.tags.map(t => new RegExp(t, "i"))
+            },
         };
         if (locationVendorIds.length > 0) {
-            underratedQuery.vendor = { $in: locationVendorIds };
+            timeQuery.vendor_id = { $in: locationVendorIds };
         }
-        promises.underrated = Food.find(underratedQuery)
-            .select("name slug price deliveryFee images vendor rating ratingCount")
-            .populate("vendor", "storeName logo address openingHours flatRateDeliveryFee")
-            .sort({ rating: -1 }) // Sort by quality, even if few ratings
+
+        const timeRaw = await MenuItem.find(timeQuery)
+            .select(
+                "_id name image_url item_type dietary_type " +
+                "tags rating ratingCount vendor_id"
+            )
+            .sort({ ratingCount: -1 })
             .limit(6)
             .lean();
+
+        promises.timeOfDay = buildRecommendationItems(timeRaw);
+
+
+        // --- B. Underrated Vendors (Hidden Gems) ---
+        const underratedQuery = {
+            is_available: true,
+            is_in_stock:  true,
+            is_archived:  false,
+            rating:       { $gte: 4.0 },
+            ratingCount:  { $lt: 50 },
+        };
+        if (locationVendorIds.length > 0) {
+            underratedQuery.vendor_id = { $in: locationVendorIds };
+        }
+
+        const underratedRaw = await MenuItem.find(underratedQuery)
+            .select(
+                "_id name image_url item_type dietary_type " +
+                "tags rating ratingCount vendor_id"
+            )
+            .sort({ rating: -1 })
+            .limit(6)
+            .lean();
+
+        promises.underrated = buildRecommendationItems(underratedRaw);
 
 
         // --- C. Weather-Based ---
         const weatherTags = getWeatherTags(weather);
         if (weatherTags.length > 0) {
             const weatherQuery = {
-                available: true,
-                tags: { $in: weatherTags.map(t => new RegExp(t, "i")) }
+                is_available: true,
+                is_in_stock:  true,
+                is_archived:  false,
+                tags: {
+                    $in: weatherTags.map(t => new RegExp(t, "i"))
+                },
             };
             if (locationVendorIds.length > 0) {
-                weatherQuery.vendor = { $in: locationVendorIds };
+                weatherQuery.vendor_id = { $in: locationVendorIds };
             }
-            promises.weatherBased = Food.find(weatherQuery)
-                .select("name slug price deliveryFee images vendor rating ratingCount")
-                .populate("vendor", "storeName logo address openingHours flatRateDeliveryFee")
+
+            const weatherRaw = await MenuItem.find(weatherQuery)
+                .select(
+                    "_id name image_url item_type dietary_type " +
+                    "tags rating ratingCount vendor_id"
+                )
                 .limit(6)
                 .lean();
+
+            promises.weatherBased = buildRecommendationItems(weatherRaw);
         } else {
             promises.weatherBased = Promise.resolve([]);
         }
 
 
-        // --- D. Trending Nearby (People ordered this) ---
-        // This requires aggregation on Orders.
-        // 1. Match Orders in last 48 hours & in user's city
-        // 2. Unwind items
-        // 3. Group by foodId, Count
-        // 4. Sort by count desc
-        if (cityRegex) { // Trending nearby strictly requires a City, State is too broad usually
+        // --- D. Trending Nearby (Order Aggregation) ---
+        if (cityRegex) {
             const twoDaysAgo = new Date();
             twoDaysAgo.setDate(twoDaysAgo.getDate() - 2);
 
-            promises.trending = Order.aggregate([
+            const trendingAgg = await Order.aggregate([
                 {
                     $match: {
-                        createdAt: { $gte: twoDaysAgo },
+                        createdAt:              { $gte: twoDaysAgo },
                         "deliveryAddress.city": cityRegex,
-                        orderStatus: "delivered" // Only count completed orders
-                    }
+                        orderStatus:            "delivered",
+                    },
                 },
                 { $unwind: "$items" },
                 {
                     $group: {
-                        _id: "$items.foodId",
-                        count: { $sum: 1 }
-                    }
+                        _id:   "$items.foodId",
+                        count: { $sum: 1 },
+                    },
                 },
                 { $sort: { count: -1 } },
                 { $limit: 8 },
-                {
-                    $lookup: {
-                        from: "foods",
-                        localField: "_id",
-                        foreignField: "_id",
-                        as: "food"
-                    }
-                },
-                { $unwind: "$food" },
-                // We need to look up vendor to ensure it's still active/valid
-                {
-                    $lookup: {
-                        from: "vendors",
-                        localField: "food.vendor",
-                        foreignField: "_id",
-                        as: "vendor"
-                    }
-                },
-                { $unwind: "$vendor" },
-                {
-                    $project: {
-                        name: "$food.name",
-                        slug: "$food.slug",
-                        price: "$food.price",
-                        deliveryFee: "$food.deliveryFee",
-                        images: "$food.images",
-                        rating: "$food.rating",
-                        ratingCount: "$food.ratingCount",
-                        vendor: {
-                            storeName: "$vendor.storeName",
-                            logo: "$vendor.logo",
-                            address: "$vendor.address",
-                            openingHours: "$vendor.openingHours",
-                            flatRateDeliveryFee: "$vendor.flatRateDeliveryFee"
-                        }
-                    }
-                }
             ]);
+
+            const trendingItemIds = trendingAgg
+                .map(t => t._id)
+                .filter(Boolean);
+
+            if (trendingItemIds.length > 0) {
+                const trendingRaw = await MenuItem.find({
+                    _id:          { $in: trendingItemIds },
+                    is_available: true,
+                    is_in_stock:  true,
+                    is_archived:  false,
+                })
+                .select(
+                    "_id name image_url item_type dietary_type " +
+                    "tags rating ratingCount vendor_id"
+                )
+                .lean();
+
+                const orderMap = {};
+                trendingAgg.forEach((t, i) => {
+                    orderMap[t._id?.toString()] = i;
+                });
+                trendingRaw.sort((a, b) =>
+                    (orderMap[a._id.toString()] ?? 99) -
+                    (orderMap[b._id.toString()] ?? 99)
+                );
+
+                promises.trending = buildRecommendationItems(trendingRaw);
+            } else {
+                promises.trending = Promise.resolve([]);
+            }
         } else {
             promises.trending = Promise.resolve([]);
         }
 
 
         // --- E. Budget Friendly ---
-        // Simple logic: In this location, what is "cheap"?
-        // Let's say under 2000 for now, or we could support a query param.
-        // Better: Sort by price asc.
-        const budgetQuery = {
-            available: true,
-            price: { $lte: 2500 } // Hardcoded threshold for "Budget"
-        };
-        if (locationVendorIds.length > 0) {
-            budgetQuery.vendor = { $in: locationVendorIds };
+        // Pre-query MenuItemPortion for items with a cheapest portion ≤ ₦2500 (250000 kobo)
+        const budgetPortions = await MenuItemPortion.find({
+            price:        { $lte: 250000 },
+            is_available: true,
+        }).select("menu_item_id price").lean();
+
+        const budgetItemIdMap = {};
+        budgetPortions.forEach(p => {
+            const key = p.menu_item_id.toString();
+            if (!budgetItemIdMap[key] || p.price < budgetItemIdMap[key].price) {
+                budgetItemIdMap[key] = p;
+            }
+        });
+
+        const budgetItemIds = Object.keys(budgetItemIdMap);
+
+        if (budgetItemIds.length > 0) {
+            const budgetQuery = {
+                _id:          { $in: budgetItemIds },
+                is_available: true,
+                is_in_stock:  true,
+                is_archived:  false,
+            };
+            if (locationVendorIds.length > 0) {
+                budgetQuery.vendor_id = { $in: locationVendorIds };
+            }
+
+            const budgetRaw = await MenuItem.find(budgetQuery)
+                .select(
+                    "_id name image_url item_type dietary_type " +
+                    "tags rating ratingCount vendor_id"
+                )
+                .limit(20)
+                .lean();
+
+            budgetRaw.sort((a, b) => {
+                const aPrice = budgetItemIdMap[a._id.toString()]?.price ?? Infinity;
+                const bPrice = budgetItemIdMap[b._id.toString()]?.price ?? Infinity;
+                return aPrice - bPrice;
+            });
+
+            const budgetTrimmed = budgetRaw.slice(0, 8);
+            promises.budgetFriendly = buildRecommendationItems(budgetTrimmed);
+        } else {
+            promises.budgetFriendly = Promise.resolve([]);
         }
-        promises.budgetFriendly = Food.find(budgetQuery)
-            .select("name slug price deliveryFee images vendor")
-            .populate("vendor", "storeName logo address openingHours flatRateDeliveryFee")
-            .sort({ price: 1 }) // Cheapest first
-            .limit(8)
-            .lean();
 
 
         // EXECUTE ALL
@@ -246,16 +410,16 @@ export const getRecommendations = async (req, res) => {
         return res.status(200).json({
             success: true,
             meta: {
-                timeOfDayLabel: timeContext.label,
+                timeOfDayLabel:   timeContext.label,
                 weatherCondition: weather || null,
-                location: { city, state }
+                location:         { city, state },
             },
             data: {
                 timeOfDay,
                 underrated,
                 weatherBased,
                 trendingNearby,
-                budgetFriendly
+                budgetFriendly,
             }
         });
 
@@ -264,7 +428,6 @@ export const getRecommendations = async (req, res) => {
         res.status(500).json({
             success: false,
             message: "Failed to generate recommendations."
-            // Intentionally not exposing raw error stack
         });
     }
 };
