@@ -671,3 +671,80 @@ export const getVendorsByPlatformCategory = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /v1/vendors/foods/:foodId — Public food detail (no vendorId needed)
+// ─────────────────────────────────────────────────────────────────────────────
+export const getPublicFoodDetail = async (req, res) => {
+    try {
+        const { foodId } = req.params;
+
+        if (!foodId) {
+            return res.status(400).json({
+                success: false,
+                message: "foodId is required",
+            });
+        }
+
+        // Find the item — must be active and not archived
+        const item = await MenuItem.findOne({
+            _id:          foodId,
+            is_archived:  false,
+            is_available: true,
+        }).lean();
+
+        if (!item) {
+            return res.status(404).json({
+                success: false,
+                message: "Food item not found or unavailable",
+            });
+        }
+
+        // Fetch vendor to attach delivery fee and store info
+        const vendor = await Vendor.findById(item.vendor_id)
+            .select(
+                "storeName logo address openingHours rating " +
+                "storeSlug deliveryManagedBy flatRateDeliveryFee " +
+                "platformDeliveryFeeOverride isOpen estimatedDeliveryTime"
+            )
+            .lean();
+
+        // Resolve delivery fee using same logic as storefront
+        const deliveryFee = vendor
+            ? await resolveStorefrontDeliveryFee(vendor)
+            : 0;
+
+        // Build full item — customer view (vendorView: false)
+        // Populates: portions, choice_groups, combos, platform_category with parent
+        const fullItem = await buildFullItem(item, { vendorView: false });
+
+        return res.status(200).json({
+            success: true,
+            food: {
+                ...fullItem,
+                deliveryFee,
+                vendor: vendor
+                    ? {
+                          _id:                   vendor._id,
+                          storeName:             vendor.storeName,
+                          logo:                  vendor.logo,
+                          city:                  vendor.address?.city,
+                          state:                 vendor.address?.state,
+                          openingHours:          vendor.openingHours,
+                          rating:                vendor.rating ?? null,
+                          storeSlug:             vendor.storeSlug,
+                          isOpen:                vendor.isOpen ?? true,
+                          estimatedDeliveryTime: vendor.estimatedDeliveryTime ?? 30,
+                      }
+                    : null,
+            },
+        });
+
+    } catch (error) {
+        console.error("getPublicFoodDetail error:", error);
+        return res.status(500).json({
+            success: false,
+            message: error.message,
+        });
+    }
+};

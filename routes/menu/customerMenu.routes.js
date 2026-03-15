@@ -5,9 +5,14 @@ import {
     getMenuVariantDetails,
     getItemsByPlatformCategory,
     getVendorsByPlatformCategory,
+    getPublicFoodDetail,
 } from '../../controller/menu/customerMenuController.js';
 
 const router = express.Router();
+
+// ─── Standalone food detail — no vendorId needed ────────────────────────────
+// MUST be declared before /:vendorId routes to avoid param conflict
+router.get('/foods/:foodId', getPublicFoodDetail);
 
 // ─── Vendor-specific menu (customer facing) ────────────────────────────────
 router.get('/:vendorId/menu', getFullVendorMenu);
