@@ -3,6 +3,7 @@ import MenuItemPortion from "../../model/menu/MenuItemPortion.js";
 import User from "../../model/user.model.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 import City from "../../model/location/City.js";
+import Category from "../../model/category.model.js";
 
 /**
  * @desc    Get trending food searches/items
@@ -63,7 +64,7 @@ export const getTrendingSearch = async (req, res) => {
     })
       .select(
         "_id name image_url item_type dietary_type " + 
-        "rating ratingCount vendor_id prep_time_minutes"
+        "rating ratingCount vendor_id prep_time_minutes platform_category_id"
       )
       .sort({ ratingCount: -1, rating: -1 })
       .limit(10)
@@ -80,9 +81,10 @@ export const getTrendingSearch = async (req, res) => {
 
     const trendingItemIds = trendingItems.map((i) => i._id);
     const trendingVendorIds = [...new Set(trendingItems.map((i) => i.vendor_id?.toString()).filter(Boolean))];
+    const trendingCategoryIds = [...new Set(trendingItems.map((i) => i.platform_category_id?.toString()).filter(Boolean))];
 
-    // Bulk fetch vendors and portions for trending items
-    const [trendingVendors, trendingPortions] = await Promise.all([
+    // Bulk fetch vendors, portions and categories for trending items
+    const [trendingVendors, trendingPortions, trendingCategories] = await Promise.all([
       Vendor.find(
         { _id: { $in: trendingVendorIds } },
         "storeName logo address openingHours " +
@@ -91,7 +93,13 @@ export const getTrendingSearch = async (req, res) => {
       MenuItemPortion.find({ menu_item_id: { $in: trendingItemIds } })
         .sort({ price: 1 })
         .lean(),
+      Category.find({ _id: { $in: trendingCategoryIds } }).populate("parent").lean(),
     ]);
+
+    const trendingCategoryMap = {};
+    trendingCategories.forEach((cat) => {
+      trendingCategoryMap[cat._id.toString()] = cat;
+    });
 
     // Bulk resolve delivery fees for trending vendors
     const cityNames = [...new Set(trendingVendors.map((v) => v.address?.city).filter(Boolean))];
@@ -132,6 +140,7 @@ export const getTrendingSearch = async (req, res) => {
       const key = item._id.toString();
       const vendor = trendingVendorMap[item.vendor_id?.toString()] || {};
       const cheapest = trendingPriceMap[key];
+      const platformCategory = trendingCategoryMap[item.platform_category_id?.toString()];
 
       return {
         _id: item._id,
@@ -144,6 +153,20 @@ export const getTrendingSearch = async (req, res) => {
         dietary_type: item.dietary_type,
         rating: item.rating,
         ratingCount: item.ratingCount,
+        platform_category: platformCategory
+          ? {
+              id: platformCategory._id,
+              name: platformCategory.name,
+              slug: platformCategory.slug,
+              parent: platformCategory.parent
+                ? {
+                    id: platformCategory.parent._id,
+                    name: platformCategory.parent.name,
+                    slug: platformCategory.parent.slug,
+                  }
+                : null,
+            }
+          : null,
         restaurant: {
           _id: vendor._id,
           storeName: vendor.storeName,

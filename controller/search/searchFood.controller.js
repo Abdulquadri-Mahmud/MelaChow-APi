@@ -91,13 +91,16 @@ const resolveLocationVendors = async (req, overrideCity, overrideState) => {
  */
 const bulkFetchItemSupport = async (items) => {
   if (!items.length) {
-    return { vendorMap: {}, priceMap: {}, portionsMap: {} };
+    return { vendorMap: {}, priceMap: {}, portionsMap: {}, categoryMap: {} };
   }
 
   const itemIds = items.map((i) => i._id);
   const vendorIds = [...new Set(items.map((i) => i.vendor_id?.toString()).filter(Boolean))];
+  const platformCategoryIds = [
+    ...new Set(items.map((i) => i.platform_category_id?.toString()).filter(Boolean)),
+  ];
 
-  const [vendors, allPortions] = await Promise.all([
+  const [vendors, allPortions, allCategories] = await Promise.all([
     vendorModel
       .find(
         { _id: { $in: vendorIds } },
@@ -109,6 +112,8 @@ const bulkFetchItemSupport = async (items) => {
     MenuItemPortion.find({ menu_item_id: { $in: itemIds } })
       .sort({ price_naira: 1 })
       .lean(),
+
+    Category.find({ _id: { $in: platformCategoryIds } }).populate("parent").lean(),
   ]);
 
   // Bulk resolve delivery fees for all unique cities in these vendors
@@ -151,7 +156,13 @@ const bulkFetchItemSupport = async (items) => {
     portionsMap[key].push(p);
   });
 
-  return { vendorMap, priceMap, portionsMap };
+  // Build categoryMap
+  const categoryMap = {};
+  allCategories.forEach((cat) => {
+    categoryMap[cat._id.toString()] = cat;
+  });
+
+  return { vendorMap, priceMap, portionsMap, categoryMap };
 };
 
 /**
@@ -162,9 +173,10 @@ const bulkFetchItemSupport = async (items) => {
  * @param {Object} vendorMap  - { vendorId: vendorDoc }
  * @param {Object} priceMap   - { itemId: cheapestPortion }
  */
-const shapeSearchResult = (item, vendorMap, priceMap) => {
+const shapeSearchResult = (item, vendorMap, priceMap, categoryMap) => {
   const vendor = vendorMap[item.vendor_id?.toString()] || {};
   const cheapest = priceMap[item._id.toString()];
+  const platformCategory = categoryMap[item.platform_category_id?.toString()];
 
   return {
     _id: item._id,
@@ -180,6 +192,20 @@ const shapeSearchResult = (item, vendorMap, priceMap) => {
     tags: item.tags || [],
     portions: [], // populated below if needed
     choiceGroups: item.choice_groups || [],
+    platform_category: platformCategory
+      ? {
+          id: platformCategory._id,
+          name: platformCategory.name,
+          slug: platformCategory.slug,
+          parent: platformCategory.parent
+            ? {
+                id: platformCategory.parent._id,
+                name: platformCategory.parent.name,
+                slug: platformCategory.parent.slug,
+              }
+            : null,
+        }
+      : null,
     restaurant: {
       _id: vendor._id,
       storeName: vendor.storeName,
@@ -272,11 +298,11 @@ export const autocompleteFoods = async (req, res) => {
     }
 
     // ── Bulk fetch support data ──────────────────────
-    const { vendorMap, priceMap, portionsMap } = await bulkFetchItemSupport(items);
+    const { vendorMap, priceMap, portionsMap, categoryMap } = await bulkFetchItemSupport(items);
 
     // ── Shape response ───────────────────────────────
     const suggestions = items.map((item) => {
-      const shaped = shapeSearchResult(item, vendorMap, priceMap);
+      const shaped = shapeSearchResult(item, vendorMap, priceMap, categoryMap);
       // Autocomplete includes all portions for cart use
       shaped.portions = (portionsMap[item._id.toString()] || []).map((p) => ({
         _id: p._id,
@@ -492,11 +518,11 @@ export const searchFoods = async (req, res) => {
     ]);
 
     // ── Bulk fetch support data ──────────────────────
-    const { vendorMap, priceMap, portionsMap } = await bulkFetchItemSupport(items);
+    const { vendorMap, priceMap, portionsMap, categoryMap } = await bulkFetchItemSupport(items);
 
     // ── Shape results ────────────────────────────────
     const data = items.map((item) => {
-      const shaped = shapeSearchResult(item, vendorMap, priceMap);
+      const shaped = shapeSearchResult(item, vendorMap, priceMap, categoryMap);
       shaped.portions = (portionsMap[item._id.toString()] || []).map((p) => ({
         _id: p._id,
         label: p.label,

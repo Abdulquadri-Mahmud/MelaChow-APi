@@ -163,6 +163,10 @@ export const getFoodReviews = async (req, res) => {
         "vendor_id", 
         "storeName address.city deliveryManagedBy flatRateDeliveryFee platformDeliveryFeeOverride"
       )
+      .populate({
+        path: "platform_category_id",
+        populate: { path: "parent" }
+      })
       .lean();
     if (!food) {
       return res.status(404).json({ 
@@ -233,7 +237,6 @@ export const getFoodReviews = async (req, res) => {
         ? Math.round((ratingDistribution[rating] / totalActualReviews) * 100) 
         : 0;
     });
-
     // Fetch cheapest portion for price
     const cheapestPortion = await MenuItemPortion.findOne(
       { menu_item_id: food._id },
@@ -263,6 +266,8 @@ export const getFoodReviews = async (req, res) => {
       ? calculatedRating.totalReviews 
       : food.ratingCount || 0;
 
+    const pc = food.platform_category_id;
+
     res.status(200).json({
       success: true,
       data: {
@@ -273,6 +278,20 @@ export const getFoodReviews = async (req, res) => {
           portion_label: cheapestPortion?.label ?? null,
           image: food.image_url || "",
           deliveryFee: resolvedDeliveryFee,
+          platform_category: pc
+            ? {
+                id: pc._id,
+                name: pc.name,
+                slug: pc.slug,
+                parent: pc.parent
+                  ? {
+                      id: pc.parent._id,
+                      name: pc.parent.name,
+                      slug: pc.parent.slug,
+                    }
+                  : null,
+              }
+            : null,
           averageRating: accurateAverageRating,
           totalReviews: accurateTotalReviews,
           storedRating: food.rating || 0, // For comparison/debugging

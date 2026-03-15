@@ -3,6 +3,7 @@ import MenuItemPortion from "../../model/menu/MenuItemPortion.js";
 import { MenuItemChoiceGroup } from "../../model/menu/MenuItemChoice.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 import City from "../../model/location/City.js";
+import Category from "../../model/category.model.js";
 
 /**
  * @desc    Get foods by location (City & State)
@@ -101,7 +102,7 @@ export const getFoodsByLocation = async (req, res) => {
       .select(
         "_id name image_url item_type dietary_type " +
         "description tags prep_time_minutes " +
-        "vendor_id"
+        "vendor_id platform_category_id"
       )
       .lean();
 
@@ -116,9 +117,10 @@ export const getFoodsByLocation = async (req, res) => {
     }
 
     const itemIds = items.map((i) => i._id);
+    const platformCategoryIds = [...new Set(items.map((i) => i.platform_category_id?.toString()).filter(Boolean))];
 
-    // ── STEP 5: Bulk fetch portions & choice groups ───
-    const [allPortions, allChoiceGroups] = await Promise.all([
+    // ── STEP 5: Bulk fetch portions, choice groups & categories ───
+    const [allPortions, allChoiceGroups, allCategories] = await Promise.all([
       MenuItemPortion.find({
         menu_item_id: { $in: itemIds },
         is_available: true,
@@ -130,11 +132,17 @@ export const getFoodsByLocation = async (req, res) => {
       })
         .sort({ sort_order: 1 })
         .lean(),
+      Category.find({ _id: { $in: platformCategoryIds } }).populate("parent").lean(),
     ]);
 
     const portionsMap = {};
     const cheapestMap = {};
     const choiceGroupsMap = {};
+    const categoryMap = {};
+
+    allCategories.forEach((cat) => {
+      categoryMap[cat._id.toString()] = cat;
+    });
 
     allPortions.forEach((p) => {
       const key = p.menu_item_id.toString();
@@ -156,6 +164,7 @@ export const getFoodsByLocation = async (req, res) => {
       const cheapest = cheapestMap[key];
       const portions = portionsMap[key] || [];
       const choiceGroups = choiceGroupsMap[key] || [];
+      const platformCategory = categoryMap[item.platform_category_id?.toString()];
 
       return {
         _id: item._id,
@@ -169,6 +178,20 @@ export const getFoodsByLocation = async (req, res) => {
         dietary_type: item.dietary_type,
         tags: item.tags || [],
         prep_time_minutes: item.prep_time_minutes || null,
+        platform_category: platformCategory
+          ? {
+              id: platformCategory._id,
+              name: platformCategory.name,
+              slug: platformCategory.slug,
+              parent: platformCategory.parent
+                ? {
+                    id: platformCategory.parent._id,
+                    name: platformCategory.parent.name,
+                    slug: platformCategory.parent.slug,
+                  }
+                : null,
+            }
+          : null,
         portions: portions.map((p) => ({
           _id: p._id,
           label: p.label,
