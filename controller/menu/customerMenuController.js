@@ -426,7 +426,13 @@ export const getFullVendorMenu = async (req, res) => {
                 is_available:      variant.is_available,
                 prep_time_minutes: variant.prep_time_minutes || null,
                 tags:              variant.tags || [],
-                components,
+                components: components.map(c => {
+                    const item = comboItemMap[c.menu_item_id?.toString()];
+                    return {
+                        ...c,
+                        platform_category: item?.platform_category_id ? categoryMap[item.platform_category_id.toString()] : null
+                    };
+                }),
                 swap_groups,
             };
         });
@@ -449,6 +455,29 @@ export const getFullVendorMenu = async (req, res) => {
         const allPortions = await MenuItemPortion.find({
             menu_item_id: { $in: itemIds },
         }).lean();
+
+        // Collect all unique platform category IDs for bulk fetching
+        const allCategoryIds = [
+            ...new Set([
+                ...items.map(i => i.platform_category_id?.toString()),
+                ...comboItems.map(i => i.platform_category_id?.toString())
+            ].filter(Boolean))
+        ];
+
+        const allCategories = await Category.find({
+            _id: { $in: allCategoryIds }
+        }).populate('parent').lean();
+
+        // Build a category map
+        const categoryMap = {};
+        allCategories.forEach(cat => {
+            categoryMap[cat._id.toString()] = {
+                id: cat._id,
+                name: cat.name,
+                slug: cat.slug,
+                parent: cat.parent ? { id: cat.parent._id, name: cat.parent.name, slug: cat.parent.slug } : null
+            };
+        });
 
         // Build a map: itemId → portions array
         const portionsByItem = {};
@@ -475,6 +504,7 @@ export const getFullVendorMenu = async (req, res) => {
                 prep_time_minutes: item.prep_time_minutes,
                 tags:             item.tags,
                 vendor_section_id: item.vendor_section_id,
+                platform_category: item.platform_category_id ? categoryMap[item.platform_category_id.toString()] : null,
                 portions: {
                     count:                portions.length,
                     default_price_naira:  defPortion

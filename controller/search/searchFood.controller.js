@@ -22,6 +22,7 @@ import MenuItem from "../../model/menu/MenuItem.js";
 import MenuItemPortion from "../../model/menu/MenuItemPortion.js";
 import Category from "../../model/category.model.js";
 import vendorModel from "../../model/vendor/vendor.model.js";
+import City from "../../model/location/City.js";
 
 /**
  * Resolve vendorIds in the user's city.
@@ -90,26 +91,59 @@ const resolveLocationVendors = async (req, overrideCity, overrideState) => {
  */
 const bulkFetchItemSupport = async (items) => {
   if (!items.length) {
-    return { vendorMap: {}, priceMap: {}, portionsMap: {} };
+    return { vendorMap: {}, priceMap: {}, portionsMap: {}, categoryMap: {} };
   }
 
   const itemIds = items.map((i) => i._id);
   const vendorIds = [...new Set(items.map((i) => i.vendor_id?.toString()).filter(Boolean))];
+  const platformCategoryIds = [
+    ...new Set(items.map((i) => i.platform_category_id?.toString()).filter(Boolean)),
+  ];
 
-  const [vendors, allPortions] = await Promise.all([
+  const [vendors, allPortions, allCategories] = await Promise.all([
     vendorModel
-      .find({ _id: { $in: vendorIds } }, "storeName logo storeSlug address rating openingHours")
+      .find(
+        { _id: { $in: vendorIds } },
+        "storeName logo storeSlug address rating openingHours " +
+          "deliveryManagedBy flatRateDeliveryFee platformDeliveryFeeOverride"
+      )
       .lean(),
 
     MenuItemPortion.find({ menu_item_id: { $in: itemIds } })
       .sort({ price_naira: 1 })
       .lean(),
+
+    Category.find({ _id: { $in: platformCategoryIds } }).populate("parent").lean(),
   ]);
 
-  // Build vendorMap
+  // Bulk resolve delivery fees for all unique cities in these vendors
+  const cityNames = [...new Set(vendors.map((v) => v.address?.city).filter(Boolean))];
+  const cities = await City.find({
+    name: { $in: cityNames.map((c) => new RegExp(`^${c}$`, "i")) },
+  }).lean();
+
+  const cityFeeMap = {};
+  cities.forEach((c) => {
+    cityFeeMap[c.name.toLowerCase()] = c.platformDeliveryFee || 0;
+  });
+
+  // Build vendorMap with resolved fees
   const vendorMap = {};
   vendors.forEach((v) => {
-    vendorMap[v._id.toString()] = v;
+    let resolvedFee = 0;
+    if (v.deliveryManagedBy === "vendor") {
+      resolvedFee = v.flatRateDeliveryFee || 0;
+    } else if (v.platformDeliveryFeeOverride != null && v.platformDeliveryFeeOverride > 0) {
+      resolvedFee = v.platformDeliveryFeeOverride;
+    } else {
+      const cityName = v.address?.city?.toLowerCase();
+      resolvedFee = cityFeeMap[cityName] || 0;
+    }
+
+    vendorMap[v._id.toString()] = {
+      ...v,
+      resolvedDeliveryFee: resolvedFee,
+    };
   });
 
   // Build priceMap (cheapest) + portionsMap (all)
@@ -122,7 +156,13 @@ const bulkFetchItemSupport = async (items) => {
     portionsMap[key].push(p);
   });
 
-  return { vendorMap, priceMap, portionsMap };
+  // Build categoryMap
+  const categoryMap = {};
+  allCategories.forEach((cat) => {
+    categoryMap[cat._id.toString()] = cat;
+  });
+
+  return { vendorMap, priceMap, portionsMap, categoryMap };
 };
 
 /**
@@ -133,22 +173,18 @@ const bulkFetchItemSupport = async (items) => {
  * @param {Object} vendorMap  - { vendorId: vendorDoc }
  * @param {Object} priceMap   - { itemId: cheapestPortion }
  */
-const shapeSearchResult = (item, vendorMap, priceMap) => {
+const shapeSearchResult = (item, vendorMap, priceMap, categoryMap) => {
   const vendor = vendorMap[item.vendor_id?.toString()] || {};
   const cheapest = priceMap[item._id.toString()];
+  const platformCategory = categoryMap[item.platform_category_id?.toString()];
 
   return {
     _id: item._id,
     name: item.name,
     image: item.image_url || "",
-    price: cheapest ? cheapest.price / 100 : null, // price_naira field is actually stored in Naira in MenuItemPortion if prompt is followed, but in getFoodsByLocation it was p.price / 100.
-    // Looking at the prompt: p.price_naira is specified for suggestions.map in STEP 5.
-    // Re-check MenuItemPortion migration: typically price is in kobo.
-    // In searchFoods STEP 3 shapeSearchResult result shows price: cheapest?.price_naira ?? null.
-    // In searchFoods STEP 5 autocomplete suggestions shows price_naira: p.price_naira.
-    // I will use price_naira as provided in the prompt's STEP 3 snippet.
-    price: cheapest?.price_naira ?? null,
+    price: cheapest ? cheapest.price / 100 : null,
     portionLabel: cheapest?.label ?? null,
+    deliveryFee: vendor.resolvedDeliveryFee || 0,
     item_type: item.item_type,
     dietary_type: item.dietary_type,
     rating: item.rating || 0,
@@ -156,6 +192,20 @@ const shapeSearchResult = (item, vendorMap, priceMap) => {
     tags: item.tags || [],
     portions: [], // populated below if needed
     choiceGroups: item.choice_groups || [],
+    platform_category: platformCategory
+      ? {
+          id: platformCategory._id,
+          name: platformCategory.name,
+          slug: platformCategory.slug,
+          parent: platformCategory.parent
+            ? {
+                id: platformCategory.parent._id,
+                name: platformCategory.parent.name,
+                slug: platformCategory.parent.slug,
+              }
+            : null,
+        }
+      : null,
     restaurant: {
       _id: vendor._id,
       storeName: vendor.storeName,
@@ -248,16 +298,16 @@ export const autocompleteFoods = async (req, res) => {
     }
 
     // ── Bulk fetch support data ──────────────────────
-    const { vendorMap, priceMap, portionsMap } = await bulkFetchItemSupport(items);
+    const { vendorMap, priceMap, portionsMap, categoryMap } = await bulkFetchItemSupport(items);
 
     // ── Shape response ───────────────────────────────
     const suggestions = items.map((item) => {
-      const shaped = shapeSearchResult(item, vendorMap, priceMap);
+      const shaped = shapeSearchResult(item, vendorMap, priceMap, categoryMap);
       // Autocomplete includes all portions for cart use
       shaped.portions = (portionsMap[item._id.toString()] || []).map((p) => ({
         _id: p._id,
         label: p.label,
-        price_naira: p.price_naira,
+        price_naira: p.price / 100,
         is_default: p.is_default,
       }));
       return shaped;
@@ -468,15 +518,15 @@ export const searchFoods = async (req, res) => {
     ]);
 
     // ── Bulk fetch support data ──────────────────────
-    const { vendorMap, priceMap, portionsMap } = await bulkFetchItemSupport(items);
+    const { vendorMap, priceMap, portionsMap, categoryMap } = await bulkFetchItemSupport(items);
 
     // ── Shape results ────────────────────────────────
     const data = items.map((item) => {
-      const shaped = shapeSearchResult(item, vendorMap, priceMap);
+      const shaped = shapeSearchResult(item, vendorMap, priceMap, categoryMap);
       shaped.portions = (portionsMap[item._id.toString()] || []).map((p) => ({
         _id: p._id,
         label: p.label,
-        price_naira: p.price_naira,
+        price_naira: p.price / 100,
         is_default: p.is_default,
       }));
       return shaped;
