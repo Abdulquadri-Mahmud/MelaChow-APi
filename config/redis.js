@@ -7,8 +7,13 @@ const redisConfig = {
     lazyConnect: true,
     maxRetriesPerRequest: 1,
     retryStrategy(times) {
-        const delay = Math.min(times * 50, 2000);
-        return delay;
+        if (times > 5) {
+            // Stop retrying after 5 attempts
+            // null tells ioredis to stop — system falls back to MongoDB
+            console.warn('⚠️ Redis retry limit reached — giving up, caching disabled');
+            return null;
+        }
+        return Math.min(times * 200, 2000);
     }
 };
 
@@ -27,7 +32,7 @@ const redisClients = [
 
 redisClients.forEach(({ client, name }) => {
     client.on('error', (err) => {
-        console.warn(`⚠️ Redis [${name}] error:`, err.message);
+        console.warn(`⚠️ Redis [${name}] error:`, err.message || err.code || String(err));
     });
     client.on('connect', () => {
         console.log(`✅ Redis [${name}] connected`);
