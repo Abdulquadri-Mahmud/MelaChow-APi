@@ -400,6 +400,18 @@ export const createOrderV2 = async ({
               type:         "combo",
               variantId:    combo._id,
               foodId:       null,
+              portionId:    null,
+
+              // ── New explicit fields ──
+              portion_label:    "",
+              portion_quantity: 1,
+              dietary_type:     "",
+              item_type:        "combo",
+              storeName:        cartItem.storeName || "",
+
+              // selected_options empty for combos — swaps live in metadata
+              selected_options: [],
+
               restaurantId: cartItem.restaurantId,
               name:         combo.name,
               image_url:    combo.image_url || "",
@@ -411,6 +423,8 @@ export const createOrderV2 = async ({
               quantity: Number(cartItem.quantity),
               price:    unitPrice,
               note:     cartItem.note || "",
+
+              // ── metadata retained for backward compatibility ──
               metadata: {
                 type:              "combo",
                 selected_swaps:    normalizedSwaps,
@@ -459,6 +473,26 @@ export const createOrderV2 = async ({
               type:         "item",
               foodId:       menuItem._id,
               variantId:    null,
+
+              // ── New explicit fields ──
+              portionId:        portion._id,
+              portion_label:    portion.label,
+              portion_quantity: Number(cartItem.portion_quantity) || 1,
+              dietary_type:     menuItem.dietary_type || "",
+              item_type:        menuItem.item_type    || "",
+              storeName:        cartItem.storeName    || "",
+
+              // ── Selected options as explicit array ──
+              // Mirrors metadata.selected_options for queryability
+              selected_options: normalizedChoices.map(c => ({
+                group_id:             c.group_id,
+                group_name:           c.group_name,
+                option_id:            c.option_id,
+                label:                c.label,
+                price_modifier_naira: c.price_modifier_naira || 0,
+                quantity:             c.quantity || 1,
+              })),
+
               restaurantId: cartItem.restaurantId,
               name:         menuItem.name,
               image_url:    menuItem.image_url || "",
@@ -470,11 +504,15 @@ export const createOrderV2 = async ({
               quantity: Number(cartItem.quantity),
               price:    unitPrice,
               note:     cartItem.note || "",
+
+              // ── metadata retained for backward compatibility ──
               metadata: {
                 type:             "item",
                 portionId:        portion._id,
                 portion_label:    portion.label,
                 selected_options: normalizedChoices,
+                dietary_type:     menuItem.dietary_type || "",
+                item_type:        menuItem.item_type    || "",
                 pricing: {
                   base_naira:    portion.price / 100,
                   options_total: normalizedChoices.reduce(
@@ -863,12 +901,40 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
                     restaurantId: vendorId,
                     userOrderId: order._id,
                     items: vendorItems.map(item => ({
-                        foodId: item.foodId,
-                        variant: item.variant,
-                        quantity: item.quantity,
-                        originalPrice: item.price,
-                        vendorEarning: Number((item.price * (1 - PLATFORM_COMMISSION)).toFixed(2)),
-                        metadata: item.metadata
+                      // ── Type & References ──
+                      type:      item.type      || "item",
+                      foodId:    item.foodId    || null,
+                      variantId: item.variantId || null,
+                      portionId: item.portionId || null,
+
+                      // ── Display fields ──
+                      name:          item.name          || "",
+                      image_url:     item.image_url     || "",
+                      portion_label: item.portion_label || "",
+                      storeName:     item.storeName     || "",
+                      variant:       item.variant       || {},
+
+                      // ── Quantities ──
+                      quantity:         item.quantity         || 1,
+                      portion_quantity: item.portion_quantity || 1,
+
+                      // ── Pricing ──
+                      originalPrice: item.price,
+                      vendorEarning: Number(
+                        (item.price * (1 - PLATFORM_COMMISSION)).toFixed(2)
+                      ),
+
+                      // ── Dietary & category ──
+                      dietary_type: item.dietary_type || "",
+                      item_type:    item.item_type    || "",
+
+                      // ── Selected options ──
+                      selected_options: item.selected_options || [],
+
+                      note: item.note || "",
+
+                      // ── Backward compatibility ──
+                      metadata: item.metadata || {},
                     })),
                     commission,
                     vendorTotal,
@@ -880,6 +946,8 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
             ],
             { session }
         );
+
+        console.log(`✅ VendorOrder created with explicit item fields for vendor ${vendorId}`);
 
         vendorOrderMapping[vendorId] = vendorOrder._id;
 
