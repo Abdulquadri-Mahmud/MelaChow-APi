@@ -51,6 +51,11 @@ const vendorOrderSchema = new mongoose.Schema(
       ],
       default: "pending",
     },
+    riderId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Rider",
+      default: null,
+    },
   },
   { timestamps: true }
 );

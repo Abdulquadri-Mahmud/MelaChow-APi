@@ -472,3 +472,237 @@ export const getCommissionLedger = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+/**
+ * Admin assigns a rider to a platform-managed order
+ * Called when vendor marks order ready_for_pickup and 
+ * deliveryManagedBy === 'admin'
+ * 
+ * PATCH /api/admin/orders/:vendorOrderId/assign-rider
+ * Body: { riderId }
+ */
+export const assignRiderToOrder = async (req, res) => {
+    // Step 3: Get Socket IO Instance
+    const io = req.app.get('io');
+    if (!io) {
+        console.warn('⚠️ Socket.IO instance not available for rider notification');
+    }
+
+    const { vendorOrderId } = req.params;
+    const { riderId } = req.body;
+
+    // Step 4: Validation Helper
+    const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
+
+    if (!vendorOrderId || !isValidObjectId(vendorOrderId)) {
+        return res.status(400).json({
+            success: false,
+            message: 'Invalid vendor order ID format'
+        });
+    }
+
+    if (!riderId || !isValidObjectId(riderId)) {
+        return res.status(400).json({
+            success: false,
+            message: 'riderId is required and must be a valid ID'
+        });
+    }
+
+    try {
+        // Step 2: Find the VendorOrder
+        const vendorOrder = await VendorOrder.findById(vendorOrderId).populate("userOrderId");
+        if (!vendorOrder) {
+            return res.status(404).json({
+                success: false,
+                message: "Vendor order not found"
+            });
+        }
+
+        const masterOrder = vendorOrder.userOrderId;
+        if (!masterOrder) {
+            return res.status(404).json({
+                success: false,
+                message: "Master order not found"
+            });
+        }
+
+        // Step 3: Validate the order is in the correct state
+        const validStatuses = ['ready_for_pickup', 'ready'];
+        if (!validStatuses.includes(vendorOrder.orderStatus)) {
+            return res.status(400).json({
+                success: false,
+                message: `Order cannot be assigned a rider at this stage. Current status: ${vendorOrder.orderStatus}. Order must be ready_for_pickup before rider assignment.`
+            });
+        }
+
+        // Step 4: Find and validate the Rider
+        const Rider = (await import("../../../model/rider.model.js")).default;
+        const rider = await Rider.findById(riderId);
+        if (!rider) {
+            return res.status(404).json({
+                success: false,
+                message: "Rider not found"
+            });
+        }
+
+        // Check availability (status virtual isAvailable: status === "available" && isActive && !deletedAt)
+        if (rider.status !== 'available' || !rider.isActive || rider.deletedAt) {
+            return res.status(400).json({
+                success: false,
+                message: "This rider is currently unavailable or on another delivery"
+            });
+        }
+
+        // Step 6: Find the Vendor
+        const vendor = await Vendor.findById(vendorOrder.restaurantId).select('storeName deliveryManagedBy');
+
+        // Step 7: Perform the database updates atomically using Promise.allSettled
+        const updatePromises = [
+            // a) Update VendorOrder
+            VendorOrder.updateOne(
+                { _id: vendorOrderId },
+                { $set: { orderStatus: 'rider_assigned', riderId: riderId } }
+            ),
+            // b) Update master Order
+            Order.updateOne(
+                { _id: masterOrder._id },
+                { $set: { orderStatus: 'rider_assigned', riderId: riderId } } // Also set riderId on master order as seen in schema
+            ),
+            // c) Update Rider availability
+            Rider.updateOne(
+                { _id: riderId },
+                { 
+                    $set: { 
+                        status: 'on_delivery', 
+                        currentOrderId: masterOrder._id // The schema says currentOrderId ref "Order"
+                    } 
+                }
+            )
+        ];
+
+        const results = await Promise.allSettled(updatePromises);
+
+        // Check critical updates (a and b)
+        if (results[0].status === 'rejected' || results[1].status === 'rejected') {
+            const error = results[0].reason || results[1].reason;
+            console.error('❌ Critical database update failed:', error.message);
+            return res.status(500).json({
+                success: false,
+                message: 'Failed to assign rider to order',
+                error: error.message
+            });
+        }
+
+        if (results[2].status === 'rejected') {
+            console.warn('⚠️ Rider availability update failed:', results[2].reason?.message);
+        }
+
+        console.log('✅ Database updates completed successfully');
+
+        // Step 8: Fire socket events (non-fatal)
+        const { emitToRestaurant, emitToOrder, emitToAdmin } = await import("../../../socket/socketServer.js");
+
+        try {
+            // a) Notify the assigned rider
+            io?.to(`rider:${riderId}`).emit('order_assigned', {
+                orderId: vendorOrder._id,
+                userOrderId: masterOrder._id,
+                vendorName: vendor?.storeName,
+                deliveryAddress: masterOrder.deliveryAddress,
+                items: vendorOrder.items,
+                assignedAt: new Date().toISOString()
+            });
+            console.log(`✅ Socket: Order assigned event emitted to rider:${riderId}`);
+        } catch (e) { console.error('⚠️ Socket error (rider):', e.message); }
+
+        try {
+            // b) Notify the vendor
+            emitToRestaurant(vendorOrder.restaurantId, 'order_status_update', {
+                orderId: vendorOrder._id,
+                status: 'rider_assigned',
+                riderId: riderId,
+                riderName: rider.name,
+                message: 'A rider has been assigned to your order'
+            });
+            console.log(`✅ Socket: Order status update emitted to vendor:${vendorOrder.restaurantId}`);
+        } catch (e) { console.error('⚠️ Socket error (vendor):', e.message); }
+
+        try {
+            // c) Notify the customer
+            emitToOrder(masterOrder._id, 'order_status_update', {
+                orderId: masterOrder._id,
+                status: 'rider_assigned',
+                message: 'A delivery rider has been assigned to your order'
+            });
+            console.log(`✅ Socket: Order status update emitted to order:${masterOrder._id}`);
+        } catch (e) { console.error('⚠️ Socket error (customer):', e.message); }
+
+        try {
+            // d) Confirm to admin
+            emitToAdmin(null, 'rider_assignment_confirmed', {
+                vendorOrderId: vendorOrder._id,
+                riderId: riderId,
+                riderName: rider.name,
+                restaurantName: vendor?.storeName,
+                confirmedAt: new Date().toISOString()
+            });
+            console.log('✅ Socket: Rider assignment confirmed emitted to admins');
+        } catch (e) { console.error('⚠️ Socket error (admin):', e.message); }
+
+        // Step 9: Fire push notifications (non-fatal)
+        try {
+            const { sendOrderNotification, sendVendorNotification } = await import("../../../services/notification.service.js");
+            
+            // a) Notify customer via push
+            await sendOrderNotification(
+                masterOrder.userId,
+                masterOrder.orderId || masterOrder._id,
+                'rider_assigned',
+                {
+                    restaurantName: vendor?.storeName,
+                    orderDatabaseId: vendorOrder._id
+                }
+            );
+            console.log('✅ Push: Customer notification sent');
+        } catch (e) { console.error('⚠️ Push error (customer):', e.message); }
+
+        try {
+            const { sendVendorNotification } = await import("../../../services/notification.service.js");
+            // b) Notify vendor via push
+            await sendVendorNotification(
+                vendorOrder.restaurantId,
+                masterOrder.orderId || masterOrder._id,
+                'vendor_new_order',
+                {
+                    orderDatabaseId: vendorOrder._id,
+                    customerName: 'Rider Assigned',
+                    message: `Rider ${rider.name} has been assigned`,
+                }
+            );
+            console.log('✅ Push: Vendor notification sent');
+        } catch (e) { console.error('⚠️ Push error (vendor):', e.message); }
+
+        // Step 10: Return success response
+        res.status(200).json({
+            success: true,
+            message: `Rider ${rider.name} successfully assigned to order`,
+            data: {
+                vendorOrderId: vendorOrder._id,
+                orderId: masterOrder.orderId || masterOrder._id,
+                riderId: rider._id,
+                riderName: rider.name,
+                riderPhone: rider.phone,
+                status: 'rider_assigned',
+                assignedAt: new Date().toISOString()
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ assignRiderToOrder error:', error.message);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to assign rider to order',
+            error: error.message
+        });
+    }
+};
