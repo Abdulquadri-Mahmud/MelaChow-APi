@@ -5,7 +5,8 @@ import {
     getOrderStats,
     adminOverrideOrderStatus,
     getPlatformManagedOrders,
-    getCommissionLedger
+    getCommissionLedger,
+    assignRiderToOrder
 } from "../../controller/Admin/order_management/adminOrder.controller.js";
 import { adminAuth } from "../../middleware/adminAuth.js";
 
@@ -22,5 +23,8 @@ router.get("/:orderId", adminAuth, getSingleOrder);
 
 // Status overrides
 router.patch("/:orderId/status", adminAuth, adminOverrideOrderStatus);
+
+// Rider Assignment
+router.patch("/:vendorOrderId/assign-rider", adminAuth, assignRiderToOrder);
 
 export default router;
