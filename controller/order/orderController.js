@@ -333,14 +333,30 @@ export const completeOrderFulfillment = async (orderId) => {
             restaurantId: vendorId,
             userOrderId: order._id,
             items: vendorItems.map((i) => ({
-              foodId: i.foodId,
-              variantId: i.variantId,
-              variant: i.variant,
-              quantity: i.quantity,
+              type:      i.type      || "item",
+              foodId:    i.foodId    || null,
+              variantId: i.variantId || null,
+              portionId: i.portionId || null,
+
+              name:          i.name          || "",
+              image_url:     i.image_url     || "",
+              portion_label: i.portion_label || "",
+              storeName:     i.storeName     || "",
+              variant:       i.variant       || {},
+
+              quantity:         i.quantity         || 1,
+              portion_quantity: i.portion_quantity || 1,
+
               originalPrice: i.price,
               vendorEarning: Number(
                 (i.price * (1 - PLATFORM_PERCENT)).toFixed(2)
               ),
+
+              dietary_type:     i.dietary_type     || "",
+              item_type:        i.item_type        || "",
+              selected_options: i.selected_options || [],
+
+              note: i.note || "",
               metadata: i.metadata || {},
             })),
             commission: adminShare,

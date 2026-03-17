@@ -4,40 +4,108 @@ import mongoose from "mongoose";
  * Schema for each item in an order
  * (NO delivery fee here)
  */
+/**
+ * selected_options subdocument — one entry per customer choice
+ * e.g. "Amala (1 wrap) +₦300" selected from "Choose your swallow" group
+ */
+const selectedOptionSchema = new mongoose.Schema(
+  {
+    group_id:             { type: mongoose.Schema.Types.ObjectId, default: null },
+    group_name:           { type: String, default: "" },
+    option_id:            { type: mongoose.Schema.Types.ObjectId, default: null },
+    label:                { type: String, default: "" },
+    price_modifier_naira: { type: Number, default: 0 },
+    quantity:             { type: Number, default: 1 },
+  },
+  { _id: false }
+);
+
+/**
+ * Schema for each item in an order
+ * Explicit fields for all cart payload properties.
+ * metadata field retained for backward compatibility.
+ */
 const orderItemSchema = new mongoose.Schema({
+
   // ─── Type discriminator ───────────────────────
   type: {
-    type: String,
-    enum: ["item", "combo"],
+    type:    String,
+    enum:    ["item", "combo"],
     default: "item",
   },
-  
+
   // ─── Food item fields ─────────────────────────
   // foodId refs MenuItem (not legacy Food model)
   foodId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "MenuItem",
+    type:    mongoose.Schema.Types.ObjectId,
+    ref:     "MenuItem",
+    default: null,
+  },
+
+  // ─── Portion reference (food items only) ──────
+  portionId: {
+    type:    mongoose.Schema.Types.ObjectId,
+    ref:     "MenuItemPortion",
     default: null,
   },
 
   // ─── Combo fields ─────────────────────────────
   variantId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: "MenuVariant",
+    type:    mongoose.Schema.Types.ObjectId,
+    ref:     "MenuVariant",
     default: null,
   },
 
   // ─── Shared fields ────────────────────────────
   restaurantId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: "Vendor",
+    ref:  "Vendor",
   },
-  variant: { type: Object, default: {} },
-  name: { type: String },
+
+  // Cached store name — avoids populate on display
+  storeName: { type: String, default: "" },
+
+  variant:   { type: Object, default: {} },
+  name:      { type: String, default: "" },
   image_url: { type: String, default: "" },
+
+  // portion_label: human-readable size label (e.g. "Small Bowl")
+  portion_label: { type: String, default: "" },
+
+  // quantity: total number of this configured item
   quantity: { type: Number, required: true },
+
+  // portion_quantity: multiplier for the portion itself
+  // (e.g. 2 x Small Bowl as a single cart entry)
+  // Defaults to 1 — most items will not use this
+  portion_quantity: { type: Number, default: 1 },
+
   price: { type: Number, required: true },
-  note: { type: String, default: "" },
+  note:  { type: String, default: "" },
+
+  // ─── Dietary & category metadata ──────────────
+  // Stored explicitly for filtering and analytics
+  dietary_type: {
+    type:    String,
+    enum:    ["veg", "non-veg", "vegan", "halal", "kosher", "mixed", ""],
+    default: "",
+  },
+  item_type: {
+    type:    String,
+    enum:    ["FOOD", "DRINK", "SIDE", "PROTEIN", "SWALLOW",
+              "SOUP", "DESSERT", "OTHER", "combo", ""],
+    default: "",
+  },
+
+  // ─── Selected options (explicit subdocument) ──
+  // Promoted from metadata.selected_options for queryability
+  selected_options: {
+    type:    [selectedOptionSchema],
+    default: [],
+  },
+
+  // ─── Kept for backward compatibility ──────────
+  // Existing orders have data here. Do not remove.
   metadata: { type: Object, default: {} },
 });
 
