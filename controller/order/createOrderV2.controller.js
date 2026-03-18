@@ -101,6 +101,7 @@ const validatePortionAndChoices = async (menuItem, cartItem) => {
         price_modifier_naira: Math.round(
           (option.price_modifier || 0) / 100
         ),
+        quantity:             Number(sel.quantity) || 1,
       });
     }
 
@@ -125,7 +126,7 @@ const validatePortionAndChoices = async (menuItem, cartItem) => {
   const portionQty   = Number(cartItem.portion_quantity) || 1;
   const basePrice    = (portion.price / 100) * portionQty;
   const optionsTotal = normalizedChoices.reduce(
-    (sum, c) => sum + (c.price_modifier_naira || 0), 0
+    (sum, c) => sum + (c.price_modifier_naira || 0) * (c.quantity || 1), 0
   );
   const unitPrice = basePrice + optionsTotal;
 
