@@ -120,7 +120,10 @@ const validatePortionAndChoices = async (menuItem, cartItem) => {
 
   // 3. Calculate price
   // MenuItemPortion.price is stored in KOBO — convert to naira
-  const basePrice    = portion.price / 100;
+  // Multiply by portion_quantity so the backend matches what the
+  // frontend already sent (portionQty × portion.price) as unitPrice.
+  const portionQty   = Number(cartItem.portion_quantity) || 1;
+  const basePrice    = (portion.price / 100) * portionQty;
   const optionsTotal = normalizedChoices.reduce(
     (sum, c) => sum + (c.price_modifier_naira || 0), 0
   );
@@ -514,7 +517,7 @@ export const createOrderV2 = async ({
                 dietary_type:     menuItem.dietary_type || "",
                 item_type:        menuItem.item_type    || "",
                 pricing: {
-                  base_naira:    portion.price / 100,
+                  base_naira:    (portion.price / 100) * (Number(cartItem.portion_quantity) || 1),
                   options_total: normalizedChoices.reduce(
                     (s, c) => s + c.price_modifier_naira, 0
                   ),
