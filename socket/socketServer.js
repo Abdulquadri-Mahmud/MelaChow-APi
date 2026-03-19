@@ -285,6 +285,16 @@ export function emitToRestaurant(restaurantId, event, data) {
 }
 
 /**
+ * Emit event to specific rider room
+ */
+export function emitToRider(riderId, event, data) {
+    if (!io) { console.error('Socket.IO not initialized'); return; }
+    // Match the room format used in rider_connect
+    io.to(`rider:${riderId}`).emit(event, data);
+    console.log(`📤 Emitted '${event}' to rider ${riderId}`);
+}
+
+/**
  * Emit event to admin(s)
  */
 export function emitToAdmin(adminId, event, data) {
