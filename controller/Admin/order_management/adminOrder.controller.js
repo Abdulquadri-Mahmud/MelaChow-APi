@@ -592,7 +592,7 @@ export const assignRiderToOrder = async (req, res) => {
                 { _id: riderId },
                 { 
                     $set: { 
-                        status: 'on_delivery', 
+                        status: 'pending_assignment', 
                         currentOrderId: masterOrder._id // The schema says currentOrderId ref "Order"
                     } 
                 }
