@@ -282,19 +282,21 @@ export const markPickedUp = async (req, res, next) => {
 
         const order = await riderService.markPickedUp(orderId, riderId);
 
+        // ✅ Notify User (In-app + Push)
         try {
-            const io = getIO();
-            const payload = buildPayload.statusUpdate({
-                orderId: order._id,
-                status: "picked_up",
-                changedBy: "rider",
-                message: "Rider has picked up the order",
-                riderName: req.rider.name
+            const { sendOrderNotification, sendVendorNotification } = await import("../services/notification.service.js");
+            await sendOrderNotification(order.userId, order._id, "out_for_delivery", {
+                orderId: order.orderId || order._id,
+                restaurantName: order.restaurantName || "the restaurant"
             });
-            io.to(SOCKET_ROOMS.vendor(req.rider?.vendorId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, payload);
-            io.to(SOCKET_ROOMS.customer(order.userId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, payload);
-        } catch (socketErr) {
-            console.warn('⚠️ Socket emit failed:', socketErr.message);
+            
+            // Also notify restaurant via WebSocket + In-app
+            await sendVendorNotification(order.items?.[0]?.restaurantId || order.vendorId, order._id, "order_dispatched", {
+               orderId: order.orderId || order._id,
+               message: `Rider ${req.rider.name} has picked up the order and is on the way!`
+            });
+        } catch (notifErr) {
+            console.warn('⚠️ Push/Notification service failed for pick-up:', notifErr.message);
         }
 
         res.status(200).json({ success: true, message: "Order picked up", data: order });
@@ -310,23 +312,35 @@ export const markDelivered = async (req, res, next) => {
 
         const order = await riderService.markDelivered(orderId, riderId);
 
+        // ✅ Multi-party Notification Cascade (User, Vendor, Admin)
         try {
-            const io = getIO();
-            const statusPayload = buildPayload.statusUpdate({
-                orderId: order._id,
-                status: "delivered",
-                changedBy: "rider",
-                message: "Order has been delivered",
-                riderName: req.rider.name
+            const { 
+              sendOrderNotification, 
+              sendVendorNotification, 
+              sendNotification 
+            } = await import("../services/notification.service.js");
+
+            // 1. Notify the User (Customer)
+            await sendOrderNotification(order.userId, order._id, "delivered", {
+                orderId: order.orderId || order._id,
+                restaurantName: order.restaurantName || "the restaurant"
             });
-            const deliveredPayload = buildPayload.orderDelivered({
-                orderId: order._id,
-                riderName: req.rider.name
+
+            // 2. Notify the Restaurant (Vendor) - Push + In-app
+            await sendVendorNotification(order.items?.[0]?.restaurantId || order.vendorId, order._id, "vendor_order_delivered", {
+                orderId: order.orderId || order._id,
+                customerName: order.deliveryAddress?.name || "the customer"
             });
-            io.to(SOCKET_ROOMS.customer(order.userId)).emit(SOCKET_EVENTS.ORDER_DELIVERED, deliveredPayload);
-            io.to(SOCKET_ROOMS.vendor(req.rider?.vendorId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, statusPayload);
-        } catch (socketErr) {
-            console.warn('⚠️ Socket emit failed:', socketErr.message);
+
+            // 3. Notify Admins - Push + In-app
+            // Pass null for recipientId to broadcast to all online admins in room 'admin_room'
+            await sendNotification(null, "admin_order_delivered", {
+                orderId: order.orderId || order._id,
+                restaurantName: order.restaurantName || "the store"
+            }, "admin");
+
+        } catch (notifErr) {
+            console.warn('⚠️ Push/Notification cascade failed for delivery:', notifErr.message);
         }
 
         res.status(200).json({ success: true, message: "Order delivered", data: order });

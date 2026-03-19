@@ -7,6 +7,7 @@ import Rider from '../model/rider.model.js';
 import { registerRiderSocketHandlers } from './rider.socket.js';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { pubClient, subClient, isRedisReady } from '../config/redis.js';
+import { JWT_SECRET } from '../utils/jwt.js';
 
 let io;
 
@@ -41,6 +42,7 @@ export async function initializeSocket(server) {
         // System continues working on single instance without Redis
     }
 
+
     // Authentication middleware
     io.use(async (socket, next) => {
         try {
@@ -48,34 +50,36 @@ export async function initializeSocket(server) {
                 || socket.handshake.headers.authorization?.replace('Bearer ', '');
 
             if (!token) {
+                console.error('❌ Socket Auth Failed: Token missing');
                 return next(new Error('Authentication token required'));
             }
 
-            const decoded = jwt.verify(token, process.env.JWT_SECRET);
+            let decoded;
+            try {
+                decoded = jwt.verify(token, JWT_SECRET);
+            } catch (err) {
+                console.error('❌ Socket Auth Failed: Token invalid or expired', err.message);
+                return next(new Error('Authentication failed'));
+            }
 
             const role = decoded.role || 'user';
-
-            // ✅ FIX: Rider tokens use `riderId` as the key, not `userId` or `id`.
-            // The old code only checked `decoded.userId || decoded.id`, so riders
-            // passed auth middleware but `identity` resolved as null (User.findById(undefined)),
-            // causing 'user not found' and dropping the connection.
+            
+            // Resolve identity based on role and available IDs
             let identity;
+            const targetId = decoded.id || decoded.userId || decoded.riderId || decoded.adminId || decoded.vendorId;
 
             if (role === 'rider') {
-                const riderId = decoded.riderId || decoded.userId || decoded.id;
-                identity = await Rider.findById(riderId).select('-password');
+                identity = await Rider.findById(targetId).select('-password');
             } else if (role === 'vendor') {
-                const vendorId = decoded.vendorId || decoded.userId || decoded.id;
-                identity = await Vendor.findById(vendorId).select('-password');
+                identity = await Vendor.findById(targetId).select('-password');
             } else if (role === 'admin' || role === 'super-admin') {
-                const adminId = decoded.adminId || decoded.userId || decoded.id;
-                identity = await Admin.findById(adminId).select('-password');
+                identity = await Admin.findById(targetId).select('-password');
             } else {
-                const userId = decoded.userId || decoded.id;
-                identity = await User.findById(userId).select('-password');
+                identity = await User.findById(targetId).select('-password');
             }
 
             if (!identity) {
+                console.error(`❌ Socket Auth Failed: ${role} with ID ${targetId} not found`);
                 return next(new Error(`${role} not found`));
             }
 
@@ -87,7 +91,7 @@ export async function initializeSocket(server) {
             next();
 
         } catch (error) {
-            console.error('Socket authentication error:', error.message);
+            console.error('❌ Socket unexpected error during auth:', error.message);
             next(new Error('Authentication failed'));
         }
     });
