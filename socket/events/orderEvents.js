@@ -11,6 +11,7 @@ export function emitOrderStatusUpdate(order, previousStatus) {
         restaurantName: order.restaurantName,
         totalAmount: order.totalAmount || order.total,
         estimatedDeliveryTime: order.estimatedDeliveryTime,
+        rider: order.rider || null,
         timestamp: new Date().toISOString()
     };
 
