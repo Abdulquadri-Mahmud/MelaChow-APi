@@ -559,6 +559,31 @@ export const updateVendorOrderStatus = async (req, res) => {
       });
     }
 
+    // Role-based delivery restrictions
+    if (req.vendor) {
+      const vendor = await vendorModel.findById(req.vendor._id).select("deliveryManagedBy").lean();
+      if (!vendor) {
+        return res.status(404).json({ success: false, message: "Vendor not found" });
+      }
+
+      // If the admin/platform handles delivery, vendors must stop at "ready_for_pickup" or cancellation
+      if (vendor.deliveryManagedBy === "admin") {
+        const restrictedStatuses = [
+          "rider_assigned",
+          "out_for_delivery",
+          "delivered",
+          "completed"
+        ];
+        
+        if (restrictedStatuses.includes(status)) {
+          return res.status(403).json({
+            success: false,
+            message: `Platform delivery is enabled. You cannot manually update the order to '${status}'. Only riders/admins can perform this action.`
+          });
+        }
+      }
+    }
+
     // First, find the Order by the generated orderId
     const Order = (await import("../../model/order/Order.js")).default;
     const userOrder = await Order.findOne({ orderId });
