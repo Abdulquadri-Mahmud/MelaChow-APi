@@ -7,5 +7,6 @@ const router = express.Router();
 router.post("/auth/rider/login", riderAuthController.loginRider);
 router.post("/auth/rider/logout", riderAuthController.logoutRider);
 router.get("/auth/rider/me", requireRiderAuth, riderAuthController.getMe);
+router.post("/auth/rider/subscribe", requireRiderAuth, riderAuthController.subscribeRider);
 
 export default router;

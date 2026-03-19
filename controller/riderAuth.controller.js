@@ -72,3 +72,34 @@ export const getMe = async (req, res) => {
         data: req.rider.getPublicProfile()
     });
 };
+
+/**
+ * Handle rider push notification subscription
+ */
+export const subscribeRider = async (req, res, next) => {
+    try {
+        const { subscription, deviceType } = req.body;
+
+        if (!subscription || !subscription.endpoint) {
+            return res.status(400).json({ success: false, message: "Subscription is required" });
+        }
+
+        const RiderPushSubscription = (await import("../model/notification/riderPushSubscription.model.js")).default;
+
+        await RiderPushSubscription.findOneAndUpdate(
+            { 'subscription.endpoint': subscription.endpoint },
+            {
+                riderId: req.rider._id,
+                subscription,
+                deviceType: deviceType || 'web',
+                userAgent: req.headers['user-agent'],
+                lastUsed: new Date()
+            },
+            { upsert: true, new: true }
+        );
+
+        res.status(200).json({ success: true, message: "Subscribed to push notifications" });
+    } catch (error) {
+        next(error);
+    }
+};

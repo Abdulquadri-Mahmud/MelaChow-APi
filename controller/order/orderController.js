@@ -1115,6 +1115,10 @@ export const getSingleOrder = async (req, res) => {
         path: "userId",
         select: "firstname lastname email phone", // Populate user info
       })
+      .populate({
+        path: "riderId",
+        select: "name phone avatar rating totalDeliveries", // ✅ Populate rider info
+      })
       .lean();
 
     if (!order) {

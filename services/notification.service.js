@@ -3,7 +3,8 @@ import webpush from 'web-push';
 import PushSubscription from '../model/notification/pushSubscription.model.js';
 import VendorPushSubscription from '../model/notification/vendorPushSubscription.model.js';
 import AdminPushSubscription from '../model/notification/adminPushSubscription.model.js';
-import { emitToUser, emitToRestaurant, emitToAdmin } from '../socket/socketServer.js';
+import RiderPushSubscription from '../model/notification/riderPushSubscription.model.js';
+import { emitToUser, emitToRestaurant, emitToAdmin, emitToRider } from '../socket/socketServer.js';
 import { redisClient, isRedisReady, safeRedisGet, safeRedisSet } from '../config/redis.js';
 import dotenv from 'dotenv';
 
@@ -88,6 +89,13 @@ const NOTIFICATION_CONFIGS = {
         icon: '/icons/icon-192x192.png',
         requireInteraction: true
     },
+    order_assigned: {
+        title: '🛵 New Job Assigned!',
+        getBody: (data) => `Head to ${data.restaurantName || 'the store'} for pickup. Order #${data.orderId}`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: true,
+        vibrate: [200, 100, 200, 100, 200]
+    },
     promo: {
         title: '🎁 Special Offer',
         getBody: (data) => data.message,
@@ -125,6 +133,7 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
         const notificationData = {
             userId: role === 'user' ? recipientId : (data.userId || null),
             restaurantId: role === 'vendor' ? recipientId : (data.restaurantId || null),
+            riderId: role === 'rider' ? recipientId : (data.riderId || null),
             adminId: role === 'admin' ? recipientId : null,
             type,
             title: config.title,
@@ -137,7 +146,11 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
             }),
             icon: data.icon || config.icon,
             image: data.image,
-            url: data.url || (data.orderId ? (role === 'vendor' || role === 'vendors' ? `/vendors/orders/${data.orderDatabaseId || data.orderId}` : `/profile/orders/${data.orderId}`) : '/notifications'),
+            url: data.url || (data.orderId ? (
+                role === 'vendor' ? `/vendors/orders/${data.orderDatabaseId || data.orderId}` :
+                role === 'rider' ? `/rider/dashboard` :
+                `/profile/orders/${data.orderId}`
+            ) : '/notifications'),
             orderId: data.orderId,
             read: false,
             data: data.additionalData || {}
@@ -235,6 +248,23 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
                     read: false
                 });
             }
+
+            if (role === 'rider' && recipientId) {
+                emitToRider(recipientId, 'new_notification', {
+                    _id: savedNotification._id,
+                    title: notificationData.title,
+                    body: notificationData.body,
+                    type: notificationData.type,
+                    orderId: notificationData.orderId,
+                    url: notificationData.url,
+                    createdAt: savedNotification.createdAt,
+                    read: false
+                });
+                
+                // Also update unread count for rider
+                const count = await Notification.countDocuments({ riderId: recipientId, read: false });
+                emitToRider(recipientId, 'notification_count_update', { count });
+            }
         } catch (socketError) {
             console.error('❌ Socket.IO emission error:', socketError.message);
             // Don't fail the notification if Socket.IO fails
@@ -250,6 +280,9 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
             } else if (role === 'admin') {
                 subModel = AdminPushSubscription;
                 queryField = 'adminId';
+            } else if (role === 'rider') {
+                subModel = RiderPushSubscription;
+                queryField = 'riderId';
             } else {
                 subModel = PushSubscription;
                 queryField = 'userId';
@@ -371,6 +404,27 @@ export async function sendOrderNotification(userId, orderId, status, orderDetail
         restaurantName: orderDetails.restaurantName,
         additionalData: orderDetails
     });
+}
+
+/**
+ * Send notification to a rider
+ */
+export async function sendRiderNotification(riderId, orderId, type, data = {}) {
+    if (!riderId) {
+        console.error('❌ sendRiderNotification: riderId is missing');
+        throw new Error('riderId is required');
+    }
+
+    const riderIdString = String(riderId);
+    console.log(`🛵 Sending rider notification: Rider ${riderIdString}, Order ${orderId}, Type: ${type}`);
+
+    return sendNotification(riderIdString, type, {
+        orderId,
+        orderDatabaseId: data.orderDatabaseId,
+        restaurantName: data.restaurantName,
+        url: `/rider/dashboard`,
+        ...data
+    }, 'rider');
 }
 
 /**
