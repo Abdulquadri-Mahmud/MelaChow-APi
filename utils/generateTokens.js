@@ -1,27 +1,21 @@
-import jwt from 'jsonwebtoken';
+import { generateAccessToken as genAccess, generateRefreshToken as genRefresh } from './jwt.js';
 
 /**
- * Generates a short-lived Access Token (for Authorization header)
- * @param {Object} payload - User/Vendor data (id, role)
- * @returns {string} JWT Access Token
+ * Generates a short-lived Access Token
+ * Preserves compatibility with existing calls using a single payload object
  */
 export const generateAccessToken = (payload) => {
-    return jwt.sign(
-        payload,
-        process.env.JWT_SECRET,
-        { expiresIn: '30m' } // Short-lived (25-30 mins recommendation)
-    );
+    // If payload is already an object, use its id and role
+    const id = payload.riderId || payload.adminId || payload.vendorId || payload.userId || payload.id;
+    const role = payload.role || 'user';
+    return genAccess(id, role);
 };
 
 /**
- * Generates a long-lived Refresh Token (for HttpOnly Cookie)
- * @param {Object} payload - User/Vendor data (id, role)
- * @returns {string} JWT Refresh Token
+ * Generates a long-lived Refresh Token
  */
 export const generateRefreshToken = (payload) => {
-    return jwt.sign(
-        payload,
-        process.env.JWT_SECRET,
-        { expiresIn: '7d' } // Matches cookie maxAge
-    );
+    const id = payload.riderId || payload.adminId || payload.vendorId || payload.userId || payload.id;
+    const role = payload.role || 'user';
+    return genRefresh(id, role);
 };

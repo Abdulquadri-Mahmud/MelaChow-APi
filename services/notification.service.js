@@ -96,6 +96,18 @@ const NOTIFICATION_CONFIGS = {
         requireInteraction: true,
         vibrate: [200, 100, 200, 100, 200]
     },
+    vendor_order_delivered: {
+        title: '💰 Order Delivered & Earnings Credited',
+        getBody: (data) => `Order #${data.orderId} from ${data.customerName || 'customer'} has been delivered successfully. Your earnings have been updated.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: false
+    },
+    admin_order_delivered: {
+        title: '🏁 Order Delivery Completed',
+        getBody: (data) => `Delivery for Order #${data.orderId} (from ${data.restaurantName || 'store'}) has been completed by the assigned rider.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: false
+    },
     promo: {
         title: '🎁 Special Offer',
         getBody: (data) => data.message,
@@ -114,20 +126,19 @@ const NOTIFICATION_CONFIGS = {
  */
 export async function sendNotification(recipientId, type, data = {}, role = 'user') {
     try {
-        // ✅ Validate recipientId (Required unless restaurantId is provided in data)
-        if (!recipientId && !data.restaurantId) {
+        // ✅ Validate recipientId (Required unless role is admin OR restaurantId is provided)
+        if (!recipientId && role !== 'admin' && !data.restaurantId) {
             console.error('❌ Missing recipient: neither recipientId nor restaurantId provided');
             throw new Error('Notification must have a recipient');
         }
 
-        console.log(`📨 Preparing notification for ${role} ${recipientId}, type: ${type}`);
+        console.log(`📨 Preparing notification for ${role} ${recipientId || '(Broadcast)'}, type: ${type}`);
 
-        const config = NOTIFICATION_CONFIGS[type];
-
-        if (!config) {
-            console.error(`❌ Unknown notification type: ${type}`);
-            throw new Error(`Unknown notification type: ${type}`);
-        }
+        const config = NOTIFICATION_CONFIGS[type] || {
+            title: data.title || 'System Notification',
+            getBody: () => data.message || 'New update regarding your order',
+            icon: '/icons/icon-192x192.png'
+        };
 
         // Build notification payload
         const notificationData = {
@@ -157,37 +168,28 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
         };
 
         console.log(`💾 Saving notification to database:`, {
-            userId: notificationData.userId,
-            type: notificationData.type,
-            title: notificationData.title,
-            orderId: notificationData.orderId
+            recipient: role,
+            recipientId: recipientId || "All Admins",
+            type: notificationData.type
         });
 
-        // 1. Save to database with explicit error handling
+        // 1. Save to database (only if there is a specific recipient)
         let savedNotification;
-        try {
-            savedNotification = await Notification.create(notificationData);
-            console.log(`✅ Notification saved successfully: ID ${savedNotification._id}`);
-        } catch (dbError) {
-            console.error('❌ Database save error:', dbError.message);
-            if (dbError.errors) console.error('❌ Validation errors:', dbError.errors);
-
-            // ✅ IMPROVEMENT: Log full error details
-            console.error('❌ Full DB Error:', {
-                message: dbError.message,
-                name: dbError.name,
-                code: dbError.code,
-                notificationData
-            });
-
-            throw new Error(`Failed to save notification: ${dbError.message}`);
+        if (recipientId) {
+            try {
+                savedNotification = await Notification.create(notificationData);
+                console.log(`✅ Notification saved successfully: ID ${savedNotification._id}`);
+            } catch (dbError) {
+                console.error('❌ Database save error:', dbError.message);
+                // Non-fatal if broadcast admin notification
+            }
         }
 
         // 2. Emit via WebSocket (Real-time in-app notification)
         try {
             if (role === 'user' && recipientId) {
                 emitToUser(recipientId, 'new_notification', {
-                    _id: savedNotification._id,
+                    _id: savedNotification?._id,
                     title: notificationData.title,
                     body: notificationData.body,
                     type: notificationData.type,
@@ -195,35 +197,30 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
                     url: notificationData.url,
                     icon: notificationData.icon,
                     image: notificationData.image,
-                    createdAt: savedNotification.createdAt,
+                    createdAt: savedNotification?.createdAt || new Date(),
                     read: false
                 });
-                console.log(`✅ WebSocket notification emitted to user ${recipientId}`);
-
-                // 3. Emit unread count update
-                // Use Redis counter if available, fall back to MongoDB
+                
+                // Unread count logic
                 let unreadCount = 0;
                 const redisKey = `user:${recipientId}:unread_count`;
                 if (isRedisReady()) {
                     try {
                         unreadCount = await redisClient.incr(redisKey);
-                        // Set expiry of 7 days so stale keys don't accumulate
                         await redisClient.expire(redisKey, 604800);
                     } catch (err) {
-                        console.warn('⚠️ Redis INCR failed, falling back to MongoDB count');
                         unreadCount = await Notification.countDocuments({ userId: recipientId, read: false });
                     }
                 } else {
                     unreadCount = await Notification.countDocuments({ userId: recipientId, read: false });
                 }
                 emitToUser(recipientId, 'notification_count_update', { count: unreadCount });
-                console.log(`✅ Unread count updated for user: ${unreadCount}`);
             }
 
             if ((role === 'vendor' && recipientId) || data.restaurantId) {
                 const targetResId = role === 'vendor' ? recipientId : data.restaurantId;
                 emitToRestaurant(targetResId, 'new_notification', {
-                    _id: savedNotification._id,
+                    _id: savedNotification?._id,
                     title: notificationData.title,
                     body: notificationData.body,
                     type: notificationData.type,
@@ -231,46 +228,42 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
                     url: notificationData.url,
                     icon: notificationData.icon,
                     image: notificationData.image,
-                    createdAt: savedNotification.createdAt,
+                    createdAt: savedNotification?.createdAt || new Date(),
                     read: false
                 });
-                console.log(`✅ WebSocket notification emitted to restaurant ${targetResId}`);
             }
 
-            if (role === 'admin' && recipientId) {
+            if (role === 'admin') {
                 emitToAdmin(recipientId, 'new_notification', {
-                    _id: savedNotification._id,
+                    _id: savedNotification?._id,
                     title: notificationData.title,
                     body: notificationData.body,
                     type: notificationData.type,
                     url: notificationData.url,
-                    createdAt: savedNotification.createdAt,
+                    createdAt: savedNotification?.createdAt || new Date(),
                     read: false
                 });
             }
 
             if (role === 'rider' && recipientId) {
                 emitToRider(recipientId, 'new_notification', {
-                    _id: savedNotification._id,
+                    _id: savedNotification?._id,
                     title: notificationData.title,
                     body: notificationData.body,
                     type: notificationData.type,
                     orderId: notificationData.orderId,
                     url: notificationData.url,
-                    createdAt: savedNotification.createdAt,
+                    createdAt: savedNotification?.createdAt || new Date(),
                     read: false
                 });
-                
-                // Also update unread count for rider
                 const count = await Notification.countDocuments({ riderId: recipientId, read: false });
                 emitToRider(recipientId, 'notification_count_update', { count });
             }
         } catch (socketError) {
             console.error('❌ Socket.IO emission error:', socketError.message);
-            // Don't fail the notification if Socket.IO fails
         }
 
-        // 4. Send push notification to all recipient's devices
+        // 3. Send push notification to all recipient's devices
         try {
             let subModel;
             let queryField;
@@ -288,10 +281,12 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
                 queryField = 'userId';
             }
 
-            const subscriptions = await subModel.find({ [queryField]: recipientId });
+            // Find subscriptions (either for specific recipient or all if role is admin and no ID)
+            const query = recipientId ? { [queryField]: recipientId } : {};
+            const subscriptions = await subModel.find(query);
 
             if (subscriptions.length > 0) {
-                console.log(`📱 Sending push to ${subscriptions.length} device(s)`);
+                console.log(`📱 Sending push to ${subscriptions.length} ${role} device(s)`);
 
                 const pushPayload = {
                     title: notificationData.title,
