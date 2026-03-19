@@ -622,17 +622,14 @@ export const assignRiderToOrder = async (req, res) => {
         const { emitToRestaurant, emitToOrder, emitToAdmin } = await import("../../../socket/socketServer.js");
 
         try {
-            // a) Notify the assigned rider
-            io?.to(`rider:${riderId}`).emit('order_assigned', {
-                orderId: vendorOrder._id,
-                userOrderId: masterOrder._id,
-                vendorName: vendor?.storeName,
-                deliveryAddress: masterOrder.deliveryAddress,
-                items: vendorOrder.items,
-                assignedAt: new Date().toISOString()
+            // ✅ Use unified notification service for real-time + push capability
+            const { sendRiderNotification } = await import("../../../services/notification.service.js");
+            await sendRiderNotification(rider._id, masterOrder._id, "order_assigned", {
+                restaurantName: vendor?.storeName,
+                orderDatabaseId: masterOrder._id
             });
-            console.log(`✅ Socket: Order assigned event emitted to rider:${riderId}`);
-        } catch (e) { console.error('⚠️ Socket error (rider):', e.message); }
+            console.log(`✅ Socket + Push: Order assigned event emitted/sent to rider:${riderId}`);
+        } catch (e) { console.error('⚠️ Notification error (rider):', e.message); }
 
         try {
             // b) Notify the vendor

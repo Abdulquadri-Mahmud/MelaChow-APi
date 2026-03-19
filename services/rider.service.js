@@ -410,6 +410,12 @@ export const getAllRiders = async (filters = {}) => {
     if (filters.status) query.status = filters.status;
     if (filters.vendorId) query.vendorId = filters.vendorId;
     if (filters.isActive !== undefined) query.isActive = filters.isActive;
+    
+    // Support filtering for available riders (for assignment modals)
+    if (filters.available === 'true' || filters.available === true) {
+        query.status = 'available';
+        query.isActive = true;
+    }
 
     return Rider.find(query).populate("vendorId", "storeName email phone");
 };

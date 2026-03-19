@@ -84,25 +84,16 @@ export const assignRider = async (req, res, next) => {
             })
         );
 
-        // ✅ FIX: Notification type changed from "order_assigned" (not in enum → DB failure)
-        // to "order_assigned" which is NOW in the schema enum after the model fix.
-        // The try/catch here is fine for resilience but should no longer fail.
+        // ✅ Use unified notification service for real-time + push capability
         try {
-            await Notification.create({
-                riderId: rider._id,
-                title: "New Delivery Assigned",
-                body: `You have been assigned an order from ${req.vendor.storeName}.`,
-                type: "order_assigned",
-                orderId: order._id?.toString(),
-                restaurantId: vendorId,
-                url: `/rider/dashboard`,
-                data: {
-                    deliveryAddress: order.deliveryAddress,
-                    orderId: order._id,
-                }
+            const { sendRiderNotification } = await import("../services/notification.service.js");
+            await sendRiderNotification(rider._id, order._id, "order_assigned", {
+                restaurantName: req.vendor.storeName,
+                orderDatabaseId: order._id
             });
+            console.log(`✅ Assignment notification + push sent to rider: ${rider._id}`);
         } catch (notifErr) {
-            console.warn('⚠️ Failed to create rider notification in DB:', notifErr.message);
+            console.warn('⚠️ Push/Notification service failed for rider:', notifErr.message);
         }
 
         res.status(200).json({
@@ -131,11 +122,13 @@ export const getActiveOrder = async (req, res, next) => {
 
         const order = await riderService.getActiveOrder(riderId);
 
-        if (!order) {
-            return res.status(404).json({ success: false, message: "No active order" });
-        }
-
-        res.status(200).json({ success: true, data: { order } });
+        // ✅ FIX: Returning 200 with null instead of 404.
+        // A 404 in the console looks like a "failure" to the user/dev, 
+        // but having no active order is a valid and frequent state for a rider.
+        res.status(200).json({ 
+            success: true, 
+            data: { order: order || null } 
+        });
     } catch (error) {
         next(error);
     }
