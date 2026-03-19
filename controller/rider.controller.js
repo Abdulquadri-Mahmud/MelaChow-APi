@@ -72,15 +72,15 @@ export const assignRider = async (req, res, next) => {
             })
         );
 
-        // Notify customer
         io.to(SOCKET_ROOMS.customer(order.userId)).emit(
             SOCKET_EVENTS.ORDER_STATUS_UPDATE,
             buildPayload.statusUpdate({
                 orderId: order._id,
-                status: "assigned",
+                status: "rider_assigned", // Use the correct enum status
                 changedBy: "vendor",
                 message: `Rider ${rider.name} has been assigned to your order`,
-                riderName: rider.name
+                riderName: rider.name,
+                rider: rider.getPublicProfile ? rider.getPublicProfile() : rider
             })
         );
 

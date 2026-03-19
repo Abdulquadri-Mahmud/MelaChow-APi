@@ -255,6 +255,7 @@ export const markDelivered = async (orderId, riderId) => {
             v => v.restaurantId?.toString() === riderVendorId
         );
         const deliveryFee = Number(deliveryFeeEntry?.deliveryFee || 0);
+        let riderEarningsToRecord = 0;
 
         if (deliveryFee > 0) {
             let riderWallet = await Wallet.findOne({
@@ -279,44 +280,51 @@ export const markDelivered = async (orderId, riderId) => {
                 // ── PHASE 1: VENDOR-MANAGED DELIVERY ──────────────────────────────────
                 // The vendor pays their rider directly in cash.
                 // The delivery fee was already credited to the vendor wallet during
-                // completeOrderFulfillment. The vendor is responsible for paying their
-                // rider from that balance.
-                // No wallet debit. No rider wallet credit.
-                console.log(`💵 Vendor-managed delivery — rider paid in cash by vendor. No wallet transaction.`);
+                // completeOrderFulfillment. 
+                // We'll record 100% as earnings for stats, but no wallet movement.
+                riderEarningsToRecord = deliveryFee;
+                console.log(`💵 Vendor-managed delivery — rider paid by vendor. No wallet transaction.`);
 
             } else {
                 // ── PLATFORM-MANAGED DELIVERY ─────────────────────────────────────────
-                // GrubDash supplied the rider. Deduct delivery fee from admin wallet
-                // and credit the rider's wallet.
+                // GrubDash supplied the rider. 
+                // COMMISSION SPLIT: Rider gets 80%, Platform (Admin) retains 20%.
+                
+                const riderPayout = Number((deliveryFee * 0.8).toFixed(2));
+                const platformCommission = Number((deliveryFee * 0.2).toFixed(2));
 
                 const adminWallet = await Wallet.findOne({ ownerModel: "Admin" }).session(session);
                 if (!adminWallet) throw new Error("Admin wallet not found");
 
-                if (adminWallet.balance < deliveryFee) {
+                // We only debit the rider's share from the admin wallet. 
+                if (adminWallet.balance < riderPayout) {
                     throw new Error("Admin wallet has insufficient balance to pay rider");
                 }
 
-                adminWallet.balance = Number((adminWallet.balance - deliveryFee).toFixed(2));
+                adminWallet.balance = Number((adminWallet.balance - riderPayout).toFixed(2));
                 adminWallet.transactions.push({
                     type: "debit",
-                    amount: deliveryFee,
-                    description: `Rider payout for Order ${order.orderId}`,
+                    amount: riderPayout,
+                    description: `Rider Payout (80%) for Order ${order.orderId}`,
+                    metadata: { deliveryFee, commission: platformCommission }
                 });
                 await adminWallet.save({ session });
 
-                riderWallet.balance = Number((riderWallet.balance + deliveryFee).toFixed(2));
+                riderWallet.balance = Number((riderWallet.balance + riderPayout).toFixed(2));
                 riderWallet.transactions.push({
                     type: "credit",
-                    amount: deliveryFee,
-                    description: `Delivery fee for Order ${order.orderId}`,
+                    amount: riderPayout,
+                    description: `Delivery Fee (80% share) for Order ${order.orderId}`,
+                    metadata: { totalFee: deliveryFee }
                 });
                 await riderWallet.save({ session });
 
-                console.log(`💰 Platform-managed delivery — ₦${deliveryFee} credited to rider wallet.`);
+                riderEarningsToRecord = riderPayout;
+                console.log(`💰 Split payout — ₦${riderPayout} (Rider) | ₦${platformCommission} (Commission) for Order ${order.orderId}`);
             }
         }
 
-        await rider.freeUp(deliveryFee);
+        await rider.freeUp(riderEarningsToRecord);
         await session.commitTransaction();
         return order;
 

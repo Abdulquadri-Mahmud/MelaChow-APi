@@ -50,12 +50,13 @@ export const buildPayload = {
         note
     }),
 
-    statusUpdate: ({ orderId, status, changedBy, message, riderName }) => ({
+    statusUpdate: ({ orderId, status, changedBy, message, riderName, rider }) => ({
         orderId,
         status,
         changedBy,
         message,
         riderName,
+        rider,
         timestamp: new Date()
     }),
 

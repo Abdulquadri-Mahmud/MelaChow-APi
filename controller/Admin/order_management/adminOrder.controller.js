@@ -2,6 +2,8 @@ import Order from "../../../model/order/Order.js";
 import VendorOrder from "../../../model/vendor/VendorOrder.js";
 import Vendor from "../../../model/vendor/vendor.model.js";
 import Wallet from "../../../model/wallet/wallet.mode.js";
+import User from "../../../model/user.model.js";
+import Rider from "../../../model/rider.model.js";
 import mongoose from "mongoose";
 
 /**
@@ -17,6 +19,7 @@ export const getAllOrders = async (req, res) => {
             deliveryType,
             startDate,
             endDate,
+            search,
             page = 1,
             limit = 20
         } = req.query;
@@ -50,9 +53,17 @@ export const getAllOrders = async (req, res) => {
             }
         }
 
+        if (search) {
+            filters.$or = [
+                { orderId: { $regex: search, $options: "i" } },
+                { "deliveryAddress.name": { $regex: search, $options: "i" } },
+                { "phone": { $regex: search, $options: "i" } }
+            ];
+        }
+
         const orders = await Order.find(filters)
             .populate("userId", "firstname lastname email phone")
-            .populate("riderId", "firstname lastname phone")
+            .populate("riderId", "name phone avatar status")
             .populate("items.restaurantId", "storeName logo deliveryManagedBy")
             .populate("items.foodId", "name image_url item_type")
             .sort({ createdAt: -1 })
@@ -90,7 +101,7 @@ export const getSingleOrder = async (req, res) => {
 
         const order = await Order.findOne({ orderId })
             .populate("userId", "firstname lastname email phone")
-            .populate("riderId", "firstname lastname phone email profileImage vehicleType")
+            .populate("riderId", "name phone avatar status")
             .populate("items.restaurantId", "storeName logo deliveryManagedBy")
             .populate("items.foodId", "name image_url item_type")
             .lean();
@@ -303,7 +314,7 @@ export const adminOverrideOrderStatus = async (req, res) => {
  */
 export const getPlatformManagedOrders = async (req, res) => {
     try {
-        const { status, paymentStatus, startDate, endDate, page = 1, limit = 20 } = req.query;
+        const { status, paymentStatus, startDate, endDate, search, page = 1, limit = 20 } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
         // 1. Find platform-managed vendor IDs
@@ -323,9 +334,17 @@ export const getPlatformManagedOrders = async (req, res) => {
             if (endDate) filter.createdAt.$lte = new Date(endDate);
         }
 
+        if (search) {
+            filter.$or = [
+                { orderId: { $regex: search, $options: "i" } },
+                { "deliveryAddress.name": { $regex: search, $options: "i" } },
+                { "phone": { $regex: search, $options: "i" } }
+            ];
+        }
+
         const orders = await Order.find(filter)
             .populate("userId", "firstname lastname email phone")
-            .populate("riderId", "firstname lastname phone profileImage vehicleType")
+            .populate("riderId", "name phone avatar status")
             .sort({ createdAt: -1 })
             .skip(skip)
             .limit(parseInt(limit))
@@ -632,7 +651,9 @@ export const assignRiderToOrder = async (req, res) => {
             emitToOrder(masterOrder._id, 'order_status_update', {
                 orderId: masterOrder._id,
                 status: 'rider_assigned',
-                message: 'A delivery rider has been assigned to your order'
+                message: `Rider ${rider.name} has been assigned to your order`,
+                riderName: rider.name,
+                rider: rider.getPublicProfile ? rider.getPublicProfile() : rider
             });
             console.log(`✅ Socket: Order status update emitted to order:${masterOrder._id}`);
         } catch (e) { console.error('⚠️ Socket error (customer):', e.message); }
