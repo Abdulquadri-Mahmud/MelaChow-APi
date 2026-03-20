@@ -68,6 +68,7 @@ Sentry.init({
 // Initialize Express App
 // -----------------------------
 const app = express();
+app.set('trust proxy', 1); // Trust first proxy (Render/Cloudflare) for real client IPs in rate limiting
 
 // -----------------------------
 // CORS Configuration
