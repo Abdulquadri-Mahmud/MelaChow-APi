@@ -46,11 +46,40 @@ export async function initializeSocket(server) {
     // Authentication middleware
     io.use(async (socket, next) => {
         try {
-            const token = socket.handshake.auth.token
-                || socket.handshake.headers.authorization?.replace('Bearer ', '');
+            // ── Token extraction — priority order ─────────────────────────
+            // 1. httpOnly cookie (most authoritative — same as HTTP auth layer)
+            // 2. Explicit auth.token (mobile clients, non-browser environments)
+            // 3. Authorization header (Bearer token fallback)
+            let token = null;
+
+            // Priority 1: Parse httpOnly cookie from handshake headers
+            if (socket.handshake.headers.cookie) {
+                const cookies = socket.handshake.headers.cookie
+                    .split(';')
+                    .reduce((acc, pair) => {
+                        const [key, ...rest] = pair.trim().split('=');
+                        if (key) acc[key.trim()] = decodeURIComponent(rest.join('=').trim());
+                        return acc;
+                    }, {});
+
+                token = cookies['riderToken']
+                    || cookies['vendorToken']
+                    || cookies['adminToken']
+                    || cookies['token'];
+            }
+
+            // Priority 2: Explicit token passed in socket auth options
+            if (!token && socket.handshake.auth?.token) {
+                token = socket.handshake.auth.token;
+            }
+
+            // Priority 3: Authorization header
+            if (!token && socket.handshake.headers.authorization) {
+                token = socket.handshake.headers.authorization.replace('Bearer ', '');
+            }
 
             if (!token) {
-                console.error('❌ Socket Auth Failed: Token missing');
+                console.error('❌ Socket Auth Failed: No token found in cookie, auth, or header');
                 return next(new Error('Authentication token required'));
             }
 
