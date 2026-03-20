@@ -2,6 +2,8 @@ import Admin from '../../model/Admin/admin.model.js';
 import { generateAccessToken, generateRefreshToken, generateOTP, generateResetToken, verifyToken } from '../../utils/jwt.js';
 import { sendMail } from '../../config/mailer.js';
 import { sendTokenCookie } from '../../utils/sendTokenCookie.js';
+import jwt from "jsonwebtoken";
+import { blockToken } from "../../middleware/tokenBlocklist.js";
 
 // ============================================
 // ADMIN LOGIN (Email + Password)
@@ -290,6 +292,19 @@ export const refreshAdminToken = async (req, res) => {
 export const logoutAdmin = async (req, res) => {
     try {
         const isProduction = process.env.NODE_ENV === "production";
+
+        // Block the current token if it exists
+        const token = req.cookies?.adminToken;
+        if (token) {
+            try {
+                const decoded = jwt.decode(token);
+                if (decoded?.exp) {
+                    await blockToken(token, decoded.exp);
+                }
+            } catch (e) {
+                console.warn("[logoutAdmin] Token blocking failed:", e.message);
+            }
+        }
 
         res.clearCookie("adminToken", {
             httpOnly: true,
