@@ -2,6 +2,8 @@ import Vendor from '../../model/vendor/vendor.model.js';
 import { generateAccessToken, generateRefreshToken, generateOTP, generateResetToken, verifyToken } from '../../utils/jwt.js';
 import { sendMail } from '../../config/mailer.js';
 import { sendTokenCookie } from '../../utils/sendTokenCookie.js';
+import jwt from "jsonwebtoken";
+import { blockToken } from "../../middleware/tokenBlocklist.js";
 
 // ============================================
 // VENDOR REGISTRATION (with OTP verification)
@@ -574,6 +576,19 @@ export const refreshVendorToken = async (req, res) => {
 export const vendorLogout = async (req, res) => {
   try {
     const isProduction = process.env.NODE_ENV === "production";
+
+    // Block the current token if it exists
+    const token = req.cookies?.vendorToken;
+    if (token) {
+      try {
+        const decoded = jwt.decode(token);
+        if (decoded?.exp) {
+          await blockToken(token, decoded.exp);
+        }
+      } catch (e) {
+        console.warn("[vendorLogout] Token blocking failed:", e.message);
+      }
+    }
 
     res.clearCookie("vendorToken", {
       httpOnly: true,

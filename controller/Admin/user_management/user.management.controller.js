@@ -76,6 +76,12 @@ export const suspendUser = async (req, res) => {
     user.suspensionReason = reason || "Account suspended due to policy violation.";
     await user.save();
 
+    // TODO: When vendor/user is suspended, their current token cannot be
+    // blocklisted server-side without token storage. This is handled at
+    // next request via account status check in the auth middleware.
+    // Full revocation requires storing the current token on the User/Vendor
+    // document — implement in a future hardening pass.
+
     // Send suspension email
     await sendUserSuspensionEmail(user, reason);
 
@@ -115,6 +121,12 @@ export const banUser = async (req, res) => {
     user.banned = true;
     user.banReason = reason || "You have been permanently banned for serious violations.";
     await user.save();
+
+    // TODO: When vendor/user is suspended, their current token cannot be
+    // blocklisted server-side without token storage. This is handled at
+    // next request via account status check in the auth middleware.
+    // Full revocation requires storing the current token on the User/Vendor
+    // document — implement in a future hardening pass.
 
     // Send ban email
     await sendUserBanEmail(user, reason);

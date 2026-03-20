@@ -2,12 +2,15 @@ import express from 'express';
 import dotenv from 'dotenv';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
+import mongoSanitize from 'express-mongo-sanitize';
 import connectDB from './config/db.js';
 import userRoutes from './routes/user.routes.js';
 import userPublicRoutes from './routes/user/public.routes.js';
 import helmet from 'helmet';
-import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
+import * as Sentry from '@sentry/node';
+import pinoHttp from 'pino-http';
+import logger from './config/logger.js';
 import transactionRoutes from './routes/transaction/transaction.routes.js';
 import vendorRoutes from './routes/vendor/vendor.routes.js';
 import foodRoutes from './routes/vendor/food.routes.js';
@@ -45,6 +48,21 @@ import redisClient from './config/redis.js';
 import { initializeSocket } from './socket/socketServer.js';
 
 dotenv.config();
+
+// ----------------------------------------
+// Sentry — Must initialize before Express app
+// ----------------------------------------
+Sentry.init({
+  dsn: process.env.SENTRY_DSN,
+  environment: process.env.NODE_ENV || 'development',
+  enabled: !!process.env.SENTRY_DSN, // Only active when DSN is set
+  tracesSampleRate: process.env.NODE_ENV === 'production' ? 0.2 : 1.0,
+  integrations: [
+    Sentry.httpIntegration(),
+    Sentry.expressIntegration(),
+    Sentry.mongoIntegration(),
+  ],
+});
 
 // -----------------------------
 // Initialize Express App
@@ -115,9 +133,31 @@ app.use((req, res, next) => {
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   next();
 });
-app.use(morgan('dev')); // Logging
-app.use(express.json()); // Parse JSON body
+app.use(express.json({ limit: '10kb' })); // Parse JSON body
+app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(cookieParser()); // Parse cookies
+app.use(mongoSanitize()); // NoSQL injection protection
+
+app.use(pinoHttp({
+  logger,
+  customLogLevel: (req, res, err) => {
+    if (res.statusCode >= 500 || err) return 'error';
+    if (res.statusCode >= 400) return 'warn';
+    return 'info';
+  },
+  customSuccessMessage: (req, res) => {
+    return `${req.method} ${req.url} ${res.statusCode}`;
+  },
+  // Redact sensitive fields from logs
+  redact: {
+    paths: ['req.headers.cookie', 'req.headers.authorization', 'req.body.password', 'req.body.pin'],
+    censor: '[REDACTED]',
+  },
+  // Skip health check spam
+  autoLogging: {
+    ignore: (req) => req.url === '/' || req.url === '/health',
+  },
+}));
 
 // -----------------------------
 // Cookie & Auth Debug Middleware (Development Only)
@@ -139,11 +179,52 @@ if (process.env.NODE_ENV !== 'production') {
   });
 }
 
-// Rate limiting
-app.use(rateLimit({
+// ----------------------------------------
+// Rate Limiting — Tiered by sensitivity
+// ----------------------------------------
+const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 3000, // Increased to avoid blocking dev work
-}));
+  max: 300,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many requests, please try again later.' },
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many login attempts, please try again in 15 minutes.' },
+});
+
+const walletLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many wallet requests, please slow down.' },
+});
+
+const orderLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many order requests, please slow down.' },
+});
+
+// Apply global limiter to all routes
+app.use(globalLimiter);
+
+// Apply strict limiters to sensitive route groups
+app.use('/api/auth', authLimiter);
+app.use('/api/user/auth', authLimiter);
+app.use('/api/vendor/auth', authLimiter);
+app.use('/api/admin/auth', authLimiter);
+app.use('/api/wallet', walletLimiter);
+app.use('/api/order', orderLimiter);
+app.use('/api/orders', orderLimiter);
 
 
 // console.log(cors(corsOptions))
@@ -226,26 +307,42 @@ if (process.env.NODE_ENV !== 'production') {
   });
 }
 
-// -----------------------------
+// ----------------------------------------
 // Global Error Handler
-// -----------------------------
+// ----------------------------------------
 app.use((err, req, res, next) => {
   const statusCode = err.statusCode || 500;
   const message = err.message || 'Internal Server Error!';
+
+  // Report to Sentry — only real 5xx errors, not client mistakes
+  if (statusCode >= 500) {
+    Sentry.captureException(err, {
+      extra: {
+        method: req.method,
+        url: req.url,
+        userId: req.user?.id || req.user?._id || 'unauthenticated',
+      },
+    });
+    logger.error({ err, method: req.method, url: req.url }, 'Unhandled server error');
+  } else {
+    logger.warn({ statusCode, message, url: req.url }, 'Client error');
+  }
 
   // Special handling for CORS errors
   if (message === 'Not allowed by CORS') {
     return res.status(403).json({
       success: false,
       statusCode: 403,
-      message: 'CORS policy restriction'
+      message: 'CORS policy restriction',
     });
   }
 
   return res.status(statusCode).json({
     success: false,
     statusCode,
-    message
+    message: process.env.NODE_ENV === 'production' && statusCode === 500
+      ? 'Internal Server Error'  // Never expose stack traces in production
+      : message,
   });
 });
 
@@ -267,7 +364,7 @@ const startServer = async () => {
     try {
       await seedCategories();
     } catch (seedErr) {
-      console.warn("⚠️ Category seed skipped:", seedErr.message);
+      logger.warn({ err: seedErr.message }, "⚠️ Category seed skipped");
     }
 
     // 2b. Connect Redis main client
@@ -276,9 +373,9 @@ const startServer = async () => {
     // requires its own explicit connect call because lazyConnect: true is set
     try {
       await redisClient.connect();
-      console.log('✅ Redis main client connected and ready');
+      logger.info('✅ Redis main client connected and ready');
     } catch (redisErr) {
-      console.warn('⚠️ Redis unavailable — caching disabled, falling back to MongoDB:', redisErr.message);
+      logger.warn({ err: redisErr.message }, '⚠️ Redis unavailable — caching disabled, falling back to MongoDB');
       // Non-fatal: platform continues without caching
     }
 
@@ -291,29 +388,28 @@ const startServer = async () => {
 
     // 4. Start listening
     server.listen(PORT, () => {
-      console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`🔌 Socket.IO ready for connections`);
-      console.log(`🌍 Environment: ${process.env.NODE_ENV || "development"}`);
+      logger.info({ port: PORT, env: process.env.NODE_ENV || "development" }, '🚀 Server running');
+      logger.info('🔌 Socket.IO ready for connections');
     });
 
     // 5. Graceful shutdown
     // Render sends SIGTERM before stopping the instance
     process.on("SIGTERM", () => {
-      console.log("SIGTERM received — shutting down gracefully...");
+      logger.info("SIGTERM received — shutting down gracefully...");
       server.close(async () => {
         try {
           await redisClient.quit();
-          console.log("✅ Redis main client disconnected");
+          logger.info("✅ Redis main client disconnected");
         } catch (e) {
-          console.warn("⚠️ Redis quit error:", e.message);
+          logger.warn({ err: e.message }, "⚠️ Redis quit error");
         }
-        console.log("✅ Server closed");
+        logger.info("✅ Server closed");
         process.exit(0);
       });
     });
 
     process.on("SIGINT", () => {
-      console.log("SIGINT received — shutting down...");
+      logger.info("SIGINT received — shutting down...");
       server.close(async () => {
         try {
           await redisClient.quit();
@@ -323,10 +419,14 @@ const startServer = async () => {
     });
 
   } catch (error) {
-    console.error("❌ Failed to start server:", error.message);
+    logger.error({ err: error.message }, "❌ Failed to start server");
     process.exit(1);
   }
 };
 
 startServer();
+
+// # Required for production error tracking
+// # Get DSN from: https://sentry.io → New Project → Node.js
+// SENTRY_DSN=your_dsn_here
 

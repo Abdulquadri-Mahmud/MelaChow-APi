@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import User from "../model/user.model.js";
+import { isTokenBlocked } from "./tokenBlocklist.js";
 
 const auth = async (req, res, next) => {
   if (req.method === "OPTIONS") return next(); // skip preflight
@@ -12,8 +13,14 @@ const auth = async (req, res, next) => {
       return res.status(401).json({ message: "Unauthorized. Token missing or invalid." });
     }
 
-    // Legacy support removal: We no longer check headers
-    // const token = authHeader.split(" ")[1];
+    // Check blocklist BEFORE verifying signature (fast Redis check)
+    const blocked = await isTokenBlocked(token);
+    if (blocked) {
+      return res.status(401).json({
+        success: false,
+        message: 'Session has been revoked. Please log in again.'
+      });
+    }
 
     let decoded;
     try {

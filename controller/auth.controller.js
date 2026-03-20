@@ -1,9 +1,25 @@
+import jwt from "jsonwebtoken";
+import { blockToken } from "../middleware/tokenBlocklist.js";
+
 /**
  * Logout User - Clear Authentication Cookie
  * @route POST /api/user/auth/logout
  */
 export const logout = async (req, res) => {
     try {
+        // Block the current token if it exists
+        const token = req.cookies?.token;
+        if (token) {
+            try {
+                const decoded = jwt.decode(token);
+                if (decoded?.exp) {
+                    await blockToken(token, decoded.exp);
+                }
+            } catch (e) {
+                console.error('[logout] Token blocking failed:', e.message);
+            }
+        }
+
         // ✅ Clear the authentication cookie
         res.clearCookie("token", {
             httpOnly: true,

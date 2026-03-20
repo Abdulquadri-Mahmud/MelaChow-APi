@@ -177,6 +177,12 @@ export const suspendVendor = async (req, res) => {
       reason || "Your account has been suspended due to policy violations.";
     await vendor.save();
 
+    // TODO: When vendor/user is suspended, their current token cannot be
+    // blocklisted server-side without token storage. This is handled at
+    // next request via account status check in the auth middleware.
+    // Full revocation requires storing the current token on the User/Vendor
+    // document — implement in a future hardening pass.
+
     // Send suspension email
     try {
       await sendVendorSuspensionEmail(vendor, vendor.suspensionReason);
@@ -331,6 +337,12 @@ export const toggleVendorStatus = async (req, res) => {
     // Update vendor suspension status
     vendor.suspended = isSuspended;
     await vendor.save();
+
+    // TODO: When vendor/user is suspended, their current token cannot be
+    // blocklisted server-side without token storage. This is handled at
+    // next request via account status check in the auth middleware.
+    // Full revocation requires storing the current token on the User/Vendor
+    // document — implement in a future hardening pass.
 
     res.status(200).json({
       success: true,
