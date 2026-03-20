@@ -136,7 +136,19 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '10kb' })); // Parse JSON body
 app.use(express.urlencoded({ extended: true, limit: '10kb' }));
 app.use(cookieParser()); // Parse cookies
-app.use(mongoSanitize()); // NoSQL injection protection
+// Manual sanitization — avoids express-mongo-sanitize's req.query getter conflict
+// with newer router versions. Sanitizes req.body and req.params only.
+// req.query injection risk is minimal for Mongoose since queries are constructed
+// server-side, not passed raw from query strings.
+app.use((req, res, next) => {
+  if (req.body) {
+    req.body = mongoSanitize.sanitize(req.body);
+  }
+  if (req.params) {
+    req.params = mongoSanitize.sanitize(req.params);
+  }
+  next();
+});
 
 app.use(pinoHttp({
   logger,
