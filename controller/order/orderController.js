@@ -8,7 +8,7 @@ import VendorOrder from "../../model/vendor/VendorOrder.js";
 import Food from "../../model/vendor/food.model.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 import Admin from "../../model/Admin/admin.model.js";
-import { createOrderV2, updateOrderAfterPayment } from "./createOrderV2.controller.js";
+import { createOrderV2, updateOrderAfterPayment, releaseEscrowToVendor } from "./createOrderV2.controller.js";
 import { sendOrderNotification } from "../../services/notification.service.js";
 import { emitOrderStatusUpdate } from "../../socket/events/orderEvents.js";
 import PaymentLock from "../../model/order/PaymentLock.js";
@@ -327,6 +327,11 @@ export const completeOrderFulfillment = async (orderId) => {
       /* -------------------------------
        * Create Vendor Order
        * ------------------------------- */
+      const vendorOwnDelivery = deliveryManagedBy === "vendor";
+      const escrowAmount = vendorOwnDelivery
+        ? Number((vendorShare + vendorDeliveryShare).toFixed(2))
+        : Number(vendorShare.toFixed(2));
+
       const [createdVendorOrder] = await VendorOrder.create(
         [
           {
@@ -361,7 +366,9 @@ export const completeOrderFulfillment = async (orderId) => {
             })),
             commission: adminShare,
             vendorTotal: vendorShare,
-            deliveryShare: vendorDeliveryShare,
+            deliveryShare: vendorOwnDelivery ? vendorDeliveryShare : 0,
+            escrowAmount,
+            escrowReleased: false,
             orderStatus: "pending",
           },
         ],
@@ -377,40 +384,18 @@ export const completeOrderFulfillment = async (orderId) => {
         { session }
       );
 
-      /* -------------------------------
-       * Update/Create Vendor Wallet
-       * ------------------------------- */
-      let vendorWallet = await Wallet.findOne({
-        ownerId: vendorId,
-        ownerModel: "Vendor",
-      }).session(session);
-
-      if (!vendorWallet) {
-        [vendorWallet] = await Wallet.create(
-          [{ ownerId: vendorId, ownerModel: "Vendor", balance: 0 }],
-          { session }
-        );
-      }
-
-      // Wallet splits already calculated above (adminShare, vendorShare)
-
-      if (deliveryManagedBy === "vendor") {
-        vendorWallet.transactions.push({
+      // ── ESCROW: Hold vendor food revenue in admin wallet until delivery ──
+      if (adminWallet) {
+        adminWallet.balance = Number((adminWallet.balance + escrowAmount).toFixed(2));
+        adminWallet.transactions.push({
           type: "credit",
-          amount: vendorCredit,
-          description: `Food revenue + delivery fee from Order ${order.orderId}`,
-          orderId: order._id,
-        });
-      } else {
-        vendorWallet.transactions.push({
-          type: "credit",
-          amount: vendorCredit,
-          description: `Food revenue from Order ${order.orderId}`,
+          amount: escrowAmount,
+          description: `Escrow: vendor food revenue held for Order ${order.orderId}`,
           orderId: order._id,
         });
 
-        // Delivery fee goes to admin wallet (held until rider delivers)
-        if (adminWallet && vendorDeliveryShare > 0) {
+        // Platform-managed delivery fee also held in admin wallet
+        if (!vendorOwnDelivery && vendorDeliveryShare > 0) {
           adminWallet.balance = Number((adminWallet.balance + vendorDeliveryShare).toFixed(2));
           adminWallet.transactions.push({
             type: "credit",
@@ -420,12 +405,6 @@ export const completeOrderFulfillment = async (orderId) => {
           });
         }
       }
-
-      vendorWallet.balance = Number(
-        (vendorWallet.balance + vendorCredit).toFixed(2)
-      );
-
-      await vendorWallet.save({ session });
 
       /* -------------------------------
        * Update Vendor Stats (Orders & Sales)
@@ -1375,6 +1354,16 @@ export const updateVendorOrderStatus = async (req, res) => {
     vendorOrder.orderStatus = status;
     await vendorOrder.save();
 
+    // ✅ Release escrow to vendor on delivery/completion
+    if (status === 'delivered' || status === 'completed') {
+        try {
+            await releaseEscrowToVendor(vendorOrder._id);
+        } catch (escrowErr) {
+            // Non-fatal — log to Sentry, do not block the status update response
+            console.error(`❌ Escrow release failed for VendorOrder ${vendorOrder._id}:`, escrowErr.message);
+        }
+    }
+
     // ✅ Sync parent order status
     await syncParentOrderStatus(vendorOrder.userOrderId);
 
@@ -1503,6 +1492,13 @@ export const completeVendorOrder = async (req, res) => {
 
     vendorOrder.orderStatus = "completed";
     await vendorOrder.save();
+
+    // Release escrowed food revenue to vendor
+    try {
+        await releaseEscrowToVendor(vendorOrder._id);
+    } catch (escrowErr) {
+        console.error(`❌ Escrow release failed for VendorOrder ${vendorOrder._id}:`, escrowErr.message);
+    }
 
     // Emit real-time Socket.IO event
     const populatedOrder = await VendorOrder.findById(vendorOrderId)
