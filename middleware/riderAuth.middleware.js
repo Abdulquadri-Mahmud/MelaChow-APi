@@ -1,5 +1,6 @@
 import jwt from "jsonwebtoken";
 import Rider from "../model/rider.model.js";
+import { isTokenBlocked } from './tokenBlocklist.js';
 
 export const requireRiderAuth = async (req, res, next) => {
     try {
@@ -9,6 +10,15 @@ export const requireRiderAuth = async (req, res, next) => {
             return res.status(401).json({
                 success: false,
                 message: "Unauthorized (Rider). Token missing or invalid."
+            });
+        }
+
+        // Check blocklist before verifying signature
+        const blocked = await isTokenBlocked(token);
+        if (blocked) {
+            return res.status(401).json({
+                success: false,
+                message: "Session has been revoked. Please log in again."
             });
         }
 
