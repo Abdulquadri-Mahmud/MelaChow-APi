@@ -45,6 +45,8 @@ import socketHealthRoutes from './routes/socket.routes.js';
 import riderNotificationRoutes from './routes/riderNotification.routes.js';
 import http from 'http';
 import redisClient from './config/redis.js';
+import './config/queue.js';
+import './workers/index.js';
 import { initializeSocket } from './socket/socketServer.js';
 
 dotenv.config();
