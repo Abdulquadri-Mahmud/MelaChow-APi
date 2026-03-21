@@ -84,6 +84,8 @@ const vendorOrderSchema = new mongoose.Schema(
     commission: Number,
     vendorTotal: Number,
     deliveryShare: Number,
+    escrowAmount: { type: Number, default: 0 }, // food revenue held pending delivery
+    escrowReleased: { type: Boolean, default: false }, // true after payout to vendor
 
     orderStatus: {
       type: String,
@@ -110,6 +112,23 @@ const vendorOrderSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+// ─── Query Performance Indexes ────────────────────────────────────────────
+
+// Vendor order history — primary query pattern for vendor dashboard
+vendorOrderSchema.index({ restaurantId: 1, createdAt: -1 });
+
+// Vendor orders by status — used by getVendorOrdersByStatus controller
+vendorOrderSchema.index({ restaurantId: 1, orderStatus: 1 });
+
+// Parent order lookup — used in markPickedUp, markDelivered, assignment flows
+vendorOrderSchema.index({ userOrderId: 1 });
+
+// Rider assignment lookup within a vendor — used by assignRiderToOrder
+vendorOrderSchema.index({ restaurantId: 1, riderId: 1 });
+
+// Platform-wide rider order tracking
+vendorOrderSchema.index({ riderId: 1, orderStatus: 1 });
 
 const VendorOrder = mongoose.model("VendorOrder", vendorOrderSchema);
 

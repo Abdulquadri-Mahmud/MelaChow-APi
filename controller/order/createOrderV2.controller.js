@@ -891,12 +891,13 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
         // wallet and vendor deliveryShare on their order is 0.
         const vendorOwnDelivery = deliveryManagedBy === "vendor";
 
-        let vendorCredit;
-        if (vendorOwnDelivery) {
-            vendorCredit = Number((vendorTotal + vendorDeliveryShare).toFixed(2));
-        } else {
-            vendorCredit = Number(vendorTotal.toFixed(2));
-        }
+        // ── ESCROW: Hold vendor food revenue in admin wallet until delivery ──
+        // vendorTotal = vendor's food share (subtotal minus commission)
+        // This moves to vendor wallet only after order is delivered/completed.
+        // deliveryShare for vendor-managed delivery is also escrowed.
+        const escrowAmount = vendorOwnDelivery
+            ? Number((vendorTotal + vendorDeliveryShare).toFixed(2))
+            : Number(vendorTotal.toFixed(2));
 
         // Create VendorOrder
         const [vendorOrder] = await VendorOrder.create(
@@ -945,6 +946,8 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
                     // deliveryShare only shown on vendor's order if
                     // THEY handle delivery — otherwise 0 (platform keeps it)
                     deliveryShare: vendorOwnDelivery ? vendorDeliveryShare : 0,
+                    escrowAmount,
+                    escrowReleased: false,
                     orderStatus: "pending"
                 }
             ],
@@ -968,50 +971,26 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
             { session }
         );
 
-        // Update vendor wallet
-        let vendorWallet = await Wallet.findOne({
-            ownerId: vendorId,
-            ownerModel: "Vendor"
-        }).session(session);
-
-        if (!vendorWallet) {
-            [vendorWallet] = await Wallet.create(
-                [{ ownerId: vendorId, ownerModel: "Vendor", balance: 0 }],
-                { session }
-            );
-        }
-
-        if (vendorOwnDelivery) {
-            // Vendor handles delivery — they get food revenue + delivery fee
-            vendorWallet.transactions.push({
+        if (adminWallet) {
+            adminWallet.balance = Number((adminWallet.balance + escrowAmount).toFixed(2));
+            adminWallet.transactions.push({
                 type: "credit",
-                amount: vendorCredit,
-                description: `Food revenue + delivery fee from Order ${order.orderId}`,
-                orderId: order._id
-            });
-        } else {
-            // Admin handles delivery — vendor gets food revenue only
-            vendorWallet.transactions.push({
-                type: "credit",
-                amount: vendorCredit,
-                description: `Food revenue from Order ${order.orderId}`,
-                orderId: order._id
+                amount: escrowAmount,
+                description: `Escrow: vendor food revenue held for Order ${order.orderId}`,
+                orderId: order._id,
             });
 
-            // Delivery fee goes to admin wallet (held until rider delivers)
-            if (adminWallet && vendorDeliveryShare > 0) {
+            // Platform-managed delivery fee also held in admin wallet
+            if (!vendorOwnDelivery && vendorDeliveryShare > 0) {
                 adminWallet.balance = Number((adminWallet.balance + vendorDeliveryShare).toFixed(2));
                 adminWallet.transactions.push({
                     type: "credit",
                     amount: vendorDeliveryShare,
                     description: `Delivery fee held for admin rider - Order ${order.orderId}`,
-                    orderId: order._id
+                    orderId: order._id,
                 });
             }
         }
-
-        vendorWallet.balance = Number((vendorWallet.balance + vendorCredit).toFixed(2));
-        await vendorWallet.save({ session });
     }
 
     // Update admin wallet (lines 693-725)
@@ -1040,6 +1019,97 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
 
     console.log(`✅ VendorOrders and wallets updated for Order ${order.orderId}`);
     return vendorOrderMapping;
+};
+
+/**
+ * ========================================
+ * HELPER: Release Escrow to Vendor
+ * ========================================
+ * Called when order reaches delivered or completed status.
+ * Transfers the escrowed food revenue from admin wallet to vendor wallet.
+ * Idempotent — safe to call multiple times (escrowReleased flag prevents double-pay).
+ */
+export const releaseEscrowToVendor = async (vendorOrderId) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+        const vendorOrder = await VendorOrder.findById(vendorOrderId).session(session);
+        if (!vendorOrder) throw new Error(`VendorOrder ${vendorOrderId} not found`);
+
+        // Idempotency guard — never release twice
+        if (vendorOrder.escrowReleased) {
+            console.log(`⚡ Escrow already released for VendorOrder ${vendorOrderId}`);
+            await session.abortTransaction();
+            session.endSession();
+            return;
+        }
+
+        const escrowAmount = vendorOrder.escrowAmount || 0;
+        if (escrowAmount <= 0) {
+            console.log(`⚠️ No escrow to release for VendorOrder ${vendorOrderId}`);
+            vendorOrder.escrowReleased = true;
+            await vendorOrder.save({ session });
+            await session.commitTransaction();
+            session.endSession();
+            return;
+        }
+
+        const vendorId = vendorOrder.restaurantId;
+
+        // 1. Debit admin wallet
+        const adminWallet = await Wallet.findOne({ ownerModel: "Admin" }).session(session);
+        if (!adminWallet) throw new Error("Admin wallet not found");
+        if (adminWallet.balance < escrowAmount) {
+            throw new Error(`Admin wallet insufficient for escrow release: has ₦${adminWallet.balance}, needs ₦${escrowAmount}`);
+        }
+
+        adminWallet.balance = Number((adminWallet.balance - escrowAmount).toFixed(2));
+        adminWallet.transactions.push({
+            type: "debit",
+            amount: escrowAmount,
+            description: `Escrow release to vendor for VendorOrder ${vendorOrderId}`,
+            orderId: vendorOrder.userOrderId,
+        });
+        await adminWallet.save({ session });
+
+        // 2. Credit vendor wallet
+        let vendorWallet = await Wallet.findOne({
+            ownerId: vendorId,
+            ownerModel: "Vendor"
+        }).session(session);
+
+        if (!vendorWallet) {
+            [vendorWallet] = await Wallet.create(
+                [{ ownerId: vendorId, ownerModel: "Vendor", balance: 0 }],
+                { session }
+            );
+        }
+
+        vendorWallet.balance = Number((vendorWallet.balance + escrowAmount).toFixed(2));
+        vendorWallet.transactions.push({
+            type: "credit",
+            amount: escrowAmount,
+            description: `Food revenue released from escrow for VendorOrder ${vendorOrderId}`,
+            orderId: vendorOrder.userOrderId,
+        });
+        await vendorWallet.save({ session });
+
+        // 3. Mark escrow as released
+        vendorOrder.escrowReleased = true;
+        await vendorOrder.save({ session });
+
+        await session.commitTransaction();
+        session.endSession();
+
+        console.log(`✅ Escrow released: ₦${escrowAmount} → Vendor ${vendorId} for VendorOrder ${vendorOrderId}`);
+
+    } catch (error) {
+        if (session.inTransaction()) await session.abortTransaction();
+        session.endSession();
+        console.error(`❌ releaseEscrowToVendor failed for ${vendorOrderId}:`, error.message);
+        throw error;
+    }
 };
 
 /**

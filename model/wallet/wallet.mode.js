@@ -43,5 +43,11 @@ const walletSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// ─── Query Performance Indexes ────────────────────────────────────────────
+
+// ownerId and ownerModel are ALWAYS queried together — compound unique index
+// Prevents duplicate wallets and makes every wallet lookup O(log n)
+walletSchema.index({ ownerId: 1, ownerModel: 1 }, { unique: true });
+
 const Wallet = mongoose.model("Wallet", walletSchema);
 export default Wallet;

@@ -85,6 +85,13 @@ notificationSchema.index({ userId: 1, read: 1 });
 notificationSchema.index({ riderId: 1, read: 1 });
 notificationSchema.index({ userId: 1, type: 1 });
 notificationSchema.index({ riderId: 1, type: 1 });
+
+// Vendor notification history — missed_notifications query on reconnect
+notificationSchema.index({ restaurantId: 1, createdAt: -1 });
+
+// Vendor unread count — used by notification badge on vendor dashboard
+notificationSchema.index({ restaurantId: 1, read: 1 });
+
 notificationSchema.index({ createdAt: 1 }, { expireAfterSeconds: 7776000 });
 
 const Notification = mongoose.model('Notification', notificationSchema);

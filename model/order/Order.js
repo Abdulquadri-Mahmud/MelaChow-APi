@@ -263,6 +263,24 @@ const orderSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+// ─── Query Performance Indexes ────────────────────────────────────────────
+
+// Customer order history — most recent first
+orderSchema.index({ userId: 1, createdAt: -1 });
+
+// Customer orders filtered by status (e.g. active orders page)
+orderSchema.index({ userId: 1, orderStatus: 1 });
+
+// Admin/platform order listing — all orders sorted by recency
+orderSchema.index({ orderStatus: 1, createdAt: -1 });
+
+// Rider active order lookup — used by getActiveOrder and markPickedUp/markDelivered
+orderSchema.index({ riderId: 1, orderStatus: 1 });
+
+// Vendor cross-reference — orders containing a specific restaurant's items
+// Used when VendorOrder lookup needs to cross-reference back to parent Order
+orderSchema.index({ "items.restaurantId": 1, orderStatus: 1 });
+
 const Order =
   mongoose.models.Order || mongoose.model("Order", orderSchema);
 

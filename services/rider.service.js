@@ -5,6 +5,7 @@ import VendorOrder from "../model/vendor/VendorOrder.js";
 import Admin from "../model/Admin/admin.model.js";
 import Wallet from "../model/wallet/wallet.mode.js";
 import mongoose from "mongoose";
+import { releaseEscrowToVendor } from '../controller/order/createOrderV2.controller.js';
 
 /**
  * Create a new rider
@@ -227,6 +228,9 @@ export const markDelivered = async (orderId, riderId) => {
     const session = await mongoose.startSession();
     session.startTransaction();
 
+    let completedOrder = null;
+    let riderVendorIdForEscrow = null;
+
     try {
         const order = await Order.findById(orderId).session(session);
         if (!order) throw new Error("Order not found");
@@ -326,14 +330,35 @@ export const markDelivered = async (orderId, riderId) => {
 
         await rider.freeUp(riderEarningsToRecord);
         await session.commitTransaction();
-        return order;
+
+        // Capture values needed after session closes
+        completedOrder = order;
+        riderVendorIdForEscrow = rider.vendorId;
 
     } catch (error) {
-        await session.abortTransaction();
+        if (session.inTransaction()) await session.abortTransaction();
         throw error;
     } finally {
-        session.endSession();
+        session.endSession();  // ← only ONE call, always in finally
     }
+
+    // ── Post-transaction: escrow release in its own session ──
+    if (completedOrder && riderVendorIdForEscrow) {
+        const vendorOrder = await VendorOrder.findOne({
+            userOrderId: completedOrder._id,
+            restaurantId: riderVendorIdForEscrow
+        });
+        if (vendorOrder) {
+            try {
+                await releaseEscrowToVendor(vendorOrder._id);
+            } catch (escrowErr) {
+                console.error(`❌ Escrow release failed after delivery for order ${completedOrder._id}:`, escrowErr.message);
+                // TODO: Add to retry queue when BullMQ is implemented
+            }
+        }
+    }
+
+    return completedOrder;
 };
 
 /**
