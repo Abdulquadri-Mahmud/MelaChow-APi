@@ -36,7 +36,10 @@ export const requireRiderAuth = async (req, res, next) => {
             });
         }
 
-        const rider = await Rider.findById(decoded.riderId).select("-password -otp -otpExpires");
+        // Get ID from token (standardized as 'id' in our jwt utility)
+        const riderId = decoded.id || decoded.riderId;
+
+        const rider = await Rider.findById(riderId).select("-password -otp -otpExpires");
 
         if (!rider) {
             return res.status(401).json({

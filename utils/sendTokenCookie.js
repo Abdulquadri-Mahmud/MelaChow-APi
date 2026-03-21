@@ -20,8 +20,8 @@ export const sendTokenCookie = (res, token, cookieName = "token") => {
 
   const cookieOptions = {
     httpOnly: true,              // ✅ Prevents XSS attacks
-    secure: true,                // ✅ HTTPS only (required for SameSite=None)
-    sameSite: "none",            // ✅ Required for cross-domain cookies
+    secure: isProduction,         // ✅ HTTPS only in production (required for SameSite=None)
+    sameSite: isProduction ? "none" : "lax", // ✅ Required for cross-domain cookies in prod
     maxAge: 7 * 24 * 60 * 60 * 1000, // ✅ 7 days
     path: "/",                   // ✅ Available across all routes
     // ❌ NO domain attribute - let the browser set it automatically
