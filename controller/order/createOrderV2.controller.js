@@ -20,6 +20,8 @@ import Admin from "../../model/Admin/admin.model.js";
 import discountService from "../../services/discount.service.js";
 import Discount from "../../model/discount/Discount.js";
 import { emitNewOrderToRestaurant } from "../../socket/events/orderEvents.js";
+import { orderAutoCancelQueue } from '../../config/queue.js';
+import logger from '../../config/logger.js';
 
 /**
  * ========================================
@@ -1180,6 +1182,29 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
         session.endSession();
 
         console.log(`✅ Order ${order.orderId} updated to paid`);
+
+        // Queue auto-cancellation check — fires in 15 minutes if vendor hasn't responded
+        // The worker checks current order status before cancelling — safe if vendor accepts in time
+        try {
+            const vendorOrderIds = Object.values(vendorOrderMapping);
+            for (const vendorOrderId of vendorOrderIds) {
+                await orderAutoCancelQueue.add(
+                    'check-pending',
+                    {
+                        orderId: order._id.toString(),
+                        vendorOrderId: vendorOrderId.toString(),
+                    },
+                    {
+                        delay: 15 * 60 * 1000,             // 15 minutes
+                        jobId: `auto-cancel-${order._id}`,  // Idempotent — one job per order
+                    }
+                );
+            }
+            logger.info({ orderId: order.orderId }, '⏰ Auto-cancel job queued (15 min)');
+        } catch (queueErr) {
+            // Non-fatal — log but don't block order confirmation
+            logger.error({ orderId: order.orderId, error: queueErr.message }, '⚠️ Failed to queue auto-cancel job');
+        }
 
         // 🔔 Send notifications AFTER transaction commits
         try {

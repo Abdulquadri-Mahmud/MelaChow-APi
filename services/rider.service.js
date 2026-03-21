@@ -6,6 +6,8 @@ import Admin from "../model/Admin/admin.model.js";
 import Wallet from "../model/wallet/wallet.mode.js";
 import mongoose from "mongoose";
 import { releaseEscrowToVendor } from '../controller/order/createOrderV2.controller.js';
+import { escrowReleaseQueue } from '../config/queue.js';
+import logger from '../config/logger.js';
 
 /**
  * Create a new rider
@@ -352,8 +354,16 @@ export const markDelivered = async (orderId, riderId) => {
             try {
                 await releaseEscrowToVendor(vendorOrder._id);
             } catch (escrowErr) {
-                console.error(`❌ Escrow release failed after delivery for order ${completedOrder._id}:`, escrowErr.message);
-                // TODO: Add to retry queue when BullMQ is implemented
+                logger.error(
+                    { orderId: completedOrder._id, vendorOrderId: vendorOrder._id, error: escrowErr.message },
+                    '❌ Escrow release failed — adding to retry queue'
+                );
+                // Queue for retry with exponential backoff (5 attempts)
+                await escrowReleaseQueue.add(
+                    'retry-escrow',
+                    { vendorOrderId: vendorOrder._id.toString() },
+                    { jobId: `escrow-${vendorOrder._id}` }   // Idempotent job ID — prevents duplicate queue entries
+                );
             }
         }
     }

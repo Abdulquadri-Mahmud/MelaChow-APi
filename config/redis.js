@@ -88,4 +88,25 @@ export const safeRedisSet = async (key, value, options = {}) => {
     }
 };
 
+// ─── BullMQ Dedicated Connection ─────────────────────────────────────────────
+// BullMQ REQUIRES maxRetriesPerRequest: null — do NOT use the shared config.
+// Sharing connections with pub/sub or cache clients causes MaxRetriesPerRequestError.
+export const bullmqRedisConnection = new Redis(REDIS_URL, {
+    maxRetriesPerRequest: null,    // Required by BullMQ
+    enableReadyCheck: false,       // Required by BullMQ
+    lazyConnect: false,            // BullMQ manages its own connection lifecycle
+    retryStrategy(times) {
+        if (times > 10) return null;
+        return Math.min(times * 500, 5000);
+    }
+});
+
+bullmqRedisConnection.on('error', (err) => {
+    console.warn('⚠️ Redis [bullmq] error:', err.message || err.code || String(err));
+});
+
+bullmqRedisConnection.on('connect', () => {
+    console.log('✅ Redis [bullmq] connected');
+});
+
 export default redisClient;
