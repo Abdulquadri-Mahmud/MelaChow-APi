@@ -1,7 +1,4 @@
 import Redis from 'ioredis';
-import dotenv from 'dotenv';
-
-dotenv.config();
 
 const redisConfig = {
     lazyConnect: true,
@@ -17,9 +14,11 @@ const redisConfig = {
     }
 };
 
-const REDIS_URL = process.env.REDIS_URL;
+// REDIS_URL is read lazily at connection time, not at import time.
+// This ensures dotenv has loaded before the URL is consumed.
+const getRedisURL = () => process.env.REDIS_URL;
 
-export const redisClient = new Redis(REDIS_URL, redisConfig);
+export const redisClient = new Redis(getRedisURL(), redisConfig);
 export const pubClient = redisClient.duplicate();
 export const subClient = redisClient.duplicate();
 
@@ -91,7 +90,7 @@ export const safeRedisSet = async (key, value, options = {}) => {
 // ─── BullMQ Dedicated Connection ─────────────────────────────────────────────
 // BullMQ REQUIRES maxRetriesPerRequest: null — do NOT use the shared config.
 // Sharing connections with pub/sub or cache clients causes MaxRetriesPerRequestError.
-export const bullmqRedisConnection = new Redis(REDIS_URL, {
+export const bullmqRedisConnection = new Redis(getRedisURL(), {
     maxRetriesPerRequest: null,    // Required by BullMQ
     enableReadyCheck: false,       // Required by BullMQ
     lazyConnect: false,            // BullMQ manages its own connection lifecycle
