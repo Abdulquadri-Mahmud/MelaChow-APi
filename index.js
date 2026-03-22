@@ -1,5 +1,5 @@
+import './config/env.js';   // ← MUST BE FIRST IMPORT
 import express from 'express';
-import dotenv from 'dotenv';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import mongoSanitize from 'express-mongo-sanitize';
@@ -49,7 +49,7 @@ import './config/queue.js';
 import './workers/index.js';
 import { initializeSocket } from './socket/socketServer.js';
 
-dotenv.config();
+// Environment loaded via ./config/env.js import above
 
 // ----------------------------------------
 // Sentry — Must initialize before Express app
