@@ -4,6 +4,7 @@ import { getIO } from "../socket/socketServer.js";
 import Notification from "../model/notification/notification.model.js";
 import Order from "../model/order/Order.js";
 import Rider from "../model/rider.model.js";
+import { sendDeliveryOTP, verifyDeliveryOTP } from '../services/termii.service.js';
 
 export const createRider = async (req, res, next) => {
     try {
@@ -305,45 +306,149 @@ export const markPickedUp = async (req, res, next) => {
     }
 };
 
-export const markDelivered = async (req, res, next) => {
+/**
+ * STEP 1: Rider requests OTP to be sent to customer
+ * Called when rider taps "Delivered" button
+ * POST /riders/:riderId/request-delivery-otp
+ */
+export const requestDeliveryOTP = async (req, res, next) => {
     try {
         const { riderId } = req.params;
         const { orderId } = req.body;
 
+        if (!orderId) {
+            return res.status(400).json({ success: false, message: 'orderId is required' });
+        }
+
+        // Auth guard
+        if (req.rider._id.toString() !== riderId) {
+            return res.status(403).json({ success: false, message: 'Unauthorized' });
+        }
+
+        // Fetch order to get customer phone
+        const order = await Order.findById(orderId)
+            .populate('userId', 'email firstname');
+
+        if (!order) {
+            return res.status(404).json({ success: false, message: 'Order not found' });
+        }
+
+        if (order.riderId?.toString() !== riderId) {
+            return res.status(403).json({ success: false, message: 'Rider not assigned to this order' });
+        }
+
+        if (order.orderStatus !== 'out_for_delivery' && order.orderStatus !== 'rider_assigned') {
+            return res.status(400).json({
+                success: false,
+                message: `Order cannot be delivered from status: ${order.orderStatus}`
+            });
+        }
+
+        // Resolve customer phone — delivery address phone takes priority
+        const customerPhone = order.deliveryAddress?.phone || order.phone;
+
+        if (!customerPhone && !order.userId?.email) {
+            return res.status(400).json({
+                success: false,
+                message: 'Customer has no phone or email on file — cannot send OTP'
+            });
+        }
+
+        const result = await sendDeliveryOTP(
+            orderId,
+            customerPhone,
+            order.userId?._id || order.userId
+        );
+
+        return res.status(200).json({
+            success: true,
+            message: result.method === 'sms'
+                ? 'OTP sent to customer via SMS'
+                : result.method === 'email'
+                    ? 'OTP sent to customer via email'
+                    : 'Dev mode: use code 123456',
+            method: result.method,
+        });
+
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
+ * STEP 2: Rider submits OTP entered by customer to confirm delivery
+ * Called after customer reads code to rider
+ * POST /riders/:riderId/confirm-delivery
+ */
+export const confirmDelivery = async (req, res, next) => {
+    try {
+        const { riderId } = req.params;
+        const { orderId, otp } = req.body;
+
+        if (!orderId || !otp) {
+            return res.status(400).json({
+                success: false,
+                message: 'orderId and otp are required'
+            });
+        }
+
+        // Auth guard
+        if (req.rider._id.toString() !== riderId) {
+            return res.status(403).json({ success: false, message: 'Unauthorized' });
+        }
+
+        // Verify OTP
+        const { verified } = await verifyDeliveryOTP(orderId, otp.toString().trim());
+
+        if (!verified) {
+            return res.status(400).json({
+                success: false,
+                message: 'Incorrect code. Please ask the customer to check again.'
+            });
+        }
+
+        // OTP verified — proceed with delivery confirmation
         const order = await riderService.markDelivered(orderId, riderId);
 
         // ✅ Multi-party Notification Cascade (User, Vendor, Admin)
         try {
-            const { 
-              sendOrderNotification, 
-              sendVendorNotification, 
-              sendNotification 
-            } = await import("../services/notification.service.js");
+            const {
+                sendOrderNotification,
+                sendVendorNotification,
+                sendNotification
+            } = await import('../services/notification.service.js');
 
-            // 1. Notify the User (Customer)
-            await sendOrderNotification(order.userId, order._id, "delivered", {
+            await sendOrderNotification(order.userId, order._id, 'delivered', {
                 orderId: order.orderId || order._id,
-                restaurantName: order.restaurantName || "the restaurant"
+                restaurantName: order.restaurantName || 'the restaurant'
             });
 
-            // 2. Notify the Restaurant (Vendor) - Push + In-app
-            await sendVendorNotification(order.items?.[0]?.restaurantId || order.vendorId, order._id, "vendor_order_delivered", {
-                orderId: order.orderId || order._id,
-                customerName: order.deliveryAddress?.name || "the customer"
-            });
+            await sendVendorNotification(
+                order.items?.[0]?.restaurantId || order.vendorId,
+                order._id,
+                'vendor_order_delivered',
+                {
+                    orderId: order.orderId || order._id,
+                    customerName: order.deliveryAddress?.name || 'the customer'
+                }
+            );
 
-            // 3. Notify Admins - Push + In-app
-            // Pass null for recipientId to broadcast to all online admins in room 'admin_room'
-            await sendNotification(null, "admin_order_delivered", {
+            await sendNotification(null, 'admin_order_delivered', {
                 orderId: order.orderId || order._id,
-                restaurantName: order.restaurantName || "the store"
-            }, "admin");
+                restaurantName: order.restaurantName || 'the store'
+            }, 'admin');
 
         } catch (notifErr) {
-            console.warn('⚠️ Push/Notification cascade failed for delivery:', notifErr.message);
+            // Non-fatal — delivery already confirmed
+            console.warn('⚠️ Notification cascade failed after delivery:', notifErr.message);
         }
 
-        res.status(200).json({ success: true, message: "Order delivered", data: order });
+        return res.status(200).json({
+            success: true,
+            message: 'Order delivered successfully',
+            data: order
+        });
+
     } catch (error) {
         next(error);
     }

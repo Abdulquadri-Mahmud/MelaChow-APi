@@ -25,7 +25,8 @@ router.get("/riders/:riderId/active-order", requireRiderAuth, riderController.ge
 // Rider self-service actions
 router.patch("/riders/:riderId/status", requireRiderAuth, riderController.updateRiderStatus);
 router.patch("/riders/:riderId/picked-up", requireRiderAuth, riderController.markPickedUp);
-router.patch("/riders/:riderId/delivered", requireRiderAuth, riderController.markDelivered);
+router.post("/riders/:riderId/request-delivery-otp", requireRiderAuth, riderController.requestDeliveryOTP);
+router.post("/riders/:riderId/confirm-delivery", requireRiderAuth, riderController.confirmDelivery);
 router.get("/riders/:riderId/wallet", requireRiderAuth, riderController.getRiderWallet);
 router.get("/riders/:riderId/orders/:orderId", requireRiderAuth, riderController.getRiderOrderDetails);
 

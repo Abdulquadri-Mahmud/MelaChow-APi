@@ -136,8 +136,21 @@ app.use((req, res, next) => {
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   next();
 });
-app.use(express.json({ limit: '10kb' })); // Parse JSON body
-app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+// Order payloads are legitimately large — multiple items with
+// portions, selected options, and metadata can exceed 10kb.
+// All other routes keep the strict 10kb limit.
+app.use((req, res, next) => {
+    const isOrderRoute =
+        req.path.startsWith('/api/orders') ||
+        req.path.startsWith('/v1/cart');
+    express.json({ limit: isOrderRoute ? '100kb' : '10kb' })(req, res, next);
+});
+app.use((req, res, next) => {
+    const isOrderRoute =
+        req.path.startsWith('/api/orders') ||
+        req.path.startsWith('/v1/cart');
+    express.urlencoded({ extended: true, limit: isOrderRoute ? '100kb' : '10kb' })(req, res, next);
+});
 app.use(cookieParser()); // Parse cookies
 // Manual sanitization — avoids express-mongo-sanitize's req.query getter conflict
 // with newer router versions. Sanitizes req.body and req.params only.

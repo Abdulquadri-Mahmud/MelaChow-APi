@@ -9,9 +9,11 @@ import Food from "../../model/vendor/food.model.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 import Admin from "../../model/Admin/admin.model.js";
 import { createOrderV2, updateOrderAfterPayment, releaseEscrowToVendor } from "./createOrderV2.controller.js";
+import PaymentLock from "../../model/order/PaymentLock.js";
+import { refundOrderToWallet } from "../../services/refund.service.js";
+import logger from "../../config/logger.js";
 import { sendOrderNotification } from "../../services/notification.service.js";
 import { emitOrderStatusUpdate } from "../../socket/events/orderEvents.js";
-import PaymentLock from "../../model/order/PaymentLock.js";
 
 // Helper function to normalize metadata from Paystack (Object or String)
 // Kept for backward compatibility if needed, though pendingOrder strategy supercedes it.
@@ -392,6 +394,7 @@ export const completeOrderFulfillment = async (orderId) => {
           amount: escrowAmount,
           description: `Escrow: vendor food revenue held for Order ${order.orderId}`,
           orderId: order._id,
+          transactionType: 'escrow_hold',
         });
 
         // Platform-managed delivery fee also held in admin wallet
@@ -402,6 +405,7 @@ export const completeOrderFulfillment = async (orderId) => {
             amount: vendorDeliveryShare,
             description: `Delivery fee held for admin rider - Order ${order.orderId}`,
             orderId: order._id,
+            transactionType: 'delivery_fee',
           });
         }
       }
@@ -433,6 +437,7 @@ export const completeOrderFulfillment = async (orderId) => {
           amount: adminShare,
           description: `Commission from Order ${order.orderId}`,
           orderId: order._id,
+          transactionType: 'commission',
         });
       }
     }
@@ -1363,6 +1368,22 @@ export const updateVendorOrderStatus = async (req, res) => {
             console.error(`❌ Escrow release failed for VendorOrder ${vendorOrder._id}:`, escrowErr.message);
         }
     }
+
+    // Trigger refund when vendor cancels an order
+    // Trigger refund when vendor cancels an order
+    if (status === 'cancelled') {
+        try {
+            await refundOrderToWallet(vendorOrder.userOrderId, 'vendor_cancel');
+            logger.info({ vendorOrderId: vendorOrder._id }, '✅ Vendor cancellation refund processed');
+        } catch (refundErr) {
+            // Non-fatal — status update already saved, log for manual review
+            logger.error(
+                { vendorOrderId: vendorOrder._id, error: refundErr.message },
+                '❌ Refund failed after vendor cancellation — manual review required'
+            );
+        }
+    }
+
 
     // ✅ Sync parent order status
     await syncParentOrderStatus(vendorOrder.userOrderId);
