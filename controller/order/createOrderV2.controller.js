@@ -668,7 +668,8 @@ export const createOrderV2 = async ({
                 type: "debit",
                 amount: total,
                 description: `Payment for order ${finalOrderId}`,
-                date: new Date()
+                date: new Date(),
+                transactionType: 'order_payment',
             });
             await userWallet.save({ session });
 
@@ -980,6 +981,7 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
                 amount: escrowAmount,
                 description: `Escrow: vendor food revenue held for Order ${order.orderId}`,
                 orderId: order._id,
+                transactionType: 'escrow_hold',
             });
 
             // Platform-managed delivery fee also held in admin wallet
@@ -990,6 +992,7 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
                     amount: vendorDeliveryShare,
                     description: `Delivery fee held for admin rider - Order ${order.orderId}`,
                     orderId: order._id,
+                    transactionType: 'delivery_fee',
                 });
             }
         }
@@ -1014,7 +1017,8 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
             type: "credit",
             amount: Number(totalCommission.toFixed(2)),
             description: `Commission from Order ${order.orderId}`,
-            orderId: order._id
+            orderId: order._id,
+            transactionType: 'commission',
         });
         await adminWallet.save({ session });
     }
@@ -1072,6 +1076,7 @@ export const releaseEscrowToVendor = async (vendorOrderId) => {
             amount: escrowAmount,
             description: `Escrow release to vendor for VendorOrder ${vendorOrderId}`,
             orderId: vendorOrder.userOrderId,
+            transactionType: 'escrow_release',
         });
         await adminWallet.save({ session });
 
@@ -1094,6 +1099,7 @@ export const releaseEscrowToVendor = async (vendorOrderId) => {
             amount: escrowAmount,
             description: `Food revenue released from escrow for VendorOrder ${vendorOrderId}`,
             orderId: vendorOrder.userOrderId,
+            transactionType: 'escrow_release',
         });
         await vendorWallet.save({ session });
 

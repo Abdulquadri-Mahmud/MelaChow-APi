@@ -2,6 +2,7 @@ import { Worker } from 'bullmq';
 import { bullmqRedisConnection } from '../config/redis.js';
 import { QUEUE_NAMES } from '../config/queue.js';
 import logger from '../config/logger.js';
+import { refundOrderToWallet } from '../services/refund.service.js';
 
 // ─── Escrow Release Worker ────────────────────────────────────────────────────
 const escrowReleaseWorker = new Worker(
@@ -96,10 +97,13 @@ const orderAutoCancelWorker = new Worker(
 
         logger.info({ orderId }, '✅ Order auto-cancelled — vendor did not respond in time');
 
-        // TODO: Trigger refund to customer wallet here when refund flow is built
-        // The customer paid but the vendor never accepted. 
-        // For now: log it so it shows in Sentry and can be handled manually.
-        logger.warn({ orderId, orderTotal: order.total }, '⚠️ Auto-cancelled paid order requires manual refund review');
+        try {
+            await refundOrderToWallet(orderId, 'auto_cancel');
+            logger.info({ orderId }, '✅ Auto-cancel refund completed');
+        } catch (refundErr) {
+            logger.error({ orderId, error: refundErr.message }, '❌ Auto-cancel refund failed');
+            throw refundErr; // Re-throw — BullMQ will retry
+        }
     },
     {
         connection: bullmqRedisConnection.duplicate(),

@@ -312,7 +312,7 @@ export const markDelivered = async (orderId, riderId) => {
                     type: "debit",
                     amount: riderPayout,
                     description: `Rider Payout (80%) for Order ${order.orderId}`,
-                    metadata: { deliveryFee, commission: platformCommission }
+                    transactionType: 'rider_payout',
                 });
                 await adminWallet.save({ session });
 
@@ -321,7 +321,7 @@ export const markDelivered = async (orderId, riderId) => {
                     type: "credit",
                     amount: riderPayout,
                     description: `Delivery Fee (80% share) for Order ${order.orderId}`,
-                    metadata: { totalFee: deliveryFee }
+                    transactionType: 'rider_payout',
                 });
                 await riderWallet.save({ session });
 
