@@ -6,8 +6,8 @@ const auth = async (req, res, next) => {
   if (req.method === "OPTIONS") return next(); // skip preflight
 
   try {
-    // Read token from cookie
-    const token = req.cookies.token;
+    // Read token from cookie OR Authorization header
+    const token = req.cookies.token || req.headers.authorization?.split(" ")[1];
 
     if (!token) {
       return res.status(401).json({ message: "Unauthorized. Token missing or invalid." });

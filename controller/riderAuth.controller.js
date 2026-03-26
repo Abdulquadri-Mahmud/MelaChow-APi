@@ -1,3 +1,5 @@
+import jwt from "jsonwebtoken";
+import { blockToken } from "../middleware/tokenBlocklist.js";
 import Rider from "../model/rider.model.js";
 import { generateAccessToken, generateRefreshToken } from "../utils/generateTokens.js";
 import { sendTokenCookie } from "../utils/sendTokenCookie.js";
@@ -57,13 +59,31 @@ export const loginRider = async (req, res, next) => {
 };
 
 export const logoutRider = async (req, res) => {
-    res.clearCookie("riderToken", {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === "production",
-        sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-        path: "/",
-    });
-    res.status(200).json({ success: true, message: "Logged out successfully" });
+    try {
+        // Block the current token if it exists
+        const token = req.cookies?.riderToken;
+        if (token) {
+            try {
+                const decoded = jwt.decode(token);
+                if (decoded?.exp) {
+                    await blockToken(token, decoded.exp);
+                }
+            } catch (e) {
+                console.warn("[logoutRider] Token blocking failed:", e.message);
+            }
+        }
+
+        res.clearCookie("riderToken", {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === "production",
+            sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
+            path: "/",
+        });
+
+        res.status(200).json({ success: true, message: "Logged out successfully" });
+    } catch (error) {
+        res.status(500).json({ success: false, message: "Logout failed", error: error.message });
+    }
 };
 
 export const getMe = async (req, res) => {

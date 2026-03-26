@@ -12,8 +12,8 @@ const multiAuth = async (req, res, next) => {
     if (req.method === "OPTIONS") return next();
 
     try {
-        // 1. Check for User token
-        const userToken = req.cookies.token;
+        // 1. Check for User token (Cookie or Auth Header)
+        const userToken = req.cookies.token || (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.split(' ')[1] : null);
         if (userToken) {
             const blocked = await isTokenBlocked(userToken);
             if (!blocked) {
@@ -35,8 +35,8 @@ const multiAuth = async (req, res, next) => {
             }
         }
 
-        // 2. Check for Vendor token
-        const vendorToken = req.cookies.vendorToken;
+        // 2. Check for Vendor token (Cookie or Auth Header)
+        const vendorToken = req.cookies.vendorToken || (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.split(' ')[1] : null);
         if (vendorToken) {
             const blocked = await isTokenBlocked(vendorToken);
             if (!blocked) {
@@ -57,8 +57,8 @@ const multiAuth = async (req, res, next) => {
             }
         }
 
-        // 3. Check for Admin token
-        const adminToken = req.cookies.adminToken;
+        // 3. Check for Admin token (Cookie or Auth Header)
+        const adminToken = req.cookies.adminToken || (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.split(' ')[1] : null);
         if (adminToken) {
             const blocked = await isTokenBlocked(adminToken);
             if (!blocked) {
@@ -79,7 +79,7 @@ const multiAuth = async (req, res, next) => {
             }
         }
 
-        // If no valid token found in any supported cookie
+        // If no valid token found in any supported cookie or header
         return res.status(401).json({
             success: false,
             message: "Unauthorized. Token missing or invalid."
