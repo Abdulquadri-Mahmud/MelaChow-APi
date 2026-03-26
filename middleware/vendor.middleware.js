@@ -1,15 +1,25 @@
 import jwt from "jsonwebtoken";
 import vendorModel from "../model/vendor/vendor.model.js";
+import { isTokenBlocked } from "./tokenBlocklist.js";
 
 const authVendor = async (req, res, next) => {
   try {
-    // Read token from HTTP-only cookie
-    const token = req.cookies.vendorToken;
+    // Read token from HTTP-only cookie OR Authorization header
+    const token = req.cookies.vendorToken || req.headers.authorization?.split(" ")[1];
 
     if (!token) {
       return res.status(401).json({
         success: false,
         message: "Unauthorized (Vendor). Token missing or invalid."
+      });
+    }
+
+    // Check blocklist BEFORE verifying signature (fast Redis check)
+    const blocked = await isTokenBlocked(token);
+    if (blocked) {
+      return res.status(401).json({
+        success: false,
+        message: 'Session has been revoked. Please log in again.'
       });
     }
 
