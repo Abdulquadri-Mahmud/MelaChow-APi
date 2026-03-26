@@ -4,12 +4,22 @@ import { isTokenBlocked } from './tokenBlocklist.js';
 
 export const requireRiderAuth = async (req, res, next) => {
     try {
-        const token = req.cookies.riderToken;
+        // Read token from HTTP-only cookie OR Authorization header
+        const token = req.cookies.riderToken || req.headers.authorization?.split(" ")[1];
 
         if (!token) {
             return res.status(401).json({
                 success: false,
                 message: "Unauthorized (Rider). Token missing or invalid."
+            });
+        }
+
+        // Check blocklist before verifying signature
+        const blocked = await isTokenBlocked(token);
+        if (blocked) {
+            return res.status(401).json({
+                success: false,
+                message: "Session has been revoked. Please log in again."
             });
         }
 
