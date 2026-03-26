@@ -91,7 +91,6 @@ const discountSchema = new mongoose.Schema(
 );
 
 // Indexes for fast lookup
-discountSchema.index({ code: 1 });
 discountSchema.index({ vendorId: 1 });
 discountSchema.index({ isActive: 1, startDate: 1, endDate: 1 });
 

@@ -213,7 +213,7 @@ const orderSchema = new mongoose.Schema(
 
     paymentStatus: {
       type: String,
-      enum: ["pending", "paid", "failed"],
+      enum: ["pending", "paid", "failed", "refunded"],
       default: "pending",
     },
 
@@ -227,7 +227,6 @@ const orderSchema = new mongoose.Schema(
       type: String,
       sparse: true,   // allows multiple null values
       unique: true,   // but only one doc per non-null key
-      index: true,
     },
 
     orderStatus: {
