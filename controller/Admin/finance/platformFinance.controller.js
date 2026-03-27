@@ -110,13 +110,43 @@ export const getRevenueSummary = async (req, res) => {
             }
         ]);
 
+        // 5. Active Escrow Holdings
+        const activeEscrowStats = await VendorOrder.aggregate([
+            {
+                $lookup: {
+                    from: "orders",
+                    localField: "userOrderId",
+                    foreignField: "_id",
+                    as: "parentOrder"
+                }
+            },
+            { $unwind: "$parentOrder" },
+            {
+                $match: {
+                    "parentOrder.paymentStatus": "paid",
+                    "escrowReleased": false
+                }
+            },
+            {
+                $group: {
+                    _id: null,
+                    totalEscrowHeld: { $sum: "$escrowAmount" }
+                }
+            }
+        ]);
+
         const commEarned = commissionStats[0]?.totalCommissionEarned || 0;
         const delivRevenue = platformDeliveryStats[0]?.totalPlatformDeliveryRevenue || 0;
+        const totalEscrowHeld = activeEscrowStats[0]?.totalEscrowHeld || 0;
+        const currentPlatformBalance = adminWallet?.balance || 0;
+        const availableBalance = Math.max(0, currentPlatformBalance - totalEscrowHeld);
 
         res.status(200).json({
             success: true,
             data: {
-                currentPlatformBalance: adminWallet?.balance || 0,
+                currentPlatformBalance,
+                totalEscrowHeld,
+                availableBalance,
                 totalCommissionEarned: commEarned,
                 totalPlatformDeliveryRevenue: delivRevenue,
                 combinedPlatformRevenue: commEarned + delivRevenue,
