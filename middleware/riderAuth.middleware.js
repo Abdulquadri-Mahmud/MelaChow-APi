@@ -23,15 +23,6 @@ export const requireRiderAuth = async (req, res, next) => {
             });
         }
 
-        // Check blocklist before verifying signature
-        const blocked = await isTokenBlocked(token);
-        if (blocked) {
-            return res.status(401).json({
-                success: false,
-                message: "Session has been revoked. Please log in again."
-            });
-        }
-
         let decoded;
         try {
             decoded = jwt.verify(token, process.env.JWT_SECRET);
