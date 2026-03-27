@@ -28,12 +28,12 @@ export const getAdminNotifications = async (req, res) => {
         const { limit = 50, skip = 0, type, unread } = req.query;
         const adminId = req.admin._id;
 
-        // Build query
-        // Admins can see specific admin notifications OR general system notifications
+        // Build query — Admins see notifications where role is 'admin' (broadcasts)
+        // OR notifications specifically targeted to their adminId.
         let query = {
             $or: [
-                { adminId: adminId },
-                { type: { $in: ['system', 'account_update', 'vendor_review'] } }
+                { role: 'admin' },
+                { adminId: adminId }
             ]
         };
 
@@ -50,10 +50,11 @@ export const getAdminNotifications = async (req, res) => {
             .limit(parseInt(limit))
             .skip(parseInt(skip));
 
+        // Unread count for the specific admin + broadcast notifications
         const unreadCount = await Notification.countDocuments({
             $or: [
-                { adminId: adminId },
-                { type: { $in: ['system', 'account_update', 'vendor_review'] } }
+                { role: 'admin' },
+                { adminId: adminId }
             ],
             read: false
         });
@@ -68,6 +69,7 @@ export const getAdminNotifications = async (req, res) => {
             hasMore: total > (parseInt(skip) + notifications.length)
         });
     } catch (error) {
+        console.error('getAdminNotifications Error:', error);
         res.status(500).json({ message: 'Failed to fetch admin notifications', error: error.message });
     }
 };
@@ -80,14 +82,15 @@ export const getAdminUnreadCount = async (req, res) => {
         const adminId = req.admin._id;
         const count = await Notification.countDocuments({
             $or: [
-                { adminId: adminId },
-                { type: { $in: ['system', 'account_update', 'vendor_review'] } }
+                { role: 'admin' },
+                { adminId: adminId }
             ],
             read: false
         });
 
         res.json({ success: true, count });
     } catch (error) {
+        console.error('getAdminUnreadCount Error:', error);
         res.status(500).json({ success: false, message: 'Failed to get unread count', error: error.message });
     }
 };
@@ -102,8 +105,8 @@ export const markAdminAsRead = async (req, res) => {
             {
                 _id: req.params.id,
                 $or: [
-                    { adminId: adminId },
-                    { type: { $in: ['system', 'account_update', 'vendor_review'] } }
+                    { role: 'admin' },
+                    { adminId: adminId }
                 ]
             },
             { read: true },
@@ -129,8 +132,8 @@ export const markAllAdminAsRead = async (req, res) => {
         const result = await Notification.updateMany(
             {
                 $or: [
-                    { adminId: adminId },
-                    { type: { $in: ['system', 'account_update', 'vendor_review'] } }
+                    { role: 'admin' },
+                    { adminId: adminId }
                 ],
                 read: false
             },

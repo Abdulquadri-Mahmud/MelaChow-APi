@@ -13,6 +13,19 @@ const notificationSchema = new mongoose.Schema({
         required: false,
         index: true
     },
+    adminId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Admin',
+        required: false,
+        index: true
+    },
+    role: {
+        type: String,
+        enum: ['user', 'vendor', 'admin', 'rider'],
+        required: true,
+        default: 'user',
+        index: true
+    },
     title: {
         type: String,
         required: true,
@@ -32,10 +45,15 @@ const notificationSchema = new mongoose.Schema({
             'order_dispatched',
             'order_delivered',
             'order_cancelled',
-            'order_assigned',        // ✅ FIX: was missing — caused silent DB failure for rider assignment notifications
-            'rider_order_rejected',  // ✅ FIX: added for completeness
+            'order_assigned',
+            'rider_order_rejected',
             'vendor_new_order',
             'vendor_order_cancelled',
+            'admin_order_ready',      // ✅ New Admin Type
+            'admin_order_delivered',  // ✅ New Admin Type
+            'rider_assignment_needed', // ✅ New Admin Type
+            'vendor_review',           // ✅ New Admin Type
+            'system',                  // ✅ New Admin Type
             'promo',
             'discount',
             'delivery_nearby',
@@ -81,6 +99,8 @@ const notificationSchema = new mongoose.Schema({
 
 notificationSchema.index({ userId: 1, createdAt: -1 });
 notificationSchema.index({ riderId: 1, createdAt: -1 });
+notificationSchema.index({ adminId: 1, createdAt: -1 });
+notificationSchema.index({ role: 1, createdAt: -1 });
 notificationSchema.index({ userId: 1, read: 1 });
 notificationSchema.index({ riderId: 1, read: 1 });
 notificationSchema.index({ userId: 1, type: 1 });
