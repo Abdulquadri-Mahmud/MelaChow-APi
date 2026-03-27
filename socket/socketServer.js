@@ -126,7 +126,7 @@ export async function initializeSocket(server) {
     });
 
     // Connection handler
-    io.on('connection', (socket) => {
+    io.on('connection', async (socket) => {
         console.log(`🔌 Client connected: ${socket.id} | Role: ${socket.userRole} | User: ${socket.userEmail}`);
 
         // Register Rider Specific Handlers
