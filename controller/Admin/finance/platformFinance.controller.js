@@ -475,3 +475,134 @@ export const getVendorBreakdown = async (req, res) => {
         res.status(500).json({ success: false, message: error.message });
     }
 };
+
+/**
+ * GET UNRELEASED ESCROW LIST
+ * Route: GET /api/admin/finance/escrow
+ */
+export const getUnreleasedEscrowList = async (req, res) => {
+    try {
+        const { page = 1, limit = 20, search } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        const matchStage = {
+            "parentOrder.paymentStatus": "paid",
+            escrowReleased: false
+        };
+
+        if (search) {
+            matchStage["parentOrder.orderId"] = { $regex: search, $options: "i" };
+        }
+
+        const aggregation = await VendorOrder.aggregate([
+            {
+                $lookup: {
+                    from: "orders",
+                    localField: "userOrderId",
+                    foreignField: "_id",
+                    as: "parentOrder"
+                }
+            },
+            { $unwind: "$parentOrder" },
+            {
+                $lookup: {
+                    from: "vendors",
+                    localField: "restaurantId",
+                    foreignField: "_id",
+                    as: "vendorInfo"
+                }
+            },
+            { $unwind: "$vendorInfo" },
+            { $match: matchStage },
+            { $sort: { createdAt: -1 } },
+            {
+                $facet: {
+                    data: [
+                        { $skip: skip },
+                        { $limit: parseInt(limit) },
+                        {
+                            $project: {
+                                _id: 1,
+                                escrowAmount: 1,
+                                orderStatus: 1,
+                                createdAt: 1,
+                                "parentOrder.orderId": 1,
+                                "parentOrder.total": 1,
+                                "parentOrder.paymentStatus": 1,
+                                "vendorInfo._id": 1,
+                                "vendorInfo.storeName": 1,
+                            }
+                        }
+                    ],
+                    count: [{ $count: "total" }],
+                    stats: [
+                        { $group: { _id: null, sum: { $sum: "$escrowAmount" } } }
+                    ]
+                }
+            }
+        ]);
+
+        const data = aggregation[0].data;
+        const total = aggregation[0].count[0]?.total || 0;
+        const sum = aggregation[0].stats[0]?.sum || 0;
+
+        res.status(200).json({
+            success: true,
+            data: {
+                escrowOrders: data,
+                totalEscrowHeld: sum,
+                pagination: {
+                    total,
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    totalPages: Math.ceil(total / limit)
+                }
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * GET REFUNDS LIST
+ * Route: GET /api/admin/finance/refunds
+ */
+export const getRefundsList = async (req, res) => {
+    try {
+        const { page = 1, limit = 20, search } = req.query;
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+
+        // Dynamically import Refund to avoid circular dependencies if needed, or import at top
+        const Refund = (await import("../../../model/refund.model.js")).default;
+        
+        let query = {};
+        if (search) {
+            query.reason = { $regex: search, $options: "i" };
+        }
+
+        const total = await Refund.countDocuments(query);
+        const refunds = await Refund.find(query)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .populate('orderId', 'orderId total paymentStatus')
+            .populate('userId', 'email firstname lastname')
+            .lean();
+
+        res.status(200).json({
+            success: true,
+            data: {
+                refunds,
+                pagination: {
+                    total,
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    totalPages: Math.ceil(total / limit)
+                }
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
