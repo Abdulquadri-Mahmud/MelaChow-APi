@@ -108,6 +108,12 @@ const NOTIFICATION_CONFIGS = {
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
+    admin_order_ready: {
+        title: '🚨 Rider Assignment Required',
+        getBody: (data) => `Order #${data.orderId} from ${data.restaurantName || 'the restaurant'} is ready for pickup. Please assign a rider.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: true
+    },
     promo: {
         title: '🎁 Special Offer',
         getBody: (data) => data.message,
@@ -146,6 +152,7 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
             restaurantId: role === 'vendor' ? recipientId : (data.restaurantId || null),
             riderId: role === 'rider' ? recipientId : (data.riderId || null),
             adminId: role === 'admin' ? recipientId : null,
+            role: role, // ✅ Store the role explicitly in the DB for easier filtering
             type,
             title: config.title,
             body: data.message || config.getBody({
@@ -160,6 +167,7 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
             url: data.url || (data.orderId ? (
                 role === 'vendor' ? `/vendors/orders/${data.orderDatabaseId || data.orderId}` :
                 role === 'rider' ? `/rider/dashboard` :
+                role === 'admin' ? `/admin/orders/${data.orderDatabaseId || data.orderId}` :
                 `/profile/orders/${data.orderId}`
             ) : '/notifications'),
             orderId: data.orderId,
@@ -173,15 +181,15 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
             type: notificationData.type
         });
 
-        // 1. Save to database (only if there is a specific recipient)
+        // 1. Save to database
         let savedNotification;
-        if (recipientId) {
+        // Broadcast admin notifications are saved with recipientId = null but marked with role = 'admin'
+        if (recipientId || role === 'admin') {
             try {
                 savedNotification = await Notification.create(notificationData);
-                console.log(`✅ Notification saved successfully: ID ${savedNotification._id}`);
+                console.log(`✅ Notification saved successfully for ${role}${recipientId ? `: ID ${savedNotification._id}` : ' (Broadcast)'}`);
             } catch (dbError) {
                 console.error('❌ Database save error:', dbError.message);
-                // Non-fatal if broadcast admin notification
             }
         }
 

@@ -274,6 +274,7 @@ export const getTransactionLedger = async (req, res) => {
     try {
         const {
             type,
+            transactionType,
             startDate,
             endDate,
             search,
@@ -304,8 +305,11 @@ export const getTransactionLedger = async (req, res) => {
         // 2. Filter based on query
         let filtered = allTransactions;
 
-        if (type) {
+        if (type && type !== "all") {
             filtered = filtered.filter(tx => tx.type === type);
+        }
+        if (transactionType && transactionType !== "all") {
+            filtered = filtered.filter(tx => tx.transactionType === transactionType);
         }
         if (startDate) {
             filtered = filtered.filter(tx => new Date(tx.date) >= new Date(startDate));
@@ -327,11 +331,11 @@ export const getTransactionLedger = async (req, res) => {
         const paginatedSlice = filtered.slice(startIndex, startIndex + parseInt(limit));
 
         // 4. Batch Populate Orders
-        const orderIds = paginatedSlice
-            .filter(tx => tx.orderId)
+        const validOrderIds = paginatedSlice
+            .filter(tx => tx.orderId && mongoose.Types.ObjectId.isValid(tx.orderId))
             .map(tx => tx.orderId);
 
-        const orders = await Order.find({ _id: { $in: orderIds } })
+        const orders = await Order.find({ _id: { $in: validOrderIds } })
             .select("orderId orderStatus total")
             .lean();
 

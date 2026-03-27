@@ -252,6 +252,32 @@ export async function initializeSocket(server) {
         if (socket.userRole === 'admin' || socket.userRole === 'super-admin') {
             socket.join('admin_room');
             console.log(`🛡️ Admin joined admin_room`);
+
+            // Deliver any notifications that arrived while admin was disconnected
+            try {
+                const Notification = (await import('../model/notification/notification.model.js')).default;
+                // Fetch unread notifications meant for admins (either broad role-based or specific adminId)
+                const missedNotifications = await Notification.find({
+                    $or: [
+                        { role: 'admin' },
+                        { adminId: socket.userId }
+                    ],
+                    read: false
+                })
+                    .sort({ createdAt: -1 })
+                    .limit(20)
+                    .lean();
+
+                if (missedNotifications.length > 0) {
+                    socket.emit('missed_notifications', {
+                        notifications: missedNotifications,
+                        count: missedNotifications.length
+                    });
+                    console.log(`📬 Delivered ${missedNotifications.length} missed notification(s) to admin ${socket.userId}`);
+                }
+            } catch (err) {
+                console.error('❌ Failed to deliver missed notifications to admin:', err.message);
+            }
         }
 
         // ── Health check ───────────────────────────────────────────────────

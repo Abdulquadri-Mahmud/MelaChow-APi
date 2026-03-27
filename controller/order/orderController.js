@@ -1396,7 +1396,7 @@ export const updateVendorOrderStatus = async (req, res) => {
         path: 'userOrderId',
         select: 'userId orderId total'
       })
-      .populate('restaurantId', 'storeName');
+      .populate('restaurantId', 'storeName deliveryManagedBy'); // ✅ Include deliveryManagedBy
 
     if (populatedOrder && populatedOrder.userOrderId && populatedOrder.userOrderId.userId) {
       // ✅ CRITICAL: Convert ObjectId to String
@@ -1406,7 +1406,7 @@ export const updateVendorOrderStatus = async (req, res) => {
 
       console.log(`🔔 Sending notification - User: ${userId}, Order: ${orderId}`);
 
-      // Emit Socket.IO event
+      // Emit Socket.IO event (Customer + Room)
       try {
         emitOrderStatusUpdate(
           {
@@ -1424,23 +1424,41 @@ export const updateVendorOrderStatus = async (req, res) => {
         console.error('❌ Socket.IO error:', socketError.message);
       }
 
-      // Send notification (saves to DB + push + WebSocket)
+      // Send Customer notification (saves to DB + push + WebSocket)
       try {
         await sendOrderNotification(
           userId,
           orderId,
           status,
           {
+            orderDatabaseId: populatedOrder._id, // ✅ Track specific vendor order
             restaurantName: restaurantName,
             totalAmount: populatedOrder.userOrderId.total,
             items: populatedOrder.items
           }
         );
-        console.log(`✅ Notification sent successfully`);
+        console.log(`✅ Customer Notification sent successfully`);
       } catch (notifError) {
-        console.error('❌ Notification error:', notifError.message);
-        console.error('❌ Stack:', notifError.stack);
+        console.error('❌ Customer Notification error:', notifError.message);
       }
+
+      // 🚨 ADMIN ALERT: Triggered when vendor marks order ready and delivery is admin-managed
+      if ((status === 'ready_for_pickup' || status === 'ready') && 
+          populatedOrder.restaurantId.deliveryManagedBy === 'admin') {
+          
+          try {
+              const { sendNotification } = await import('../../services/notification.service.js');
+              await sendNotification(null, 'admin_order_ready', {
+                  orderId: orderId,
+                  orderDatabaseId: populatedOrder._id,
+                  restaurantName: restaurantName
+              }, 'admin');
+              console.log('🚨 Admin Assignment Alert broadcasted successfully');
+          } catch (adminNotifError) {
+              console.error('❌ Admin Notification error:', adminNotifError.message);
+          }
+      }
+
     } else {
       console.warn(`⚠️ Cannot send notification - missing order data`);
     }
