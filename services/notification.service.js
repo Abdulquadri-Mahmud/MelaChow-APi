@@ -98,25 +98,45 @@ const NOTIFICATION_CONFIGS = {
     },
     vendor_order_delivered: {
         title: '💰 Order Delivered & Earnings Credited',
-        getBody: (data) => `Order #${data.orderId} from ${data.customerName || 'customer'} has been delivered successfully. Your earnings have been updated.`,
-        icon: '/icons/icon-192x192.png',
-        requireInteraction: false
-    },
-    admin_order_delivered: {
-        title: '🏁 Order Delivery Completed',
-        getBody: (data) => `Delivery for Order #${data.orderId} (from ${data.restaurantName || 'store'}) has been completed by the assigned rider.`,
+        getBody: (data) => `Order #${data.orderId || data._id?.slice(-6)} has been successfully delivered. Your earnings have been updated.`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
     admin_order_ready: {
-        title: '🚨 Rider Assignment Required',
-        getBody: (data) => `Order #${data.orderId} from ${data.restaurantName || 'the restaurant'} is ready for pickup. Please assign a rider.`,
+        title: '🚨 Platform Order Ready',
+        getBody: (data) => `${data.restaurantName || 'Restaurant'} marked Order #${data.orderId || data._id?.slice(-6)} as ready. Assign rider now!`,
         icon: '/icons/icon-192x192.png',
-        requireInteraction: true
+        requireInteraction: true,
+        vibrate: [400, 100, 400, 100, 400]
+    },
+    rider_assignment_needed: {
+        title: '⚠️ Manual Assignment Required',
+        getBody: (data) => `Logistics alert: No rider found for Order #${data.id || data.orderId}. Immediate manual assignment needed.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: true,
+        vibrate: [500, 100, 500, 100, 500]
+    },
+    admin_order_delivered: {
+        title: '🏁 Order Delivery Completed',
+        getBody: (data) => `Platform Order #${data.orderId || data._id?.slice(-6)} has been delivered correctly to the customer.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: false
+    },
+    vendor_review: {
+        title: '⭐ New Merchant Review',
+        getBody: (data) => `Customer left a review for ${data.restaurantName || 'a vendor'}. View feedback in the portal.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: false
+    },
+    system: {
+        title: '⚙️ Platform System Alert',
+        getBody: (data) => data.message || 'New system update or administrative message.',
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: false
     },
     promo: {
         title: '🎁 Special Offer',
-        getBody: (data) => data.message,
+        getBody: (data) => data.message || 'Check out our latest discount!',
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     }
