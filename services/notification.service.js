@@ -188,7 +188,7 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
                 role === 'vendor' ? `/vendors/orders/${data.orderDatabaseId || data.orderId}` :
                 role === 'rider' ? `/rider/dashboard` :
                 role === 'admin' ? `/admin/orders/${data.orderDatabaseId || data.orderId}` :
-                `/profile/orders/${data.orderId}`
+                `/track-orders/${data.orderId}`
             ) : '/notifications'),
             orderId: data.orderId,
             read: false,
@@ -461,6 +461,38 @@ export async function sendVendorNotification(restaurantId, orderId, type, data =
 
     const restaurantIdString = String(restaurantId);
     console.log(`🏪 Sending vendor notification: Restaurant ${restaurantIdString}, Order ${orderId}, Type: ${type}`);
+
+    // ✅ Deep Link Consistency Fix: 
+    // Vendors deep-link to /vendors/orders/[VendorOrder._id]. 
+    // If orderDatabaseId is missing, we auto-resolve it from the parent Order.
+    if (!data.orderDatabaseId && orderId) {
+        try {
+            const VendorOrder = (await import('../model/vendor/VendorOrder.js')).default;
+            const Order = (await import('../model/order/Order.js')).default;
+            let parentOrderDBId = null;
+
+            if (String(orderId).match(/^[0-9a-fA-F]{24}$/)) {
+                if (await VendorOrder.exists({ _id: orderId })) {
+                    data.orderDatabaseId = orderId;
+                } else {
+                    parentOrderDBId = orderId;
+                }
+            } else if (String(orderId).startsWith('ORD-')) {
+                const po = await Order.findOne({ orderId }).select('_id');
+                if (po) parentOrderDBId = po._id;
+            }
+
+            if (parentOrderDBId && !data.orderDatabaseId) {
+                const subOrder = await VendorOrder.findOne({ 
+                    userOrderId: parentOrderDBId, 
+                    restaurantId: restaurantIdString 
+                }).select('_id');
+                if (subOrder) data.orderDatabaseId = subOrder._id;
+            }
+        } catch (e) {
+            console.warn('⚠️ Vendor notification auto-resolution failed:', e.message);
+        }
+    }
 
     // 1. Notify the Vendor Account itself (Direct Push/WebSocket)
     const vendorMainPromise = sendNotification(restaurantIdString, type, {

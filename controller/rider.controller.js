@@ -549,3 +549,44 @@ export const getRiderWallet = async (req, res, next) => {
         next(error);
     }
 };
+
+/**
+ * Get all orders assigned to or delivered by a specific rider
+ */
+export const getRiderOrders = async (req, res, next) => {
+    try {
+        const { riderId } = req.params;
+
+        // Auth guard — rider can only fetch their own orders
+        if (req.rider._id.toString() !== riderId) {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
+        }
+
+        const Order = (await import("../model/order/Order.js")).default;
+        
+        // Find all orders where this rider is or was assigned
+        const orders = await Order.find({ riderId })
+            .populate("items.restaurantId", "storeName logo")
+            .sort({ createdAt: -1 })
+            .lean();
+
+        // Enrich with simplified status for frontend
+        const enrichedOrders = orders.map(order => {
+            let status = order.orderStatus;
+            
+            // Map backend statuses to consolidated frontend statuses if needed
+            if (["delivered", "completed"].includes(order.orderStatus)) status = "delivered";
+            if (order.orderStatus === "out_for_delivery") status = "picked_up";
+            if (order.orderStatus === "rider_assigned") status = "assigned";
+
+            return {
+                ...order,
+                status // Frontend expects 'status' field for the tabs
+            };
+        });
+
+        res.status(200).json({ success: true, orders: enrichedOrders });
+    } catch (error) {
+        next(error);
+    }
+};

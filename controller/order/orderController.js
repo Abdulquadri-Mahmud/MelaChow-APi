@@ -1086,7 +1086,12 @@ export const getSingleOrder = async (req, res) => {
     }
 
     // 1️⃣ Find order + populate food & restaurant
-    const order = await Order.findOne({ orderId, userId })
+    // Support both MongoDB ObjectId and human-readable orderId string
+    const query = String(orderId).match(/^[0-9a-fA-F]{24}$/) 
+      ? { _id: orderId, userId } 
+      : { orderId: orderId, userId };
+
+    const order = await Order.findOne(query)
       .populate({
         path: "items.foodId",
         select: "name", // Food info for frontend

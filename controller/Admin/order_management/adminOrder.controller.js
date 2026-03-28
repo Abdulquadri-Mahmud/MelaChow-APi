@@ -99,7 +99,11 @@ export const getSingleOrder = async (req, res) => {
     try {
         const { orderId } = req.params;
 
-        const order = await Order.findOne({ orderId })
+        const query = String(orderId).match(/^[0-9a-fA-F]{24}$/) 
+            ? { _id: orderId } 
+            : { orderId: orderId };
+
+        const order = await Order.findOne(query)
             .populate("userId", "firstname lastname email phone")
             .populate("riderId", "name phone avatar status")
             .populate("items.restaurantId", "storeName logo deliveryManagedBy")
