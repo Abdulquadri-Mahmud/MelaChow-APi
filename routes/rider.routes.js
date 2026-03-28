@@ -28,6 +28,7 @@ router.patch("/riders/:riderId/picked-up", requireRiderAuth, riderController.mar
 router.post("/riders/:riderId/request-delivery-otp", requireRiderAuth, riderController.requestDeliveryOTP);
 router.post("/riders/:riderId/confirm-delivery", requireRiderAuth, riderController.confirmDelivery);
 router.get("/riders/:riderId/wallet", requireRiderAuth, riderController.getRiderWallet);
+router.get("/riders/:riderId/orders", requireRiderAuth, riderController.getRiderOrders);
 router.get("/riders/:riderId/orders/:orderId", requireRiderAuth, riderController.getRiderOrderDetails);
 
 // Admin global rider management
