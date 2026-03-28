@@ -241,29 +241,37 @@ const validateCombo = async (cartItem) => {
  * 3. Fall back to City.platformDeliveryFee
  */
 const resolveVendorDeliveryFee = async (vendor) => {
-  if (vendor.deliveryManagedBy === "vendor") {
-    return vendor.flatRateDeliveryFee ?? 0;
-  }
+    if (vendor.deliveryManagedBy === "vendor") {
+        return vendor.flatRateDeliveryFee ?? 0;
+    }
 
-  if (
-    vendor.platformDeliveryFeeOverride != null &&
-    vendor.platformDeliveryFeeOverride > 0
-  ) {
-    return vendor.platformDeliveryFeeOverride;
-  }
+    if (
+        vendor.platformDeliveryFeeOverride != null &&
+        vendor.platformDeliveryFeeOverride > 0
+    ) {
+        return vendor.platformDeliveryFeeOverride;
+    }
 
-  try {
     const cityName = vendor.address?.city;
-    if (!cityName) return 0;
+    if (!cityName) {
+        throw new Error(
+            `Vendor "${vendor.storeName}" has no city set on their address. ` +
+            `Cannot resolve platform delivery fee.`
+        );
+    }
 
     const city = await City.findOne({
-      name: { $regex: new RegExp(`^${cityName}$`, "i") },
+        name: { $regex: new RegExp(`^${cityName}$`, "i") },
     }).lean();
 
-    return city?.platformDeliveryFee ?? 0;
-  } catch {
-    return 0;
-  }
+    if (!city || city.platformDeliveryFee == null) {
+        throw new Error(
+            `No platform delivery fee configured for city "${cityName}". ` +
+            `Set a fee in the admin City settings before orders can be placed here.`
+        );
+    }
+
+    return city.platformDeliveryFee;
 };
 
 /**
@@ -1202,7 +1210,7 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
                     },
                     {
                         delay: 15 * 60 * 1000,             // 15 minutes
-                        jobId: `auto-cancel-${order._id}`,  // Idempotent — one job per order
+                        jobId: `auto-cancel-${vendorOrderId}`,  // Unique per vendor order
                     }
                 );
             }

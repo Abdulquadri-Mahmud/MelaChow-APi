@@ -2,6 +2,7 @@ import Wallet from "../../../model/wallet/wallet.mode.js";
 import Order from "../../../model/order/Order.js";
 import VendorOrder from "../../../model/vendor/VendorOrder.js";
 import Vendor from "../../../model/vendor/vendor.model.js";
+import Refund from "../../../model/refund.model.js";
 import mongoose from "mongoose";
 
 /**
@@ -577,12 +578,17 @@ export const getRefundsList = async (req, res) => {
         const { page = 1, limit = 20, search } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        // Dynamically import Refund to avoid circular dependencies if needed, or import at top
-        const Refund = (await import("../../../model/refund.model.js")).default;
-        
         let query = {};
         if (search) {
-            query.reason = { $regex: search, $options: "i" };
+            const matchingOrders = await Order.find({
+                orderId: { $regex: search, $options: "i" }
+            }).select("_id").lean();
+
+            if (matchingOrders.length > 0) {
+                query.orderId = { $in: matchingOrders.map(o => o._id) };
+            } else {
+                query.reason = { $regex: search, $options: "i" };
+            }
         }
 
         const total = await Refund.countDocuments(query);
