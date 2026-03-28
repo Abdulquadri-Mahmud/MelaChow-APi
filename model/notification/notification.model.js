@@ -5,26 +5,22 @@ const notificationSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
         required: false,
-        index: true
     },
     riderId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Rider',
         required: false,
-        index: true
     },
     adminId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Admin',
         required: false,
-        index: true
     },
     role: {
         type: String,
         enum: ['user', 'vendor', 'admin', 'rider'],
         required: true,
         default: 'user',
-        index: true
     },
     title: {
         type: String,
@@ -61,7 +57,6 @@ const notificationSchema = new mongoose.Schema({
             'general'
         ],
         default: 'general',
-        index: true
     },
     orderId: {
         type: String,
@@ -70,7 +65,6 @@ const notificationSchema = new mongoose.Schema({
     restaurantId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Vendor',
-        index: true
     },
     url: {
         type: String,
@@ -87,7 +81,6 @@ const notificationSchema = new mongoose.Schema({
     read: {
         type: Boolean,
         default: false,
-        index: true
     },
     data: {
         type: mongoose.Schema.Types.Mixed,

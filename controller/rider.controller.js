@@ -283,7 +283,25 @@ export const markPickedUp = async (req, res, next) => {
 
         const order = await riderService.markPickedUp(orderId, riderId);
 
-        // ✅ Notify User (In-app + Push)
+        // Emit real-time status update to customer tracking page
+        try {
+            const io = getIO();
+            io.to(SOCKET_ROOMS.customer(order.userId)).emit(
+                SOCKET_EVENTS.ORDER_STATUS_UPDATE,
+                buildPayload.statusUpdate({
+                    orderId: order._id,
+                    status: "out_for_delivery",
+                    changedBy: "rider",
+                    message: `${req.rider.name} has picked up your order and is on the way!`,
+                    riderName: req.rider.name,
+                    rider: req.rider.getPublicProfile ? req.rider.getPublicProfile() : req.rider
+                })
+            );
+        } catch (socketErr) {
+            console.warn('⚠️ Socket emit failed for markPickedUp:', socketErr.message);
+        }
+
+        // Notify User (In-app + Push)
         try {
             const { sendOrderNotification, sendVendorNotification } = await import("../services/notification.service.js");
             await sendOrderNotification(order.userId, order._id, "out_for_delivery", {
@@ -409,6 +427,23 @@ export const confirmDelivery = async (req, res, next) => {
 
         // OTP verified — proceed with delivery confirmation
         const order = await riderService.markDelivered(orderId, riderId);
+
+        // Emit real-time status update to customer tracking page
+        try {
+            const io = getIO();
+            io.to(SOCKET_ROOMS.customer(order.userId)).emit(
+                SOCKET_EVENTS.ORDER_STATUS_UPDATE,
+                buildPayload.statusUpdate({
+                    orderId: order._id,
+                    status: "delivered",
+                    changedBy: "rider",
+                    message: "Your order has been delivered. Enjoy your meal!",
+                    riderName: req.rider.name,
+                })
+            );
+        } catch (socketErr) {
+            console.warn('⚠️ Socket emit failed for confirmDelivery:', socketErr.message);
+        }
 
         // ✅ Multi-party Notification Cascade (User, Vendor, Admin)
         try {
