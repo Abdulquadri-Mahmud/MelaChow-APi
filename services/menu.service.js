@@ -1,7 +1,8 @@
 import MenuItem from '../model/menu/MenuItem.js';
 import MenuItemPortion from '../model/menu/MenuItemPortion.js';
 import Category from '../model/category.model.js';
-import { MenuVariant, MenuVariantComponent, VariantChoiceGroup, VariantChoiceOption } from '../model/menu/MenuVariant.js';
+// TODO: ComboItem replaces MenuVariant — update stock cascading logic if needed for combos
+// import { MenuVariant, MenuVariantComponent, VariantChoiceGroup, VariantChoiceOption } from '../model/menu/MenuVariant.js';
 
 export const MenuService = {
     /**

@@ -27,7 +27,7 @@ const vendorOrderSchema = new mongoose.Schema(
         },
         variantId: {
           type:    mongoose.Schema.Types.ObjectId,
-          ref:     "MenuVariant",
+          ref:     "ComboItem",
           default: null,
         },
 

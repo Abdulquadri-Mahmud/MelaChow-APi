@@ -41,6 +41,7 @@ import platformFinanceRouter from './routes/Admin/platformFinance.routes.js';
 import vendorMenuRoutes from "./routes/menu/vendorMenu.routes.js";
 import customerMenuRoutes from "./routes/menu/customerMenu.routes.js";
 import cartRoutes from "./routes/menu/cart.routes.js";
+import comboRoutes from "./routes/menu/comboRoutes.js";
 import socketHealthRoutes from './routes/socket.routes.js';
 import riderNotificationRoutes from './routes/riderNotification.routes.js';
 import http from 'http';
@@ -310,6 +311,8 @@ app.use("/api/transactions", transactionRoutes);
 app.use("/api/orders", orderRoutes);
 
 // --- V1 MENU SYSTEM ---
+// Combos: /v1/menu/combos/... (MUST come before broader /v1/menu route)
+app.use("/v1/menu/combos", comboRoutes);
 // Vendor-facing: /v1/menu/:vendorId/... (sections, items, portions, variants, choice-groups)
 app.use("/v1/menu", vendorMenuRoutes);
 // Customer-facing: /v1/vendors/:vendorId/menu and /v1/vendors/marketplace/...

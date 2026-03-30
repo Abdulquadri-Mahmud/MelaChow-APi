@@ -3,7 +3,8 @@ import VendorMenuSection from '../../model/menu/VendorMenuSection.js';
 import MenuItem from '../../model/menu/MenuItem.js';
 import MenuItemPortion from '../../model/menu/MenuItemPortion.js';
 import { MenuItemChoiceGroup, MenuItemChoiceOption } from '../../model/menu/MenuItemChoice.js';
-import { MenuVariant, MenuVariantComponent, VariantChoiceGroup, VariantChoiceOption } from '../../model/menu/MenuVariant.js';
+// TODO: ComboItem replaces MenuVariant — update variant-related functions to use ComboItem
+// import { MenuVariant, MenuVariantComponent, VariantChoiceGroup, VariantChoiceOption } from '../../model/menu/MenuVariant.js';
 import { MenuService } from '../../services/menu.service.js';
 
 // =====================================================================

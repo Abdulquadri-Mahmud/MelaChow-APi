@@ -7,11 +7,7 @@ import MenuItem         from "../../model/menu/MenuItem.js";
 import MenuItemPortion  from "../../model/menu/MenuItemPortion.js";
 import { MenuItemChoiceGroup, MenuItemChoiceOption }
   from "../../model/menu/MenuItemChoice.js";
-import {
-  MenuVariant,
-  VariantChoiceGroup,
-  VariantChoiceOption,
-} from "../../model/menu/MenuVariant.js";
+import ComboItem from "../../model/menu/ComboItem.js";
 import City from "../../model/location/City.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 
@@ -137,96 +133,80 @@ const validatePortionAndChoices = async (menuItem, cartItem) => {
 
 /**
  * ========================================
- * HELPER: Validate Combo (MenuVariant)
+ * HELPER: Validate Combo (ComboItem)
  * ========================================
  */
 const validateCombo = async (cartItem) => {
-  const combo = await MenuVariant.findOne({
-    _id:          cartItem.variantId,
+  // Support both comboId (new) and variantId (legacy) field names
+  const comboLookupId = cartItem.comboId || cartItem.variantId;
+
+  if (!comboLookupId) {
+    throw new Error("Combo item requires comboId");
+  }
+
+  const combo = await ComboItem.findOne({
+    _id:          comboLookupId,
     is_available: true,
     is_archived:  { $ne: true },
   }).lean();
 
   if (!combo) {
-    throw new Error(`Combo not found or unavailable`);
+    throw new Error("Combo not found or unavailable");
   }
 
-  // Validate selected_swaps
-  const normalizedSwaps = [];
-  const selectedSwaps   = cartItem.selected_swaps || [];
+  // Validate selected_options against embedded choice groups
+  const normalizedChoices = [];
+  const selectedOptions   = cartItem.selected_options || [];
 
-  if (selectedSwaps.length > 0) {
-    const swapGroups = await VariantChoiceGroup.find({
-      variant_id: combo._id,
-    }).lean();
-
-    const swapGroupIds = swapGroups.map(g => g._id);
-    const swapOptions  = await VariantChoiceOption.find({
-      group_id: { $in: swapGroupIds },
-    }).lean();
-
-    const swapOptionMap = {};
-    swapOptions.forEach(o => {
-      swapOptionMap[o._id.toString()] = o;
-    });
-
-    for (const sel of selectedSwaps) {
-      const option = swapOptionMap[sel.option_id?.toString()];
-      if (!option) {
-        throw new Error(
-          `Combo swap: Invalid option "${sel.label}"`
-        );
+  if (selectedOptions.length > 0) {
+    for (const sel of selectedOptions) {
+      const group = combo.choice_groups.find(
+        g => g._id.toString() === sel.group_id?.toString()
+      );
+      if (!group) {
+        throw new Error(`Combo: Invalid choice group for option "${sel.label}"`);
       }
-      normalizedSwaps.push({
-        group_id:             sel.group_id,
+
+      const option = group.options.find(
+        o => o._id.toString() === sel.option_id?.toString()
+      );
+      if (!option) {
+        throw new Error(`Combo: Invalid option "${sel.label}"`);
+      }
+      if (option.is_available === false) {
+        throw new Error(`Combo option "${option.label}" is unavailable`);
+      }
+
+      normalizedChoices.push({
+        group_id:             group._id,
+        group_name:           group.name,
         option_id:            option._id,
         label:                option.label,
-        price_modifier_naira: Math.round(
-          (option.price_modifier || 0) / 100
-        ),
+        price_modifier_naira: Math.round((option.price_modifier || 0) / 100),
+        quantity:             Number(sel.quantity) || 1,
       });
-    }
-
-    // Check required swap groups
-    for (const group of swapGroups) {
-      if (!group.is_required) continue;
-      const hasSelection = normalizedSwaps.some(
-        s => s.group_id?.toString() === group._id.toString()
-      );
-      if (!hasSelection) {
-        throw new Error(
-          `Combo: "${group.name}" swap is required`
-        );
-      }
     }
   }
 
-  // Normalize component_choices
-  const normalizedComponentChoices =
-    (cartItem.component_choices || []).map(cc => ({
-      componentId:          cc.componentId,
-      groupId:              cc.groupId,
-      optionId:             cc.optionId,
-      label:                cc.label,
-      price_modifier_naira: cc.price_modifier_naira || 0,
-    }));
+  // Enforce required groups
+  for (const group of combo.choice_groups) {
+    if (!group.is_required) continue;
+    const hasSelection = normalizedChoices.some(
+      c => c.group_id.toString() === group._id.toString()
+    );
+    if (!hasSelection) {
+      throw new Error(`Combo: "${group.name}" is required`);
+    }
+  }
 
-  // Price: MenuVariant.price is in KOBO — convert to naira
-  const basePrice          = combo.price / 100;
-  const swapsTotal         = normalizedSwaps.reduce(
-    (sum, s) => sum + (s.price_modifier_naira || 0), 0
+  // Price: ComboItem.price is in KOBO — convert to naira
+  const basePrice    = combo.price / 100;
+  const optionsTotal = normalizedChoices.reduce(
+    (sum, c) => sum + (c.price_modifier_naira || 0) * (c.quantity || 1), 0
   );
-  const componentChoicesTotal = normalizedComponentChoices.reduce(
-    (sum, c) => sum + (c.price_modifier_naira || 0), 0
-  );
-  const unitPrice = basePrice + swapsTotal + componentChoicesTotal;
+  const unitPrice = basePrice + optionsTotal;
 
-  return {
-    combo,
-    unitPrice,
-    normalizedSwaps,
-    normalizedComponentChoices,
-  };
+  return { combo, unitPrice, normalizedChoices };
 };
 
 
@@ -390,41 +370,47 @@ export const createOrderV2 = async ({
           if (!cartItem.quantity || cartItem.quantity < 1) {
             throw new Error(`Item ${i}: quantity must be at least 1`);
           }
-
+          
           const isCombo =
             cartItem.type === "combo" ||
-            (!cartItem.type && cartItem.variantId && !cartItem.foodId);
+            (!cartItem.type && (cartItem.comboId || cartItem.variantId) && !cartItem.foodId);
 
           let normalizedItem;
 
           if (isCombo) {
             // ── COMBO ITEM ────────────────────────────────
-            if (!cartItem.variantId) {
-              throw new Error(`Item ${i}: variantId required for combo`);
+            // Support both comboId (new) and variantId (legacy)
+            if (!cartItem.comboId && !cartItem.variantId) {
+              throw new Error(`Item ${i}: comboId required for combo`);
             }
 
             const {
               combo,
               unitPrice,
-              normalizedSwaps,
-              normalizedComponentChoices,
+              normalizedChoices,
             } = await validateCombo(cartItem);
 
             normalizedItem = {
               type:         "combo",
-              variantId:    combo._id,
+              variantId:    combo._id,   // stored as variantId in Order schema
+              comboId:      combo._id,   // explicit for future use
               foodId:       null,
               portionId:    null,
 
-              // ── New explicit fields ──
               portion_label:    "",
               portion_quantity: 1,
-              dietary_type:     "",
+              dietary_type:     combo.dietary_type || "",
               item_type:        "combo",
               storeName:        cartItem.storeName || "",
 
-              // selected_options empty for combos — swaps live in metadata
-              selected_options: [],
+              selected_options: normalizedChoices.map(c => ({
+                group_id:             c.group_id,
+                group_name:           c.group_name,
+                option_id:            c.option_id,
+                label:                c.label,
+                price_modifier_naira: c.price_modifier_naira || 0,
+                quantity:             c.quantity || 1,
+              })),
 
               restaurantId: cartItem.restaurantId,
               name:         combo.name,
@@ -438,17 +424,15 @@ export const createOrderV2 = async ({
               price:    unitPrice,
               note:     cartItem.note || "",
 
-              // ── metadata retained for backward compatibility ──
               metadata: {
-                type:              "combo",
-                selected_swaps:    normalizedSwaps,
-                component_choices: normalizedComponentChoices,
+                type:             "combo",
+                selected_options: normalizedChoices,
                 pricing: {
-                  base_naira:        combo.price / 100,
-                  swaps_total_naira: normalizedSwaps.reduce(
-                    (s, sw) => s + sw.price_modifier_naira, 0
+                  base_naira:         combo.price / 100,
+                  options_total_naira: normalizedChoices.reduce(
+                    (s, c) => s + c.price_modifier_naira * (c.quantity || 1), 0
                   ),
-                  final_unit_naira:  unitPrice,
+                  final_unit_naira: unitPrice,
                 },
               },
             };
