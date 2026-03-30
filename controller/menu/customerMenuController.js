@@ -2,7 +2,8 @@ import VendorMenuSection from '../../model/menu/VendorMenuSection.js';
 import MenuItem from '../../model/menu/MenuItem.js';
 import MenuItemPortion from '../../model/menu/MenuItemPortion.js';
 import { MenuItemChoiceGroup, MenuItemChoiceOption } from '../../model/menu/MenuItemChoice.js';
-import { MenuVariant, MenuVariantComponent, VariantChoiceGroup, VariantChoiceOption } from '../../model/menu/MenuVariant.js';
+// TODO: ComboItem replaces MenuVariant — update customer menu endpoints to use ComboItem
+// import { MenuVariant, MenuVariantComponent, VariantChoiceGroup, VariantChoiceOption } from '../../model/menu/MenuVariant.js';
 import Category from '../../model/category.model.js';
 import Vendor           from "../../model/vendor/vendor.model.js";
 import City from "../../model/location/City.js";

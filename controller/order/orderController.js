@@ -1209,7 +1209,7 @@ export const getVendorOrders = async (req, res) => {
       .populate({
         path: "items.variantId",
         select: "name image_url price",
-        model: "MenuVariant",
+        model: "ComboItem",
       });
 
     return res.json({ vendorOrders });
@@ -1242,7 +1242,7 @@ export const getVendorOrdersByStatus = async (req, res) => {
       .populate({
         path: "items.variantId",
         select: "name image_url price",
-        model: "MenuVariant",
+        model: "ComboItem",
       });
 
     const grouped = {

@@ -5,7 +5,8 @@ import VendorOrder from '../model/vendor/VendorOrder.js';
 import Vendor from '../model/vendor/vendor.model.js';
 import MenuItem from '../model/menu/MenuItem.js';
 import MenuItemPortion from '../model/menu/MenuItemPortion.js';
-import { MenuVariant } from '../model/menu/MenuVariant.js';
+// TODO: ComboItem replaces MenuVariant — update order v1 service if combos are used
+// import { MenuVariant } from '../model/menu/MenuVariant.js';
 import crypto from 'crypto';
 
 export const OrderV1Service = {

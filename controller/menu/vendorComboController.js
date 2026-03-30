@@ -1,0 +1,361 @@
+import mongoose from "mongoose";
+import ComboItem from "../../model/menu/ComboItem.js";
+
+/**
+ * Create a new combo item
+ * Input: price_naira, price_modifier_naira (client sends naira)
+ * Storage: price, price_modifier (stored in kobo)
+ * Validation: name, price required; choice groups properly configured
+ */
+export const createComboItem = async (req, res) => {
+    try {
+        const {
+            name,
+            description,
+            image_url,
+            price_naira,
+            dietary_type,
+            prep_time_minutes,
+            tags,
+            contents,
+            platform_category_id,
+            vendor_section_id,
+            choice_groups,
+        } = req.body;
+
+        const vendor_id = req.vendor._id;
+
+        // Validation: Required fields
+        if (!name || name.trim() === "") {
+            return res.status(400).json({ success: false, message: "Food name is required" });
+        }
+
+        if (price_naira === undefined || price_naira === null) {
+            return res.status(400).json({ success: false, message: "Price is required" });
+        }
+
+        if (typeof price_naira !== "number" || price_naira <= 0) {
+            return res.status(400).json({ success: false, message: "Price must be a positive number" });
+        }
+
+        if (!platform_category_id) {
+            return res.status(400).json({ success: false, message: "Platform category is required" });
+        }
+
+        // Validate choice groups
+        if (choice_groups && Array.isArray(choice_groups)) {
+            for (const group of choice_groups) {
+                if (group.is_required && group.min_selections < 1) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Required group "${group.name}" must have min_selections >= 1`,
+                    });
+                }
+
+                if (group.max_selections < group.min_selections) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Group "${group.name}": max_selections must be >= min_selections`,
+                    });
+                }
+
+                if (!group.options || group.options.length === 0) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Group "${group.name}" must have at least one option`,
+                    });
+                }
+
+                // Convert option price modifiers from naira to kobo
+                group.options = group.options.map((opt) => ({
+                    ...opt,
+                    price_modifier: (opt.price_modifier_naira || 0) * 100,
+                }));
+            }
+        }
+
+        // Create combo item with price converted to kobo
+        const comboItem = await ComboItem.create({
+            vendor_id,
+            name,
+            description,
+            image_url,
+            price: price_naira * 100, // Convert naira to kobo
+            dietary_type: dietary_type || "mixed",
+            prep_time_minutes,
+            tags: tags || [],
+            contents: contents || [],
+            platform_category_id,
+            vendor_section_id: vendor_section_id || null,
+            choice_groups: choice_groups || [],
+            is_available: true,
+            is_in_stock: true,
+            is_archived: false,
+        });
+
+        // Return with price converted back to naira for response
+        const response = {
+            ...comboItem.toObject(),
+            price_naira: comboItem.price / 100,
+        };
+
+        res.status(201).json({ success: true, comboItem: response });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message,
+            ...(process.env.NODE_ENV === "development" && { detail: error.message }),
+        });
+    }
+};
+
+/**
+ * Get all combos for a vendor
+ * Query params: is_available (boolean), search (text search)
+ */
+export const getVendorCombos = async (req, res) => {
+    try {
+        const { vendorId } = req.params;
+        const { is_available, search } = req.query;
+
+        // Build query
+        const query = {
+            vendor_id: new mongoose.Types.ObjectId(vendorId),
+            is_archived: false,
+        };
+
+        // Filter by availability
+        if (is_available !== undefined) {
+            query.is_available = is_available === "true";
+        }
+
+        // Text search
+        let combos;
+        if (search && search.trim()) {
+            combos = await ComboItem.find(
+                { ...query, $text: { $search: search } },
+                { score: { $meta: "textScore" } }
+            )
+                .sort({ score: { $meta: "textScore" }, sort_order: 1, createdAt: -1 })
+                .lean();
+        } else {
+            combos = await ComboItem.find(query)
+                .sort({ sort_order: 1, createdAt: -1 })
+                .lean();
+        }
+
+        // Convert prices to naira
+        const result = combos.map((combo) => ({
+            ...combo,
+            price_naira: combo.price / 100,
+            choice_groups: combo.choice_groups.map((group) => ({
+                ...group,
+                options: group.options.map((opt) => ({
+                    ...opt,
+                    price_modifier_naira: Math.round((opt.price_modifier || 0) / 100),
+                })),
+            })),
+        }));
+
+        res.status(200).json({ success: true, combos: result });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message,
+            ...(process.env.NODE_ENV === "development" && { detail: error.message }),
+        });
+    }
+};
+
+/**
+ * Get a single combo by ID
+ */
+export const getComboById = async (req, res) => {
+    try {
+        const { comboId } = req.params;
+
+        const combo = await ComboItem.findOne({
+            _id: new mongoose.Types.ObjectId(comboId),
+            is_archived: false,
+        }).lean();
+
+        if (!combo) {
+            return res.status(404).json({ success: false, message: "Combo item not found" });
+        }
+
+        // Convert prices to naira
+        const result = {
+            ...combo,
+            price_naira: combo.price / 100,
+            choice_groups: combo.choice_groups.map((group) => ({
+                ...group,
+                options: group.options.map((opt) => ({
+                    ...opt,
+                    price_modifier_naira: Math.round((opt.price_modifier || 0) / 100),
+                })),
+            })),
+        };
+
+        res.status(200).json({ success: true, combo: result });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message,
+            ...(process.env.NODE_ENV === "development" && { detail: error.message }),
+        });
+    }
+};
+
+/**
+ * Update a combo item
+ * Input: any subset of fields (price_naira if updating price)
+ * Full choice_groups replacement if provided
+ */
+export const updateComboItem = async (req, res) => {
+    try {
+        const { comboId } = req.params;
+        const updateData = { ...req.body };
+
+        // Convert price_naira to kobo if provided
+        if (updateData.price_naira !== undefined) {
+            updateData.price = updateData.price_naira * 100;
+            delete updateData.price_naira;
+        }
+
+        // Convert choice group option modifiers if provided
+        if (updateData.choice_groups && Array.isArray(updateData.choice_groups)) {
+            // Validate choice groups
+            for (const group of updateData.choice_groups) {
+                if (group.is_required && group.min_selections < 1) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Required group "${group.name}" must have min_selections >= 1`,
+                    });
+                }
+
+                if (group.max_selections < group.min_selections) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Group "${group.name}": max_selections must be >= min_selections`,
+                    });
+                }
+
+                if (!group.options || group.options.length === 0) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Group "${group.name}" must have at least one option`,
+                    });
+                }
+
+                // Convert option modifiers from naira to kobo
+                group.options = group.options.map((opt) => ({
+                    ...opt,
+                    price_modifier: (opt.price_modifier_naira || 0) * 100,
+                }));
+            }
+        }
+
+        const combo = await ComboItem.findOneAndUpdate(
+            { _id: new mongoose.Types.ObjectId(comboId), vendor_id: req.vendor._id },
+            { $set: updateData },
+            { new: true, runValidators: true }
+        ).lean();
+
+        if (!combo) {
+            return res.status(404).json({ success: false, message: "Combo item not found or does not belong to vendor" });
+        }
+
+        // Convert prices to naira for response
+        const result = {
+            ...combo,
+            price_naira: combo.price / 100,
+            choice_groups: combo.choice_groups.map((group) => ({
+                ...group,
+                options: group.options.map((opt) => ({
+                    ...opt,
+                    price_modifier_naira: Math.round((opt.price_modifier || 0) / 100),
+                })),
+            })),
+        };
+
+        res.status(200).json({ success: true, combo: result });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message,
+            ...(process.env.NODE_ENV === "development" && { detail: error.message }),
+        });
+    }
+};
+
+/**
+ * Toggle combo availability
+ */
+export const toggleComboAvailability = async (req, res) => {
+    try {
+        const { comboId } = req.params;
+        const { is_available } = req.body;
+
+        if (is_available === undefined) {
+            return res.status(400).json({ success: false, message: "is_available field is required" });
+        }
+
+        const combo = await ComboItem.findOneAndUpdate(
+            { _id: new mongoose.Types.ObjectId(comboId), vendor_id: req.vendor._id },
+            { is_available },
+            { new: true }
+        ).lean();
+
+        if (!combo) {
+            return res.status(404).json({ success: false, message: "Combo item not found or does not belong to vendor" });
+        }
+
+        // Convert prices to naira for response
+        const result = {
+            ...combo,
+            price_naira: combo.price / 100,
+            choice_groups: combo.choice_groups.map((group) => ({
+                ...group,
+                options: group.options.map((opt) => ({
+                    ...opt,
+                    price_modifier_naira: Math.round((opt.price_modifier || 0) / 100),
+                })),
+            })),
+        };
+
+        res.status(200).json({ success: true, combo: result });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message,
+            ...(process.env.NODE_ENV === "development" && { detail: error.message }),
+        });
+    }
+};
+
+/**
+ * Archive a combo item (soft delete)
+ */
+export const archiveComboItem = async (req, res) => {
+    try {
+        const { comboId } = req.params;
+
+        const combo = await ComboItem.findOneAndUpdate(
+            { _id: new mongoose.Types.ObjectId(comboId), vendor_id: req.vendor._id },
+            { is_archived: true, is_available: false },
+            { new: true }
+        ).lean();
+
+        if (!combo) {
+            return res.status(404).json({ success: false, message: "Combo item not found or does not belong to vendor" });
+        }
+
+        res.status(200).json({ success: true, message: "Combo item archived successfully" });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: error.message,
+            ...(process.env.NODE_ENV === "development" && { detail: error.message }),
+        });
+    }
+};
