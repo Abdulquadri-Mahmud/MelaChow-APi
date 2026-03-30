@@ -116,12 +116,16 @@ export const createComboItem = async (req, res) => {
 export const getVendorCombos = async (req, res) => {
     try {
         const { vendorId } = req.params;
-        const { is_available, search } = req.query;
+        const { is_available, is_archived, search, page = 1, limit = 10 } = req.query;
+
+        const pageNum = parseInt(page);
+        const limitNum = parseInt(limit);
+        const skip = (pageNum - 1) * limitNum;
 
         // Build query
         const query = {
             vendor_id: new mongoose.Types.ObjectId(vendorId),
-            is_archived: false,
+            is_archived: is_archived === "true",
         };
 
         // Filter by availability
@@ -129,35 +133,54 @@ export const getVendorCombos = async (req, res) => {
             query.is_available = is_available === "true";
         }
 
-        // Text search
+        // Text search & Count
         let combos;
+        let total;
+
         if (search && search.trim()) {
+            const searchQuery = { ...query, $text: { $search: search } };
+            total = await ComboItem.countDocuments(searchQuery);
             combos = await ComboItem.find(
-                { ...query, $text: { $search: search } },
+                searchQuery,
                 { score: { $meta: "textScore" } }
             )
                 .sort({ score: { $meta: "textScore" }, sort_order: 1, createdAt: -1 })
+                .skip(skip)
+                .limit(limitNum)
                 .lean();
         } else {
+            total = await ComboItem.countDocuments(query);
             combos = await ComboItem.find(query)
                 .sort({ sort_order: 1, createdAt: -1 })
+                .skip(skip)
+                .limit(limitNum)
                 .lean();
         }
 
         // Convert prices to naira
-        const result = combos.map((combo) => ({
+        const result = (combos || []).map((combo) => ({
             ...combo,
-            price_naira: combo.price / 100,
-            choice_groups: combo.choice_groups.map((group) => ({
+            price_naira: (combo.price || 0) / 100,
+            choice_groups: (combo.choice_groups || []).map((group) => ({
                 ...group,
-                options: group.options.map((opt) => ({
+                options: (group.options || []).map((opt) => ({
                     ...opt,
                     price_modifier_naira: Math.round((opt.price_modifier || 0) / 100),
                 })),
             })),
         }));
 
-        res.status(200).json({ success: true, combos: result });
+        res.status(200).json({
+            success: true,
+            combos: result,
+            pagination: {
+                total,
+                page: pageNum,
+                limit: limitNum,
+                pages: Math.ceil(total / limitNum),
+                hasMore: skip + result.length < total
+            }
+        });
     } catch (error) {
         res.status(500).json({
             success: false,
@@ -176,7 +199,6 @@ export const getComboById = async (req, res) => {
 
         const combo = await ComboItem.findOne({
             _id: new mongoose.Types.ObjectId(comboId),
-            is_archived: false,
         }).lean();
 
         if (!combo) {
@@ -186,10 +208,10 @@ export const getComboById = async (req, res) => {
         // Convert prices to naira
         const result = {
             ...combo,
-            price_naira: combo.price / 100,
-            choice_groups: combo.choice_groups.map((group) => ({
+            price_naira: (combo.price || 0) / 100,
+            choice_groups: (combo.choice_groups || []).map((group) => ({
                 ...group,
-                options: group.options.map((opt) => ({
+                options: (group.options || []).map((opt) => ({
                     ...opt,
                     price_modifier_naira: Math.round((opt.price_modifier || 0) / 100),
                 })),
@@ -339,10 +361,15 @@ export const toggleComboAvailability = async (req, res) => {
 export const archiveComboItem = async (req, res) => {
     try {
         const { comboId } = req.params;
+        const { is_archived } = req.body;
+
+        if (is_archived === undefined) {
+             return res.status(400).json({ success: false, message: "is_archived field is required" });
+        }
 
         const combo = await ComboItem.findOneAndUpdate(
             { _id: new mongoose.Types.ObjectId(comboId), vendor_id: req.vendor._id },
-            { is_archived: true, is_available: false },
+            { is_archived, is_available: is_archived ? false : true },
             { new: true }
         ).lean();
 
@@ -350,7 +377,8 @@ export const archiveComboItem = async (req, res) => {
             return res.status(404).json({ success: false, message: "Combo item not found or does not belong to vendor" });
         }
 
-        res.status(200).json({ success: true, message: "Combo item archived successfully" });
+        const message = is_archived ? "Combo item archived successfully" : "Combo item restored successfully";
+        res.status(200).json({ success: true, message, combo });
     } catch (error) {
         res.status(500).json({
             success: false,

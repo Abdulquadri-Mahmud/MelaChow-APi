@@ -1,9 +1,4 @@
-import VendorMenuSection from '../../model/menu/VendorMenuSection.js';
-import MenuItem from '../../model/menu/MenuItem.js';
-import MenuItemPortion from '../../model/menu/MenuItemPortion.js';
-import { MenuItemChoiceGroup, MenuItemChoiceOption } from '../../model/menu/MenuItemChoice.js';
-// TODO: ComboItem replaces MenuVariant — update customer menu endpoints to use ComboItem
-// import { MenuVariant, MenuVariantComponent, VariantChoiceGroup, VariantChoiceOption } from '../../model/menu/MenuVariant.js';
+import ComboItem from '../../model/menu/ComboItem.js';
 import Category from '../../model/category.model.js';
 import Vendor           from "../../model/vendor/vendor.model.js";
 import City from "../../model/location/City.js";
@@ -21,7 +16,7 @@ async function resolvePlatformCategory(categoryId) {
 async function buildFullItem(item, { vendorView = false } = {}) {
     const itemId = item._id;
 
-    const [portions, rawGroups, platformCategory, comboComponents] = await Promise.all([
+    const [portions, rawGroups, platformCategory] = await Promise.all([
         // Fetch portions — hardware default is filtered by is_available:true for customers
         MenuItemPortion.find({
             menu_item_id: itemId,
@@ -34,11 +29,6 @@ async function buildFullItem(item, { vendorView = false } = {}) {
         }).sort('sort_order').lean(),
 
         resolvePlatformCategory(item.platform_category_id),
-
-        // Fetch combo memberships
-        MenuVariantComponent.find({
-            menu_item_id: itemId,
-        }).lean(),
     ]);
 
     // Fetch options for choice groups in bulk
@@ -78,91 +68,6 @@ async function buildFullItem(item, { vendorView = false } = {}) {
         }));
     }
 
-    // ── Resolve active combos this item belongs to ───────────────
-    const [variants, fullComboComponents] = await Promise.all([
-        MenuVariant.find({
-            _id: { $in: comboComponents.map(c => c.variant_id) },
-            ...(vendorView ? {} : { is_archived: { $ne: true }, is_available: { $ne: false } }),
-        }).lean(),
-        MenuVariantComponent.find({
-            variant_id: { $in: comboComponents.map(c => c.variant_id) }
-        }).lean(),
-    ]);
-
-    // For each variant, fetch its components and swap groups
-    const fullCombos = await Promise.all(
-        variants.map(async (variant) => {
-            // All FIXED components for this combo
-            const components = fullComboComponents.filter(c => c.variant_id.toString() === variant._id.toString());
-
-            // Populate each component's menu item name + image
-            const populatedComponents = await Promise.all(
-                components.map(async (comp) => {
-                    const menuItem = comp.menu_item_id
-                        ? await MenuItem.findById(comp.menu_item_id)
-                            .select("name image_url")
-                            .lean()
-                        : null;
-                    return {
-                        _id:            comp._id,
-                        menu_item_id:   comp.menu_item_id,
-                        name:           menuItem?.name || comp.label || null,
-                        image_url:      menuItem?.image_url || null,
-                        quantity:       comp.quantity || 1,
-                        component_type: comp.component_type,
-                        sort_order:     comp.sort_order,
-                    };
-                })
-            );
-
-            // Swap choice groups for this combo
-            const swapGroups = await VariantChoiceGroup.find({
-                variant_id: variant._id,
-            }).lean();
-
-            const populatedSwapGroups = await Promise.all(
-                swapGroups.map(async (group) => {
-                    const options = await VariantChoiceOption.find({
-                        group_id: group._id,
-                    }).lean();
-
-                    return {
-                        _id:            group._id,
-                        name:           group.name,
-                        is_required:    group.is_required,
-                        min_selections: group.min_selections,
-                        max_selections: group.max_selections,
-                        sort_order:     group.sort_order,
-                        options: options.map(opt => ({
-                            _id:                  opt._id,
-                            label:                opt.label,
-                            menu_item_id:         opt.menu_item_id,
-                            price_modifier:       opt.price_modifier,
-                            price_modifier_naira: opt.price_modifier / 100,
-                            is_available:         opt.is_available,
-                            sort_order:           opt.sort_order,
-                        })),
-                    };
-                })
-            );
-
-            return {
-                _id:               variant._id,
-                name:              variant.name,
-                description:       variant.description || null,
-                image_url:         variant.image_url || null,
-                price:             variant.price,
-                price_naira:       variant.price / 100,
-                is_available:      variant.is_available,
-                is_archived:       variant.is_archived,
-                prep_time_minutes: variant.prep_time_minutes || null,
-                tags:              variant.tags || [],
-                components:        populatedComponents,
-                swap_groups:       populatedSwapGroups,
-            };
-        })
-    );
-
     return {
         ...item,
         dietary_type: item.dietary_type || "mixed",
@@ -181,33 +86,9 @@ async function buildFullItem(item, { vendorView = false } = {}) {
             price_naira: p.price / 100,
         })),
         choice_groups: fullChoiceGroups,
-        combos: fullCombos,
     };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// HELPER: Build full variant with components and choice groups
-// ─────────────────────────────────────────────────────────────────────────────
-async function buildFullVariant(variant) {
-    const components = await MenuVariantComponent.find({ variant_id: variant._id }).sort('sort_order').lean();
-
-    const resolvedComponents = await Promise.all(
-        components.map(async (component) => {
-            if (component.component_type === 'CHOICE_GROUP') {
-                const group = await VariantChoiceGroup.findById(component.choice_group_id).lean();
-                if (group) {
-                    const options = await VariantChoiceOption.find({ group_id: group._id, is_available: true })
-                        .sort('sort_order')
-                        .lean();
-                    return { ...component, choice_group: { ...group, options } };
-                }
-            }
-            return component;
-        })
-    );
-
-    return { ...variant, components: resolvedComponents };
-}
 
 /**
  * Resolves the delivery fee a customer will be charged for
@@ -276,216 +157,39 @@ export const getFullVendorMenu = async (req, res) => {
             storeSlug:             vendor.storeSlug,
         };
 
-        // Step 2 — Fetch all active combos for this vendor
-        const rawCombos = await MenuVariant.find({
+        // Step 2 — Fetch all active ComboItems for this vendor
+        const rawCombos = await ComboItem.find({
             vendor_id:   vendorId,
             is_available: true,
             is_archived:  { $ne: true },
-        }).lean();
+        }).sort({ sort_order: 1, createdAt: -1 }).lean();
 
-        // Bulk-fetch ALL components for all combos in one query
-        const variantIds = rawCombos.map(v => v._id);
-
-        const [allComponents, allSwapGroups] = await Promise.all([
-            MenuVariantComponent.find({
-                variant_id: { $in: variantIds }
-            }).lean(),
-            VariantChoiceGroup.find({
-                variant_id: { $in: variantIds }
-            }).lean(),
-        ]);
-
-        // Bulk-fetch ALL swap options for all swap groups
-        const swapGroupIds = allSwapGroups.map(g => g._id);
-        const allSwapOptions = await VariantChoiceOption.find({
-            group_id: { $in: swapGroupIds }
-        }).lean();
-
-        // Collect all unique item IDs across all combo components
-        const comboItemIds = [
-            ...new Set(
-                allComponents.map(c => c.menu_item_id?.toString()).filter(Boolean)
-            )
-        ];
-
-        // Bulk fetch those items
-        const comboItems = await MenuItem.find({
-            _id: { $in: comboItemIds }
-        }).lean();
-
-        // Build a lookup map: itemId → item
-        const comboItemMap = {};
-        for (const item of comboItems) {
-            comboItemMap[item._id.toString()] = item;
-        }
-
-        // Bulk-fetch all choice groups for all component items
-        const allComponentChoiceGroups = await MenuItemChoiceGroup.find({
-            menu_item_id: { $in: comboItemIds }
-        }).sort({ sort_order: 1 }).lean();
-
-        // Collect all group ids for bulk option fetch
-        const componentGroupIds = allComponentChoiceGroups.map(g => g._id);
-
-        // Bulk-fetch all options for those groups
-        const allComponentChoiceOptions = await MenuItemChoiceOption.find({
-            group_id:     { $in: componentGroupIds },
-            is_available: { $ne: false },
-        }).sort({ sort_order: 1 }).lean();
-
-        // Build options lookup: groupId → options[]
-        const componentOptionsByGroup = {};
-        for (const opt of allComponentChoiceOptions) {
-            const key = opt.group_id.toString();
-            if (!componentOptionsByGroup[key]) componentOptionsByGroup[key] = [];
-            componentOptionsByGroup[key].push({
-                _id:                  opt._id,
-                label:                opt.label,
-                image_url:            opt.image_url || null,
-                price_modifier_naira: Math.round((opt.price_modifier || 0) / 100),
-                is_available:         opt.is_available,
-            });
-        }
-
-        // Build choice groups lookup: itemId → choiceGroups[]
-        const componentChoiceGroupsByItem = {};
-        for (const group of allComponentChoiceGroups) {
-            const key = group.menu_item_id.toString();
-            if (!componentChoiceGroupsByItem[key]) componentChoiceGroupsByItem[key] = [];
-            componentChoiceGroupsByItem[key].push({
+        const combos = rawCombos.map(combo => ({
+            _id:          combo._id,
+            name:         combo.name,
+            description:  combo.description || null,
+            image_url:    combo.image_url   || null,
+            price_naira:  Math.round(combo.price / 100),
+            contents:     combo.contents    || [],
+            dietary_type: combo.dietary_type || "mixed",
+            tags:         combo.tags        || [],
+            is_available: combo.is_available,
+            choice_groups: combo.choice_groups.map(group => ({
                 _id:            group._id,
                 name:           group.name,
                 is_required:    group.is_required,
                 min_selections: group.min_selections,
                 max_selections: group.max_selections,
-                sort_order:     group.sort_order,
-                options:        componentOptionsByGroup[group._id.toString()] || [],
-            });
-        }
-
-        // Build lookup maps for efficient grouping
-        const componentsByVariant = {};
-        for (const c of allComponents) {
-            const key = c.variant_id.toString();
-            if (!componentsByVariant[key]) componentsByVariant[key] = [];
-            componentsByVariant[key].push(c);
-        }
-
-        const swapGroupsByVariant = {};
-        for (const g of allSwapGroups) {
-            const key = g.variant_id.toString();
-            if (!swapGroupsByVariant[key]) swapGroupsByVariant[key] = [];
-            swapGroupsByVariant[key].push(g);
-        }
-
-        const swapOptionsByGroup = {};
-        for (const o of allSwapOptions) {
-            const key = o.group_id.toString();
-            if (!swapOptionsByGroup[key]) swapOptionsByGroup[key] = [];
-            swapOptionsByGroup[key].push(o);
-        }
-        // Step 3 — Fetch all active sections for this vendor
-        const sections = await VendorMenuSection.find({
-            vendor_id:  vendorId,
-            deleted_at: null,
-        }).sort({ sort_order: 1, createdAt: 1 }).lean();
-
-        // Step 4 — Fetch all visible items for this vendor
-        const items = await MenuItem.find({
-            vendor_id:   vendorId,
-            is_archived: false,
-            is_available: true,
-        }).sort({ sort_order: 1, createdAt: 1 }).lean();
-
-        const itemIds = items.map(i => i._id);
-
-        const allPortions = await MenuItemPortion.find({
-            menu_item_id: { $in: itemIds },
-        }).lean();
-
-        // Collect all unique platform category IDs for bulk fetching
-        const allCategoryIds = [
-            ...new Set([
-                ...items.map(i => i.platform_category_id?.toString()),
-                ...comboItems.map(i => i.platform_category_id?.toString())
-            ].filter(Boolean))
-        ];
-
-        const allCategories = await Category.find({
-            _id: { $in: allCategoryIds }
-        }).populate('parent').lean();
-
-        // Build a category map
-        const categoryMap = {};
-        allCategories.forEach(cat => {
-            categoryMap[cat._id.toString()] = {
-                id: cat._id,
-                name: cat.name,
-                slug: cat.slug,
-                parent: cat.parent ? { id: cat.parent._id, name: cat.parent.name, slug: cat.parent.slug } : null
-            };
-        });
-
-        // Build a map: itemId → portions array
-        const portionsByItem = {};
-        for (const p of allPortions) {
-            const key = p.menu_item_id.toString();
-            if (!portionsByItem[key]) portionsByItem[key] = [];
-            portionsByItem[key].push(p);
-        }
-
-        // Build final combos array
-        const combos = rawCombos.map(variant => {
-            const vid = variant._id.toString();
-
-            const components = (componentsByVariant[vid] || []).map(c => {
-                const item    = comboItemMap[c.menu_item_id?.toString()];
-                const itemId  = c.menu_item_id?.toString();
-                return {
-                    _id:            c._id,
-                    menu_item_id:   c.menu_item_id,
-                    quantity:       c.quantity || 1,
-                    component_type: c.component_type,
-                    name:           item?.name      || "Item",
-                    image_url:      item?.image_url || null,
-                    // Choice groups for this component item.
-                    // Empty array = no customisation for this component.
-                    choice_groups:  componentChoiceGroupsByItem[itemId] || [],
-                };
-            });
-
-            const swap_groups = (swapGroupsByVariant[vid] || []).map(group => ({
-                _id:         group._id,
-                name:        group.name,
-                is_required: group.is_required,
-                options: (swapOptionsByGroup[group._id.toString()] || []).map(opt => ({
+                sort_order:     group.sort_order || 0,
+                options: group.options.map(opt => ({
                     _id:                  opt._id,
                     label:                opt.label,
+                    image_url:            opt.image_url || null,
                     price_modifier_naira: Math.round((opt.price_modifier || 0) / 100),
-                    menu_item_id:         opt.menu_item_id || null,
-                    portion_id:           opt.portion_id   || null,
+                    is_available:         opt.is_available !== false,
                 })),
-            }));
-
-            return {
-                _id:               variant._id,
-                name:              variant.name,
-                description:       variant.description || null,
-                image_url:         variant.image_url   || null,
-                price_naira:       Math.round(variant.price / 100),
-                is_available:      variant.is_available,
-                prep_time_minutes: variant.prep_time_minutes || null,
-                tags:              variant.tags || [],
-                components: components.map(c => {
-                    const item = comboItemMap[c.menu_item_id?.toString()];
-                    return {
-                        ...c,
-                        platform_category: item?.platform_category_id ? categoryMap[item.platform_category_id.toString()] : null
-                    };
-                }),
-                swap_groups,
-            };
-        });
+            })),
+        }));
 
 
         const enrichedItems = items.map(item => {
@@ -577,16 +281,45 @@ export const getMenuItemDetails = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-// GET /v1/vendors/:vendorId/menu/variants/:variantId
+// GET /v1/vendors/:vendorId/menu/combos/:comboId
 // ─────────────────────────────────────────────────────────────────────────────
-export const getMenuVariantDetails = async (req, res) => {
+export const getComboDetails = async (req, res) => {
     try {
-        const { variantId } = req.params;
-        const variant = await MenuVariant.findOne({ _id: variantId, is_archived: false }).lean();
-        if (!variant) return res.status(404).json({ success: false, message: 'Variant not found' });
-
-        const full = await buildFullVariant(variant);
-        res.status(200).json({ success: true, variant: full });
+        const { comboId } = req.params;
+        const combo = await ComboItem.findOne({
+            _id: comboId, is_archived: false
+        }).lean();
+        if (!combo) {
+            return res.status(404).json({ success: false, message: 'Combo not found' });
+        }
+        res.status(200).json({
+            success: true,
+            combo: {
+                _id:          combo._id,
+                name:         combo.name,
+                description:  combo.description || null,
+                image_url:    combo.image_url   || null,
+                price_naira:  Math.round(combo.price / 100),
+                contents:     combo.contents    || [],
+                dietary_type: combo.dietary_type || "mixed",
+                tags:         combo.tags        || [],
+                is_available: combo.is_available,
+                choice_groups: combo.choice_groups.map(group => ({
+                    _id:            group._id,
+                    name:           group.name,
+                    is_required:    group.is_required,
+                    min_selections: group.min_selections,
+                    max_selections: group.max_selections,
+                    options: group.options.map(opt => ({
+                        _id:                  opt._id,
+                        label:                opt.label,
+                        image_url:            opt.image_url || null,
+                        price_modifier_naira: Math.round((opt.price_modifier || 0) / 100),
+                        is_available:         opt.is_available !== false,
+                    })),
+                })),
+            }
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
