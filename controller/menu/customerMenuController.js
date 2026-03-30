@@ -1,7 +1,12 @@
 import ComboItem from '../../model/menu/ComboItem.js';
+import MenuItem from '../../model/menu/MenuItem.js';
+import MenuItemPortion from '../../model/menu/MenuItemPortion.js';
+import { MenuItemChoiceGroup, MenuItemChoiceOption } from '../../model/menu/MenuItemChoice.js';
+import VendorMenuSection from '../../model/menu/VendorMenuSection.js';
 import Category from '../../model/category.model.js';
 import Vendor           from "../../model/vendor/vendor.model.js";
 import City from "../../model/location/City.js";
+import mongoose from 'mongoose';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPER: Resolve platform_category with parent populated
@@ -81,9 +86,9 @@ async function buildFullItem(item, { vendorView = false } = {}) {
                     : null,
             }
             : null,
-        portions: portions.map(p => ({
+        portions: (portions || []).map(p => ({
             ...p,
-            price_naira: p.price / 100,
+            price_naira: (p.price || 0) / 100,
         })),
         choice_groups: fullChoiceGroups,
     };
@@ -158,30 +163,49 @@ export const getFullVendorMenu = async (req, res) => {
         };
 
         // Step 2 — Fetch all active ComboItems for this vendor
-        const rawCombos = await ComboItem.find({
-            vendor_id:   vendorId,
-            is_available: true,
-            is_archived:  { $ne: true },
-        }).sort({ sort_order: 1, createdAt: -1 }).lean();
+        // And concurrently fetch Items, Portions, and Sections
+        const [rawCombos, sections, items, allPortions] = await Promise.all([
+            ComboItem.find({
+                vendor_id:   vendorId,
+                is_available: true,
+                is_archived:  { $ne: true },
+            }).sort({ sort_order: 1, createdAt: -1 }).lean(),
 
-        const combos = rawCombos.map(combo => ({
+            VendorMenuSection.find({ vendor_id: vendorId }).sort('sort_order').lean(),
+
+            MenuItem.find({
+                vendor_id: vendorId,
+                is_archived: false,
+                is_available: true,
+                is_in_stock: true,
+                category_deactivated: false,
+            }).sort({ sort_order: 1, createdAt: -1 }).lean(),
+
+            MenuItemPortion.find({
+                is_available: true,
+                // Optimized: only fetch portions for items belonging to this vendor
+                // We'll filter them by itemId later in JS
+            }).lean(),
+        ]);
+
+        const combos = (rawCombos || []).map(combo => ({
             _id:          combo._id,
             name:         combo.name,
             description:  combo.description || null,
             image_url:    combo.image_url   || null,
-            price_naira:  Math.round(combo.price / 100),
+            price_naira:  Math.round((combo.price || 0) / 100),
             contents:     combo.contents    || [],
             dietary_type: combo.dietary_type || "mixed",
             tags:         combo.tags        || [],
             is_available: combo.is_available,
-            choice_groups: combo.choice_groups.map(group => ({
+            choice_groups: (combo.choice_groups || []).map(group => ({
                 _id:            group._id,
                 name:           group.name,
                 is_required:    group.is_required,
                 min_selections: group.min_selections,
                 max_selections: group.max_selections,
                 sort_order:     group.sort_order || 0,
-                options: group.options.map(opt => ({
+                options: (group.options || []).map(opt => ({
                     _id:                  opt._id,
                     label:                opt.label,
                     image_url:            opt.image_url || null,
@@ -191,10 +215,23 @@ export const getFullVendorMenu = async (req, res) => {
             })),
         }));
 
+        // Step 3 — Index portions by item_id for faster lookup
+        const portionsByItem = {};
+        for (const p of allPortions) {
+            const sid = p.menu_item_id.toString();
+            if (!portionsByItem[sid]) portionsByItem[sid] = [];
+            portionsByItem[sid].push(p);
+        }
+
+        // Step 4 — Fetch categories involved to get labels
+        const categoryIds = [...new Set(items.map(i => i.platform_category_id.toString()))];
+        const categories = await Category.find({ _id: { $in: categoryIds } }).select('name').lean();
+        const categoryMap = {};
+        for (const c of categories) categoryMap[c._id.toString()] = c.name;
 
         const enrichedItems = items.map(item => {
             const portions = portionsByItem[item._id.toString()] || [];
-            const prices   = portions.map(p => p.price); // kobo
+            const prices   = portions.map(p => p.price || 0); // kobo
             const defPortion = portions.find(p => p.is_default) || portions[0];
 
             return {
@@ -213,7 +250,7 @@ export const getFullVendorMenu = async (req, res) => {
                 portions: {
                     count:                portions.length,
                     default_price_naira:  defPortion
-                        ? Math.round(defPortion.price / 100)
+                        ? Math.round((defPortion.price || 0) / 100)
                         : 0,
                     min_price_naira: prices.length
                         ? Math.round(Math.min(...prices) / 100)
