@@ -2,7 +2,7 @@ import express from 'express';
 import {
     getFullVendorMenu,
     getMenuItemDetails,
-    getMenuVariantDetails,
+    getComboDetails,
     getItemsByPlatformCategory,
     getVendorsByPlatformCategory,
     getPublicFoodDetail,
@@ -17,7 +17,7 @@ router.get('/foods/:foodId', getPublicFoodDetail);
 // ─── Vendor-specific menu (customer facing) ────────────────────────────────
 router.get('/:vendorId/menu', getFullVendorMenu);
 router.get('/:vendorId/menu/items/:itemId', getMenuItemDetails);
-router.get('/:vendorId/menu/variants/:variantId', getMenuVariantDetails);
+router.get('/:vendorId/menu/combos/:comboId', getComboDetails);
 
 // ─── Marketplace discovery by platform category ────────────────────────────
 router.get('/marketplace/categories/:categoryId/items', getItemsByPlatformCategory);
