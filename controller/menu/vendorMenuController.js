@@ -1134,7 +1134,7 @@ export const getVendorMenuItems = async (req, res) => {
         // Fetch portion counts and choice group counts in bulk.
         const itemIds = items.map(i => i._id);
 
-        const [portionCounts, choiceGroupCounts, comboMemberships] = await Promise.all([
+        const [portionCounts, choiceGroupCounts] = await Promise.all([
             // Count portions per item
             MenuItemPortion.aggregate([
                 {
@@ -1178,46 +1178,11 @@ export const getVendorMenuItems = async (req, res) => {
                 }
             ]),
 
-            // Find all combo memberships for this vendor's items
-            MenuVariantComponent.aggregate([
-                {
-                    $match: {
-                        menu_item_id: { $in: itemIds },
-                    }
-                },
-                {
-                    $lookup: {
-                        from: "menuvariants",
-                        localField: "variant_id",
-                        foreignField: "_id",
-                        as: "variant",
-                    }
-                },
-                { $unwind: "$variant" },
-                {
-                    $match: {
-                        "variant.is_archived": { $ne: true },
-                    }
-                },
-                {
-                    $group: {
-                        _id: "$menu_item_id",
-                        combos: {
-                            $push: {
-                                _id: "$variant._id",
-                                name: "$variant.name",
-                                price: "$variant.price",
-                            }
-                        }
-                    }
-                }
-            ]),
         ]);
 
         // Index counts by item _id for O(1) lookup
         const portionMap = {};
         const choiceGroupMap = {};
-        const comboMembershipMap = {};
 
         portionCounts.forEach(p => {
             portionMap[p._id.toString()] = {
@@ -1230,10 +1195,6 @@ export const getVendorMenuItems = async (req, res) => {
 
         choiceGroupCounts.forEach(c => {
             choiceGroupMap[c._id.toString()] = c.count;
-        });
-
-        comboMemberships.forEach(m => {
-            comboMembershipMap[m._id.toString()] = m.combos;
         });
 
         // ── SHAPE RESPONSE ───────────────────────────────────
@@ -1291,7 +1252,7 @@ export const getVendorMenuItems = async (req, res) => {
                 choice_groups: {
                     count: cgCount,
                 },
-                combos: comboMembershipMap[idStr] || [],
+                combos: [],
             };
         });
 
