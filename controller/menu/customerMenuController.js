@@ -188,6 +188,35 @@ export const getFullVendorMenu = async (req, res) => {
             }).lean(),
         ]);
 
+        // Step 3 — Index portions by item_id for faster lookup
+        const portionsByItem = {};
+        for (const p of allPortions) {
+            const sid = p.menu_item_id?.toString();
+            if (sid) {
+                if (!portionsByItem[sid]) portionsByItem[sid] = [];
+                portionsByItem[sid].push(p);
+            }
+        }
+
+        // Step 4 — Fetch all involved categories (Items + Combos)
+        const itemCategoryIds = items.map(i => i.platform_category_id?.toString()).filter(Boolean);
+        const comboCategoryIds = rawCombos.map(c => c.platform_category_id?.toString()).filter(Boolean);
+        const categoryIds = [...new Set([...itemCategoryIds, ...comboCategoryIds])];
+
+        const categories = await Category.find({ _id: { $in: categoryIds } })
+            .populate('parent', 'name')
+            .lean();
+
+        const categoryMap = {};
+        for (const c of categories) {
+            categoryMap[c._id.toString()] = {
+                _id: c._id,
+                name: c.name,
+                parent: c.parent ? { _id: c.parent._id, name: c.parent.name } : null
+            };
+        }
+
+        // Step 5 — Enriched mapping for Combos
         const combos = (rawCombos || []).map(combo => ({
             _id:          combo._id,
             name:         combo.name,
@@ -198,6 +227,7 @@ export const getFullVendorMenu = async (req, res) => {
             dietary_type: combo.dietary_type || "mixed",
             tags:         combo.tags        || [],
             is_available: combo.is_available,
+            platform_category: combo.platform_category_id ? categoryMap[combo.platform_category_id.toString()] : null,
             choice_groups: (combo.choice_groups || []).map(group => ({
                 _id:            group._id,
                 name:           group.name,
@@ -215,23 +245,10 @@ export const getFullVendorMenu = async (req, res) => {
             })),
         }));
 
-        // Step 3 — Index portions by item_id for faster lookup
-        const portionsByItem = {};
-        for (const p of allPortions) {
-            const sid = p.menu_item_id.toString();
-            if (!portionsByItem[sid]) portionsByItem[sid] = [];
-            portionsByItem[sid].push(p);
-        }
-
-        // Step 4 — Fetch categories involved to get labels
-        const categoryIds = [...new Set(items.map(i => i.platform_category_id.toString()))];
-        const categories = await Category.find({ _id: { $in: categoryIds } }).select('name').lean();
-        const categoryMap = {};
-        for (const c of categories) categoryMap[c._id.toString()] = c.name;
-
+        // Step 6 — Enriched mapping for Items
         const enrichedItems = items.map(item => {
-            const portions = portionsByItem[item._id.toString()] || [];
-            const prices   = portions.map(p => p.price || 0); // kobo
+            const portions = portionsByItem[item._id?.toString()] || [];
+            const prices   = portions.map(p => p.price || 0);
             const defPortion = portions.find(p => p.is_default) || portions[0];
 
             return {
