@@ -1,6 +1,7 @@
 import MenuItem from "../../model/menu/MenuItem.js";
 import MenuItemPortion from "../../model/menu/MenuItemPortion.js";
 import { MenuItemChoiceGroup } from "../../model/menu/MenuItemChoice.js";
+import ComboItem from "../../model/menu/ComboItem.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 import City from "../../model/location/City.js";
 import Category from "../../model/category.model.js";
@@ -92,21 +93,28 @@ export const getFoodsByLocation = async (req, res) => {
       };
     });
 
-    // ── STEP 4: Fetch available MenuItems ─────────────
-    const items = await MenuItem.find({
-      vendor_id: { $in: vendorIds },
-      is_available: true,
-      is_in_stock: true,
-      is_archived: false,
-    })
-      .select(
-        "_id name image_url item_type dietary_type " +
-        "description tags prep_time_minutes " +
-        "vendor_id platform_category_id"
-      )
-      .lean();
+    // ── STEP 4: Fetch available MenuItems & ComboItems ───────
+    const [items, comboItems] = await Promise.all([
+      MenuItem.find({
+        vendor_id: { $in: vendorIds },
+        is_available: true,
+        is_in_stock: true,
+        is_archived: false,
+      })
+        .select(
+          "_id name image_url item_type dietary_type " +
+          "description tags prep_time_minutes " +
+          "vendor_id platform_category_id"
+        )
+        .lean(),
+      ComboItem.find({
+          vendor_id:    { $in: vendorIds },
+          is_available: true,
+          is_archived:  { $ne: true },
+      }).lean(),
+    ]);
 
-    if (!items.length) {
+    if (!items.length && !comboItems.length) {
       return res.json({
         success: true,
         location: { city, state, cityId, stateId },
@@ -117,7 +125,12 @@ export const getFoodsByLocation = async (req, res) => {
     }
 
     const itemIds = items.map((i) => i._id);
-    const platformCategoryIds = [...new Set(items.map((i) => i.platform_category_id?.toString()).filter(Boolean))];
+    const platformCategoryIds = [
+        ...new Set([
+            ...items.map((i) => i.platform_category_id?.toString()),
+            ...comboItems.map((c) => c.platform_category_id?.toString())
+        ].filter(Boolean))
+    ];
 
     // ── STEP 5: Bulk fetch portions, choice groups & categories ───
     const [allPortions, allChoiceGroups, allCategories] = await Promise.all([
@@ -211,11 +224,52 @@ export const getFoodsByLocation = async (req, res) => {
       };
     });
 
+    // ── STEP 7: Format & Add ComboItems ────────────────
+    const formattedCombos = comboItems.map(combo => {
+        const vendor = vendorMap[combo.vendor_id?.toString()] || {};
+        const platformCategory = categoryMap[combo.platform_category_id?.toString()];
+
+        return {
+            _id: combo._id,
+            name: combo.name,
+            image: combo.image_url || "",
+            price: Math.round(combo.price / 100),
+            portionLabel: "Combo",
+            description: combo.description || "",
+            deliveryFee: vendor.resolvedDeliveryFee || 0,
+            item_type: "combo",
+            dietary_type: combo.dietary_type || "mixed",
+            tags: combo.tags || [],
+            prep_time_minutes: combo.prep_time_minutes || null,
+            platform_category: platformCategory
+                ? {
+                    id: platformCategory._id,
+                    name: platformCategory.name,
+                    slug: platformCategory.slug,
+                    parent: platformCategory.parent
+                        ? { id: platformCategory.parent._id, name: platformCategory.parent.name, slug: platformCategory.parent.slug }
+                        : null,
+                }
+                : null,
+            isCombo: true,
+            restaurant: {
+                _id: vendor._id,
+                storeName: vendor.storeName,
+                city: vendor.address?.city,
+                state: vendor.address?.state,
+                logo: vendor.logo,
+                openingHours: vendor.openingHours,
+            },
+        };
+    });
+
+    const finalFoods = [...formattedFoods, ...formattedCombos];
+
     return res.json({
       success: true,
       location: { city, state, cityId, stateId },
-      count: formattedFoods.length,
-      foods: formattedFoods,
+      count: finalFoods.length,
+      foods: finalFoods,
     });
 
   } catch (error) {

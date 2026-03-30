@@ -5,7 +5,8 @@ import {
     getAllCategoriesAdmin,
     getCategories,
     updateCategory,
-    getPublicCategories
+    getPublicCategories,
+    getCategoryTree
 } from "../controller/category.controller.js";
 import { adminAuth } from "../middleware/adminAuth.js";
 
@@ -13,6 +14,7 @@ const router = express.Router();
 
 // Public routes
 router.get("/public", getPublicCategories);
+router.get("/tree", getCategoryTree);
 router.get("/", getCategories);
 
 // Admin only routes (Protected by auth middleware)

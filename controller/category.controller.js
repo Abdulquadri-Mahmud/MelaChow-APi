@@ -203,3 +203,32 @@ export const getAllCategoriesAdmin = async (req, res) => {
         });
     }
 };
+
+// GET CATEGORY TREE (Hierarchical structure)
+export const getCategoryTree = async (req, res) => {
+    try {
+        const categories = await Category.find({ isActive: true }).lean();
+        
+        // Build tree: Match children to their parents
+        const rootCategories = categories.filter(c => !c.parent);
+        const childCategories = categories.filter(c => c.parent);
+        
+        const tree = rootCategories.map(root => ({
+            ...root,
+            children: childCategories.filter(child => {
+                const pId = child.parent?.toString();
+                const rId = root._id.toString();
+                return pId === rId;
+            })
+        }));
+
+        // Return array directly to match Step2Categories.jsx expectation
+        res.status(200).json(tree);
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: "Error fetching category tree",
+            error: error.message,
+        });
+    }
+};
