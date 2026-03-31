@@ -154,6 +154,7 @@ export const getFullVendorMenu = async (req, res) => {
             cuisineTypes:          vendor.cuisineTypes || [],
             address:               vendor.address,
             isOpen:                vendor.isOpen ?? true,
+            openingHours:          vendor.openingHours,
             acceptsDelivery:       vendor.acceptsDelivery ?? true,
             deliveryManagedBy:     vendor.deliveryManagedBy || "admin",
             deliveryFee:           resolvedDeliveryFee,  // ← resolved, not raw field
@@ -328,7 +329,38 @@ export const getMenuItemDetails = async (req, res) => {
         // vendorId in the URL means vendor is viewing their own item
         const isVendorRequest = !!req.params.vendorId;
         const full = await buildFullItem(item, { vendorView: isVendorRequest });
-        res.status(200).json({ success: true, item: full });
+
+        // Fetch vendor for customer view
+        let vendorJson = null;
+        if (!isVendorRequest) {
+            const vendor = await Vendor.findById(item.vendor_id)
+                .select("storeName logo address openingHours rating storeSlug isOpen estimatedDeliveryTime deliveryManagedBy flatRateDeliveryFee platformDeliveryFeeOverride")
+                .lean();
+            if (vendor) {
+                const deliveryFee = await resolveStorefrontDeliveryFee(vendor);
+                vendorJson = {
+                    _id: vendor._id,
+                    storeName: vendor.storeName,
+                    logo: vendor.logo,
+                    city: vendor.address?.city,
+                    state: vendor.address?.state,
+                    openingHours: vendor.openingHours,
+                    rating: vendor.rating ?? null,
+                    storeSlug: vendor.storeSlug,
+                    isOpen: vendor.isOpen ?? true,
+                    estimatedDeliveryTime: vendor.estimatedDeliveryTime ?? 30,
+                    deliveryFee
+                };
+            }
+        }
+
+        res.status(200).json({ 
+            success: true, 
+            item: {
+                ...full,
+                vendor: vendorJson
+            } 
+        });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -344,8 +376,33 @@ export const getComboDetails = async (req, res) => {
             _id: comboId, is_archived: false
         }).lean();
         if (!combo) {
-            return res.status(404).json({ success: false, message: 'Combo not found' });
+            return res.status(404).json({ success: false, message: 'Combo found' });
         }
+
+        // Fetch vendor info
+        const vendor = await Vendor.findById(combo.vendor_id)
+            .select("storeName logo address openingHours rating storeSlug isOpen estimatedDeliveryTime deliveryManagedBy flatRateDeliveryFee platformDeliveryFeeOverride")
+            .lean();
+        
+        let vendorJson = null;
+        let deliveryFee = 0;
+        if (vendor) {
+            deliveryFee = await resolveStorefrontDeliveryFee(vendor);
+            vendorJson = {
+                _id: vendor._id,
+                storeName: vendor.storeName,
+                logo: vendor.logo,
+                city: vendor.address?.city,
+                state: vendor.address?.state,
+                openingHours: vendor.openingHours,
+                rating: vendor.rating ?? null,
+                storeSlug: vendor.storeSlug,
+                isOpen: vendor.isOpen ?? true,
+                estimatedDeliveryTime: vendor.estimatedDeliveryTime ?? 30,
+                deliveryFee
+            };
+        }
+
         res.status(200).json({
             success: true,
             combo: {
@@ -358,6 +415,8 @@ export const getComboDetails = async (req, res) => {
                 dietary_type: combo.dietary_type || "mixed",
                 tags:         combo.tags        || [],
                 is_available: combo.is_available,
+                deliveryFee:  deliveryFee,
+                vendor:       vendorJson,
                 choice_groups: combo.choice_groups.map(group => ({
                     _id:            group._id,
                     name:           group.name,
