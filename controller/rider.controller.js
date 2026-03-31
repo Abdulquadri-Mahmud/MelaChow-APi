@@ -372,11 +372,22 @@ export const requestDeliveryOTP = async (req, res, next) => {
             });
         }
 
-        const result = await sendDeliveryOTP(
-            orderId,
-            customerPhone,
-            order.userId?._id || order.userId
-        );
+        let result;
+        try {
+            result = await sendDeliveryOTP(
+                orderId,
+                customerPhone,
+                order.userId?._id || order.userId
+            );
+        } catch (otpErr) {
+            // OTP delivery failed via both SMS and email
+            // Return 503 so the message passes through the global error handler
+            // and the rider sees a human-readable error instead of "Internal Server Error"
+            return res.status(503).json({
+                success: false,
+                message: 'Unable to send OTP to customer right now. Check the customer has a valid phone number or email, then try again.',
+            });
+        }
 
         return res.status(200).json({
             success: true,
@@ -387,6 +398,7 @@ export const requestDeliveryOTP = async (req, res, next) => {
                     : 'Dev mode: use code 123456',
             method: result.method,
         });
+
 
     } catch (error) {
         next(error);
