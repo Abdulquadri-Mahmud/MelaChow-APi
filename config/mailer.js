@@ -1,24 +1,28 @@
-import nodemailer from 'nodemailer';
-import dotenv from 'dotenv';
+import { Resend } from 'resend';
 
-dotenv.config();
+const resend = new Resend(process.env.RESEND_API_KEY);
 
-const transporter = nodemailer.createTransport({
-  host: "smtp.gmail.com",
-  port: 587,
-  secure: false,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
-
-// Send email
+/**
+ * Send transactional email via Resend API.
+ * Uses HTTPS (port 443) — works on Render free tier.
+ * Drop-in replacement for nodemailer sendMail.
+ *
+ * @param {object} options
+ * @param {string} options.to - Recipient email address
+ * @param {string} options.subject - Email subject line
+ * @param {string} options.html - HTML email body
+ */
 export const sendMail = async ({ to, subject, html }) => {
-  await transporter.sendMail({
-    from: `"GrubDash" <${process.env.EMAIL_USER}>`,
-    to,
-    subject,
-    html
-  });
+    const { data, error } = await resend.emails.send({
+        from: 'GrubDash <onboarding@resend.dev>',
+        to,
+        subject,
+        html,
+    });
+
+    if (error) {
+        throw new Error(`Email send failed: ${error.message}`);
+    }
+
+    return data;
 };
