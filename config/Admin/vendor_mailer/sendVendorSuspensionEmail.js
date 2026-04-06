@@ -1,4 +1,4 @@
-// config/Admin/adminSuspendVendor.mailer.js
+﻿// config/Admin/adminSuspendVendor.mailer.js
 import nodemailer from "nodemailer";
 import dotenv from "dotenv";
 dotenv.config();
@@ -18,8 +18,8 @@ export const sendVendorSuspensionEmail = async (vendor, reason) => {
       <div style="max-width: 600px; background: #ffffff; margin: auto; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">
         <!-- Header -->
         <div style="background-color: #ff6600; padding: 20px; text-align: center;">
-          <h1 style="color: #ffffff; margin: 0; font-size: 28px;">GrubDash Vendor</h1>
-          <p style="color: #ffe6d1; margin: 5px 0;">Manage your store 🍴</p>
+          <h1 style="color: #ffffff; margin: 0; font-size: 28px;">MelaChow Vendor</h1>
+          <p style="color: #ffe6d1; margin: 5px 0;">Manage your store ðŸ´</p>
         </div>
 
         <!-- Body -->
@@ -41,7 +41,7 @@ export const sendVendorSuspensionEmail = async (vendor, reason) => {
 
           <!-- Support Button -->
           <div style="text-align: center; margin-top: 30px;">
-            <a href="mailto:support@grubdash.com" 
+            <a href="mailto:support@melachow.com" 
               style="background-color: #ff6600; color: #ffffff; padding: 12px 25px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
               Contact Support
             </a>
@@ -50,16 +50,17 @@ export const sendVendorSuspensionEmail = async (vendor, reason) => {
 
         <!-- Footer -->
         <div style="background-color: #f9f9f9; padding: 20px; text-align: center; font-size: 13px; color: #666;">
-          <p>© ${new Date().getFullYear()} GrubDash. All rights reserved.</p>
+          <p>Â© ${new Date().getFullYear()} MelaChow. All rights reserved.</p>
           <p>123 Food Street, Lagos, Nigeria</p>
         </div>
       </div>
     </div>
   `;
   await transporter.sendMail({
-    from: `"GrubDash" <${process.env.EMAIL_USER}>`,
+    from: `"MelaChow" <${process.env.EMAIL_USER}>`,
     to: vendor.email,
     subject,
     html,
   });
 };
+

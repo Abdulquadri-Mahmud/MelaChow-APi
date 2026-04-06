@@ -1,4 +1,4 @@
-// config/Admin/adminRejectVendor.mailer.js
+﻿// config/Admin/adminRejectVendor.mailer.js
 import nodemailer from "nodemailer";
 import dotenv from "dotenv";
 dotenv.config();
@@ -17,7 +17,7 @@ export const sendVendorRejectionEmail = async (vendor, reason) => {
     <div style="font-family: 'Segoe UI', sans-serif; background-color: #f4f7fb; padding: 40px 0;">
       <div style="max-width: 600px; background: #ffffff; margin: auto; border-radius: 12px; overflow: hidden;">
         <div style="background-color: #ff4d4d; padding: 20px; text-align: center;">
-          <h1 style="color: #fff;">GrubDash Vendor</h1>
+          <h1 style="color: #fff;">MelaChow Vendor</h1>
         </div>
         <div style="padding: 30px; color: #333;">
           <h2 style="color: #ff4d4d; text-align: center;">Application Rejected</h2>
@@ -30,9 +30,10 @@ export const sendVendorRejectionEmail = async (vendor, reason) => {
     </div>
   `;
   await transporter.sendMail({
-    from: `"GrubDash" <${process.env.EMAIL_USER}>`,
+    from: `"MelaChow" <${process.env.EMAIL_USER}>`,
     to: vendor.email,
     subject,
     html,
   });
 };
+

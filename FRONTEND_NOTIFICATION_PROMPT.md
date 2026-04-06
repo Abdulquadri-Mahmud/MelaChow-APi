@@ -1,4 +1,4 @@
-# Frontend Integration Prompt: GrubDash Notification System
+﻿# Frontend Integration Prompt: MelaChow Notification System
 
 This document outlines the API endpoints and expected payloads for the newly implemented Notification History and Push Notification system. All restricted routes require a valid **User Authorization Token** in the header.
 
@@ -58,7 +58,7 @@ This document outlines the API endpoints and expected payloads for the newly imp
     "notifications": [
       {
         "_id": "...",
-        "title": "🎉 Order Placed!",
+        "title": "ðŸŽ‰ Order Placed!",
         "body": "Your order #12345 has been placed successfully.",
         "type": "order_placed",
         "read": false,
@@ -110,3 +110,4 @@ The `type` field in the history refers to:
 - `order_placed`, `order_confirmed`, `order_preparing`, `order_ready`, `order_dispatched`, `order_delivered`, `order_cancelled`
 - `promo`, `discount`, `delivery_nearby`
 - `account_update`, `general`
+

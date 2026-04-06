@@ -1,4 +1,4 @@
-import mongoose from "mongoose";
+﻿import mongoose from "mongoose";
 import dotenv from "dotenv";
 import Vendor from "../model/vendor/vendor.model.js";
 import Food from "../model/vendor/food.model.js";
@@ -7,7 +7,7 @@ dotenv.config();
 
 const migrate = async () => {
     try {
-        await mongoose.connect(process.env.DATABASE_URL || "mongodb://localhost:27017/grubdash");
+        await mongoose.connect(process.env.DATABASE_URL || "mongodb://localhost:27017/melachow");
         console.log("Connected to MongoDB for migration...");
 
         // 1. Migrate Vendors
@@ -86,3 +86,4 @@ const migrate = async () => {
 };
 
 migrate();
+

@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+﻿import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import User from '../model/user.model.js';
 
@@ -20,8 +20,8 @@ dotenv.config();
 
 async function migrateExistingUsers() {
     try {
-        console.log('🔄 Starting user migration...');
-        console.log('📡 Connecting to MongoDB...');
+        console.log('ðŸ”„ Starting user migration...');
+        console.log('ðŸ“¡ Connecting to MongoDB...');
 
         // Connect to MongoDB
         await mongoose.connect(process.env.MONGO_URI, {
@@ -29,11 +29,11 @@ async function migrateExistingUsers() {
             useUnifiedTopology: true,
         });
 
-        console.log('✅ Connected to MongoDB');
+        console.log('âœ… Connected to MongoDB');
 
         // Count users before migration
         const totalUsers = await User.countDocuments();
-        console.log(`📊 Total users in database: ${totalUsers}`);
+        console.log(`ðŸ“Š Total users in database: ${totalUsers}`);
 
         // Find users that need migration (missing new fields)
         const usersToMigrate = await User.countDocuments({
@@ -44,10 +44,10 @@ async function migrateExistingUsers() {
             ]
         });
 
-        console.log(`🔧 Users requiring migration: ${usersToMigrate}`);
+        console.log(`ðŸ”§ Users requiring migration: ${usersToMigrate}`);
 
         if (usersToMigrate === 0) {
-            console.log('✅ No users require migration. All users are up to date.');
+            console.log('âœ… No users require migration. All users are up to date.');
             await mongoose.connection.close();
             return;
         }
@@ -70,9 +70,9 @@ async function migrateExistingUsers() {
             }
         );
 
-        console.log(`✅ Migration completed successfully!`);
-        console.log(`📈 Users updated: ${result.modifiedCount}`);
-        console.log(`📊 Users matched: ${result.matchedCount}`);
+        console.log(`âœ… Migration completed successfully!`);
+        console.log(`ðŸ“ˆ Users updated: ${result.modifiedCount}`);
+        console.log(`ðŸ“Š Users matched: ${result.matchedCount}`);
 
         // Verify migration
         const verifyCount = await User.countDocuments({
@@ -81,15 +81,15 @@ async function migrateExistingUsers() {
             isVerified: true
         });
 
-        console.log(`✅ Verification: ${verifyCount} users now have all required fields`);
+        console.log(`âœ… Verification: ${verifyCount} users now have all required fields`);
 
         // Close connection
         await mongoose.connection.close();
-        console.log('🔌 Database connection closed');
-        console.log('🎉 Migration completed successfully!');
+        console.log('ðŸ”Œ Database connection closed');
+        console.log('ðŸŽ‰ Migration completed successfully!');
 
     } catch (error) {
-        console.error('❌ Migration failed:', error);
+        console.error('âŒ Migration failed:', error);
         console.error('Error details:', error.message);
 
         // Close connection on error
@@ -103,10 +103,11 @@ async function migrateExistingUsers() {
 
 // Run migration
 console.log('');
-console.log('═══════════════════════════════════════════════');
-console.log('   GrubDash User Migration Script');
+console.log('â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•');
+console.log('   MelaChow User Migration Script');
 console.log('   Adding Authentication & Security Fields');
-console.log('═══════════════════════════════════════════════');
+console.log('â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•');
 console.log('');
 
 migrateExistingUsers();
+

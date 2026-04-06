@@ -1,4 +1,4 @@
-import User from '../../model/user.model.js';
+﻿import User from '../../model/user.model.js';
 import { generateAccessToken, generateRefreshToken, generateOTP, generateResetToken, verifyToken } from '../../utils/jwt.js';
 import { sendMail } from '../../config/mailer.js';
 import { sendTokenCookie } from '../../utils/sendTokenCookie.js';
@@ -50,21 +50,21 @@ export const register = async (req, res) => {
         // Send OTP email
         await sendMail({
             to: email,
-            subject: 'Verify Your Email - GrubDash',
+            subject: 'Verify Your Email - MelaChow',
             html: `
       <div style="font-family: Arial, sans-serif; background-color: #f4f7fb; padding: 40px;">
         <div style="max-width: 600px; margin: auto; background-color: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
           
           <!-- Header -->
           <div style="background-color: #FF6B00; padding: 20px; text-align: center;">
-            <h1 style="color: white; margin: 0; font-size: 24px;">GrubDash</h1>
+            <h1 style="color: white; margin: 0; font-size: 24px;">MelaChow</h1>
           </div>
 
           <!-- Body -->
           <div style="padding: 30px; text-align: center;">
             <h2 style="color: #222; margin-bottom: 10px;">Email Verification</h2>
             <p style="color: #555; font-size: 15px; line-height: 1.6;">
-              Use the OTP below to verify your email address and complete your GrubDash registration:
+              Use the OTP below to verify your email address and complete your MelaChow registration:
             </p>
 
             <div style="font-size: 32px; font-weight: bold; margin: 25px 0; color: #FF6B00; letter-spacing: 3px;">
@@ -81,7 +81,7 @@ export const register = async (req, res) => {
           <hr style="border: none; border-top: 1px solid #eee; margin: 0;" />
           <div style="padding: 20px; text-align: center;">
             <p style="font-size: 12px; color: #aaa; margin: 0;">
-              &copy; ${new Date().getFullYear()} GrubDash. All rights reserved.  
+              &copy; ${new Date().getFullYear()} MelaChow. All rights reserved.  
               <br/>This is an automated message, please do not reply.
             </p>
           </div>
@@ -331,14 +331,14 @@ export const forgotPasswordNew = async (req, res) => {
         // Send reset email
         await sendMail({
             to: email,
-            subject: 'Reset Your Password - GrubDash',
+            subject: 'Reset Your Password - MelaChow',
             html: `
       <div style="font-family: 'Segoe UI', sans-serif; background-color: #f9fafb; padding: 30px;">
         <div style="max-width: 600px; margin: auto; background-color: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">
 
           <!-- Header -->
           <div style="background-color: #FF6B00; padding: 20px; text-align: center;">
-              <h1 style="color: white; margin: 0; font-size: 24px;">GrubDash</h1>
+              <h1 style="color: white; margin: 0; font-size: 24px;">MelaChow</h1>
               <p style="color: #ffeede; margin: 5px 0 0; font-size: 14px;">Bringing meals closer</p>
           </div>
 
@@ -346,7 +346,7 @@ export const forgotPasswordNew = async (req, res) => {
           <div style="padding: 30px; color: #333;">
               <h2 style="color: #FF6B00; margin-bottom: 15px;">Reset Password OTP</h2>
               <p>Hello,</p>
-              <p>We received a request to reset your <strong>GrubDash</strong> account password. Use the OTP below to proceed:</p>
+              <p>We received a request to reset your <strong>MelaChow</strong> account password. Use the OTP below to proceed:</p>
 
               <div style="text-align: center; font-size: 28px; font-weight: bold; color: #FF6B00; margin: 25px 0;">
                   ${otp}
@@ -354,12 +354,12 @@ export const forgotPasswordNew = async (req, res) => {
 
               <p>This OTP is valid for <strong>10 minutes</strong>. For your safety, please don't share it with anyone.</p>
 
-              <p>Thanks,<br/>The GrubDash Team</p>
+              <p>Thanks,<br/>The MelaChow Team</p>
           </div>
 
           <!-- Footer -->
           <div style="background-color: #f4f4f4; padding: 15px; text-align: center; font-size: 12px; color: #777;">
-              © ${new Date().getFullYear()} GrubDash. All rights reserved.
+              Â© ${new Date().getFullYear()} MelaChow. All rights reserved.
           </div>
         </div>
       </div>
@@ -521,3 +521,4 @@ export const refreshToken = async (req, res) => {
         res.status(401).json({ message: 'Token refresh failed', error: error.message });
     }
 };
+

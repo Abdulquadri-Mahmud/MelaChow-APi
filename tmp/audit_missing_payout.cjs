@@ -1,18 +1,18 @@
-const mongoose = require('mongoose');
+﻿const mongoose = require('mongoose');
 const dotenv = require('dotenv');
 const path = require('path');
 
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
-const mongoUri = process.env.MONGO_URI || 'mongodb://localhost:27017/grubdash';
+const mongoUri = process.env.MONGO_URI || 'mongodb://localhost:27017/melachow';
 
 async function runInvestigation() {
   try {
     await mongoose.connect(mongoUri);
     const db = mongoose.connection.db;
 
-    console.log('─────────────────────────────────────────────────────────────');
-    console.log('🕵️ MISSING PAYOUT INVESTIGATION');
-    console.log('─────────────────────────────────────────────────────────────\n');
+    console.log('â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€');
+    console.log('ðŸ•µï¸ MISSING PAYOUT INVESTIGATION');
+    console.log('â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€\n');
 
     // 1. Find all delivered orders with riders
     const deliveredOrders = await db.collection('orders').find({ 
@@ -48,7 +48,7 @@ async function runInvestigation() {
             console.log('Empty transaction list.');
           } else {
             riderWallet.transactions.forEach(t => {
-              console.log(`[${t.type.toUpperCase()}] ₦${t.amount} | ${t.transactionType || 'null'} | ${t.description} | ${t.date}`);
+              console.log(`[${t.type.toUpperCase()}] â‚¦${t.amount} | ${t.transactionType || 'null'} | ${t.description} | ${t.date}`);
             });
           }
         }
@@ -75,3 +75,4 @@ async function runInvestigation() {
 }
 
 runInvestigation();
+

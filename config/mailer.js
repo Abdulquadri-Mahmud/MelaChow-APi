@@ -1,10 +1,10 @@
-import { Resend } from 'resend';
+﻿import { Resend } from 'resend';
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
 /**
  * Send transactional email via Resend API.
- * Uses HTTPS (port 443) — works on Render free tier.
+ * Uses HTTPS (port 443) â€” works on Render free tier.
  * Drop-in replacement for nodemailer sendMail.
  *
  * @param {object} options
@@ -14,7 +14,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
  */
 export const sendMail = async ({ to, subject, html }) => {
     const { data, error } = await resend.emails.send({
-        from: 'GrubDash <noreply@mail.grubdash.ng>',
+        from: 'MelaChow <noreply@mail.melachow.ng>',
         to,
         subject,
         html,
@@ -26,3 +26,4 @@ export const sendMail = async ({ to, subject, html }) => {
 
     return data;
 };
+

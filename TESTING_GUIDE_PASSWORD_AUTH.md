@@ -1,4 +1,4 @@
-# 🧪 QUICK TESTING GUIDE - New Password Auth
+﻿# ðŸ§ª QUICK TESTING GUIDE - New Password Auth
 
 ## Prerequisites
 - Backend running on: `https://grub-dash-api.vercel.app` (or `http://localhost:3001`)
@@ -6,7 +6,7 @@
 
 ---
 
-## 1️⃣ REGISTRATION FLOW (3 Steps)
+## 1ï¸âƒ£ REGISTRATION FLOW (3 Steps)
 
 ### Step 1: Register
 ```http
@@ -75,7 +75,7 @@ Content-Type: application/json
 
 ---
 
-## 2️⃣ LOGIN FLOW (1 Step)
+## 2ï¸âƒ£ LOGIN FLOW (1 Step)
 
 ### Login with Password
 ```http
@@ -101,7 +101,7 @@ Content-Type: application/json
 
 ---
 
-## 3️⃣ PASSWORD RESET FLOW (3 Steps)
+## 3ï¸âƒ£ PASSWORD RESET FLOW (3 Steps)
 
 ### Step 1: Request Reset
 ```http
@@ -169,7 +169,7 @@ Content-Type: application/json
 
 ---
 
-## 4️⃣ PROTECTED ROUTES
+## 4ï¸âƒ£ PROTECTED ROUTES
 
 ### Get Profile
 ```http
@@ -208,7 +208,7 @@ Cookie: token=<refresh_token>
 
 ---
 
-## 5️⃣ TOKEN REFRESH
+## 5ï¸âƒ£ TOKEN REFRESH
 
 ### Refresh Access Token
 ```http
@@ -225,7 +225,7 @@ Cookie: token=<refresh_token>
 
 ---
 
-## 6️⃣ SECURITY TESTS
+## 6ï¸âƒ£ SECURITY TESTS
 
 ### Test Account Locking
 1. Login with wrong password 5 times:
@@ -284,27 +284,27 @@ Content-Type: application/json
 
 ---
 
-## 🎯 SUCCESS CRITERIA
+## ðŸŽ¯ SUCCESS CRITERIA
 
-✅ **Registration:**
+âœ… **Registration:**
 - [ ] OTP sent to email
 - [ ] OTP verification works
 - [ ] Password set successfully
 - [ ] Cookie set in response
 
-✅ **Login:**
+âœ… **Login:**
 - [ ] Login with correct password works
 - [ ] Login with wrong password fails
 - [ ] Account locks after 5 failed attempts
 - [ ] Cookie set in response
 
-✅ **Password Reset:**
+âœ… **Password Reset:**
 - [ ] Reset OTP sent to email
 - [ ] OTP verification returns reset token
 - [ ] Password reset works
 - [ ] Can login with new password
 
-✅ **Security:**
+âœ… **Security:**
 - [ ] Password not in API responses
 - [ ] OTP not in API responses
 - [ ] HttpOnly cookie set
@@ -313,7 +313,7 @@ Content-Type: application/json
 
 ---
 
-## 🐛 TROUBLESHOOTING
+## ðŸ› TROUBLESHOOTING
 
 ### "User not found"
 - Check email spelling
@@ -338,14 +338,14 @@ Content-Type: application/json
 
 ---
 
-## 📊 POSTMAN COLLECTION
+## ðŸ“Š POSTMAN COLLECTION
 
 Import this collection to Postman for easy testing:
 
 ```json
 {
   "info": {
-    "name": "GrubDash Password Auth",
+    "name": "MelaChow Password Auth",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "item": [
@@ -405,4 +405,5 @@ Import this collection to Postman for easy testing:
 
 ---
 
-**Ready to test!** 🚀
+**Ready to test!** ðŸš€
+

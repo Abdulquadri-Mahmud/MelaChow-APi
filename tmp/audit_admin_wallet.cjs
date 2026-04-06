@@ -1,10 +1,10 @@
-const mongoose = require('mongoose');
+﻿const mongoose = require('mongoose');
 const dotenv = require('dotenv');
 const path = require('path');
 
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
-const mongoUri = process.env.MONGO_URI || 'mongodb://localhost:27017/grubdash';
+const mongoUri = process.env.MONGO_URI || 'mongodb://localhost:27017/melachow';
 
 async function runAudit() {
   try {
@@ -20,7 +20,7 @@ async function runAudit() {
     if (!adminWallet) {
       console.log('Admin wallet not found!');
     } else {
-      console.log(`Current Balance: ₦${adminWallet.balance}`);
+      console.log(`Current Balance: â‚¦${adminWallet.balance}`);
     }
 
     // 2. Transaction Breakdown
@@ -41,7 +41,7 @@ async function runAudit() {
 
     console.log('\n--- TRANSACTION AGGREGATION (TYPE + DIRECTION) ---');
     results.forEach(r => {
-      console.log(`${r._id.direction.toUpperCase()} | ${r._id.type || 'Legacy (null)'} : ₦${r.total} (${r.count} tx)`);
+      console.log(`${r._id.direction.toUpperCase()} | ${r._id.type || 'Legacy (null)'} : â‚¦${r.total} (${r.count} tx)`);
     });
 
     // 3. Mathematical Verification
@@ -54,15 +54,15 @@ async function runAudit() {
     });
 
     console.log('\n--- AUDIT TOTALS ---');
-    console.log(`Total Credits: ₦${totalCredits.toFixed(2)}`);
-    console.log(`Total Debits:  ₦${totalDebits.toFixed(2)}`);
-    console.log(`Expected Bal: ₦${(totalCredits - totalDebits).toFixed(2)}`);
+    console.log(`Total Credits: â‚¦${totalCredits.toFixed(2)}`);
+    console.log(`Total Debits:  â‚¦${totalDebits.toFixed(2)}`);
+    console.log(`Expected Bal: â‚¦${(totalCredits - totalDebits).toFixed(2)}`);
     if (adminWallet) {
       const diff = Math.abs(adminWallet.balance - (totalCredits - totalDebits));
       if (diff < 0.01) {
-        console.log('✅ BALANCE MATCHES TRANSACTION LEDGER');
+        console.log('âœ… BALANCE MATCHES TRANSACTION LEDGER');
       } else {
-        console.log(`❌ DISCREPANCY DETECTED: ₦${diff.toFixed(2)}`);
+        console.log(`âŒ DISCREPANCY DETECTED: â‚¦${diff.toFixed(2)}`);
       }
     }
 
@@ -74,3 +74,4 @@ async function runAudit() {
 }
 
 runAudit();
+

@@ -1,4 +1,4 @@
-import nodemailer from "nodemailer";
+﻿import nodemailer from "nodemailer";
 
 export const sendUserBanEmail = async (user, reason) => {
   const transporter = nodemailer.createTransport({
@@ -15,19 +15,19 @@ export const sendUserBanEmail = async (user, reason) => {
 
       <!-- Header -->
       <div style="background-color: #ff6600; padding: 20px; text-align: center;">
-        <h1 style="color: #fff; margin: 0;">GrubDash User</h1>
-        <p style="color: #ffd6d6; margin: 5px 0;">Important Account Notice ⚠️</p>
+        <h1 style="color: #fff; margin: 0;">MelaChow User</h1>
+        <p style="color: #ffd6d6; margin: 5px 0;">Important Account Notice âš ï¸</p>
       </div>
 
       <!-- Body -->
       <div style="padding: 30px; color: #333;">
-        <h2 style="color: #ff6600; text-align: center;">🚫 Account Banned</h2>
+        <h2 style="color: #ff6600; text-align: center;">ðŸš« Account Banned</h2>
         <p style="font-size: 15px; line-height: 1.6; text-align: center;">
           Dear <strong>${user.firstname || "User"}</strong>,
         </p>
         <p style="font-size: 15px; line-height: 1.6; text-align: center;">
           We regret to inform you that your account on 
-          <strong style="color: #ff6600;">GrubDash</strong> has been 
+          <strong style="color: #ff6600;">MelaChow</strong> has been 
           <strong>permanently banned</strong> following a serious violation of our terms of service.
         </p>
 
@@ -46,7 +46,7 @@ export const sendUserBanEmail = async (user, reason) => {
         </p>
 
         <div style="text-align: center; margin: 25px 0;">
-          <a href="https://GrubDash.com/support"
+          <a href="https://MelaChow.com/support"
             style="display: inline-block; background-color: #ff6600; color: #ffffff; padding: 12px 28px; border-radius: 6px; text-decoration: none; font-weight: 600;">
             Contact Support
           </a>
@@ -55,16 +55,17 @@ export const sendUserBanEmail = async (user, reason) => {
 
       <!-- Footer -->
       <div style="background-color: #f9fafc; padding: 20px; text-align: center; font-size: 13px; color: #888;">
-        <p>© ${new Date().getFullYear()} GrubDash. All rights reserved.</p>
+        <p>Â© ${new Date().getFullYear()} MelaChow. All rights reserved.</p>
       </div>
     </div>
   </div>
   `;
 
   await transporter.sendMail({
-    from: `"GrubDash" <${process.env.ADMIN_EMAIL}>`,
+    from: `"MelaChow" <${process.env.ADMIN_EMAIL}>`,
     to: user.email,
     subject: "Account Ban Notice",
     html,
   });
 };
+

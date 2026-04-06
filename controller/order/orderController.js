@@ -263,7 +263,7 @@ export const completeOrderFulfillment = async (orderId) => {
     /* -------------------------------
      * 1️⃣ ADMIN WALLET
      * ------------------------------- */
-    const PLATFORM_PERCENT = 0.1;
+    const PLATFORM_PERCENT = 0; // Commission disabled — revenue from delivery spread only
 
     let adminWallet = await Wallet.findOne({
       ownerModel: "Admin",
@@ -424,22 +424,7 @@ export const completeOrderFulfillment = async (orderId) => {
         { session }
       );
 
-      /* -------------------------------
-       * Update Admin Wallet (Commission)
-       * ------------------------------- */
-      if (adminWallet) {
-        adminWallet.balance = Number(
-          (adminWallet.balance + adminShare).toFixed(2)
-        );
 
-        adminWallet.transactions.push({
-          type: "credit",
-          amount: adminShare,
-          description: `Commission from Order ${order.orderId}`,
-          orderId: order._id,
-          transactionType: 'commission',
-        });
-      }
     }
 
     if (adminWallet) {

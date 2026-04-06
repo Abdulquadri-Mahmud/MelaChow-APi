@@ -1,11 +1,11 @@
-# Frontend Admin Dashboard Implementation Prompt
+﻿# Frontend Admin Dashboard Implementation Prompt
 
 ## Overview
-You are tasked with creating a comprehensive **Admin Dashboard** for the GrubDash food delivery platform. This dashboard will allow administrators to manage categories, approve/reject vendor accounts, and oversee platform operations.
+You are tasked with creating a comprehensive **Admin Dashboard** for the MelaChow food delivery platform. This dashboard will allow administrators to manage categories, approve/reject vendor accounts, and oversee platform operations.
 
 ---
 
-## 🎯 Project Objectives
+## ðŸŽ¯ Project Objectives
 
 ### 1. Admin Dashboard Layout
 Create a professional, modern admin dashboard with the following structure:
@@ -39,7 +39,7 @@ Create a professional, modern admin dashboard with the following structure:
 
 ---
 
-## 📦 Feature 1: Category Management
+## ðŸ“¦ Feature 1: Category Management
 
 ### Backend Endpoints Available:
 
@@ -123,7 +123,7 @@ Headers: { Cookie: adminToken }
 
 ---
 
-## 👔 Feature 2: Vendor Account Approval/Management
+## ðŸ‘” Feature 2: Vendor Account Approval/Management
 
 ### Backend Endpoints Available:
 
@@ -253,7 +253,7 @@ When clicking "View Details", show:
 
 ---
 
-## 🔐 Authentication & Authorization
+## ðŸ” Authentication & Authorization
 
 ### Admin Authentication:
 All admin routes require authentication via HTTP-only cookies.
@@ -285,7 +285,7 @@ Headers: { Cookie: adminToken }
 
 ---
 
-## 📊 Dashboard Overview Page (Optional Enhancement)
+## ðŸ“Š Dashboard Overview Page (Optional Enhancement)
 
 Create a dashboard home page showing:
 - Total categories count
@@ -298,7 +298,7 @@ Create a dashboard home page showing:
 
 ---
 
-## 🎨 UI/UX Best Practices
+## ðŸŽ¨ UI/UX Best Practices
 
 1. **Loading States**: Show spinners/skeletons while fetching data
 2. **Error Handling**: Display user-friendly error messages
@@ -310,7 +310,7 @@ Create a dashboard home page showing:
 
 ---
 
-## 🛠️ Technical Implementation Notes
+## ðŸ› ï¸ Technical Implementation Notes
 
 ### API Configuration:
 ```javascript
@@ -341,7 +341,7 @@ const response = await fetch(`${API_BASE_URL}/api/categories/admin/all`, {
 
 ---
 
-## ✅ Acceptance Criteria
+## âœ… Acceptance Criteria
 
 ### Category Management:
 - [ ] Can view all categories in a table/grid
@@ -374,7 +374,7 @@ const response = await fetch(`${API_BASE_URL}/api/categories/admin/all`, {
 
 ---
 
-## 📝 Additional Notes
+## ðŸ“ Additional Notes
 
 1. **Email Notifications**: The backend automatically sends emails when vendors are approved, rejected, suspended, or reactivated. No frontend action needed.
 
@@ -388,7 +388,7 @@ const response = await fetch(`${API_BASE_URL}/api/categories/admin/all`, {
 
 ---
 
-## 🚀 Getting Started
+## ðŸš€ Getting Started
 
 1. Set up admin authentication flow
 2. Create admin dashboard layout with sidebar navigation
@@ -398,4 +398,5 @@ const response = await fetch(`${API_BASE_URL}/api/categories/admin/all`, {
 6. Polish UI/UX with loading states and error handling
 7. Test all functionality thoroughly
 
-Good luck building an amazing admin dashboard! 🎉
+Good luck building an amazing admin dashboard! ðŸŽ‰
+
