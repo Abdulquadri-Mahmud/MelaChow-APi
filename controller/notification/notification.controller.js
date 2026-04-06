@@ -1,4 +1,4 @@
-import {
+﻿import {
     sendNotification,
     saveSubscription,
     removeSubscription,
@@ -72,7 +72,7 @@ export const sendTestNotification = async (req, res) => {
     try {
         const userId = req.userId;
         await sendNotification(userId, 'promo', {
-            message: 'This is a test notification from GrubDash!',
+            message: 'This is a test notification from MelaChow!',
             url: '/profile'
         });
         res.status(200).json({ message: 'Test notification sent' });
@@ -284,3 +284,4 @@ export const clearAllNotifications = async (req, res) => {
         });
     }
 };
+

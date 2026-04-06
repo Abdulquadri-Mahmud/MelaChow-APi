@@ -4,7 +4,7 @@ import { getIO } from "../socket/socketServer.js";
 import Notification from "../model/notification/notification.model.js";
 import Order from "../model/order/Order.js";
 import Rider from "../model/rider.model.js";
-import { sendDeliveryOTP, verifyDeliveryOTP } from '../services/termii.service.js';
+import { sendDeliveryOTP, verifyDeliveryOTP } from '../services/otp.service.js';
 
 export const createRider = async (req, res, next) => {
     try {

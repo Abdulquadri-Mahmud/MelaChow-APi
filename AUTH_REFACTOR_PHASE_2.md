@@ -1,11 +1,11 @@
-# 🔐 AUTHENTICATION REFACTORING - PHASE 2 (VENDOR & ADMIN)
+﻿# ðŸ” AUTHENTICATION REFACTORING - PHASE 2 (VENDOR & ADMIN)
 
 This phase completes the secure authentication system migration for **Vendors** and **Admins**. 
 The system now uses consistent security patterns across all user types (User, Vendor, Admin).
 
 ---
 
-## 🚀 NEW FEATURES IMPLEMENTED
+## ðŸš€ NEW FEATURES IMPLEMENTED
 
 ### 1. Vendor Authentication (`via /api/vendor/auth/*`)
 - **Model Updates**: Added `password`, `loginAttempts`, `lockUntil`, `resetPasswordToken` fields.
@@ -31,13 +31,13 @@ The system now uses consistent security patterns across all user types (User, Ve
 
 ---
 
-## 🛠️ TESTING GUIDE
+## ðŸ› ï¸ TESTING GUIDE
 
 ### Vendor Login
 **Endpoint**: `POST /api/vendor/auth/login-password`
 ```json
 {
-  "email": "vendor@grubdash.com",
+  "email": "vendor@melachow.com",
   "password": "SecureVendorPass1!"
 }
 ```
@@ -46,7 +46,7 @@ The system now uses consistent security patterns across all user types (User, Ve
 **Endpoint**: `POST /api/admin/auth/login`
 ```json
 {
-  "email": "admin@grubdash.com",
+  "email": "admin@melachow.com",
   "password": "SecureAdminPass1!"
 }
 ```
@@ -58,18 +58,18 @@ The system now uses consistent security patterns across all user types (User, Ve
 
 ---
 
-## ⚠️ MIGRATION STEPS
+## âš ï¸ MIGRATION STEPS
 
 Run the migration script to initialize new fields for existing vendors and admins:
 
 ```bash
 node scripts/migrateUsers.js
-node scripts/migrateVendorsAndAdmins.js # 👈 Run this for Phase 2
+node scripts/migrateVendorsAndAdmins.js # ðŸ‘ˆ Run this for Phase 2
 ```
 
 ---
 
-## 🔒 SECURITY SUMMARY
+## ðŸ”’ SECURITY SUMMARY
 
 | Feature | Implementation | benefit |
 | :--- | :--- | :--- |
@@ -80,7 +80,8 @@ node scripts/migrateVendorsAndAdmins.js # 👈 Run this for Phase 2
 
 ---
 
-## ✅ NEXT STEPS
+## âœ… NEXT STEPS
 1. **Frontend Update**: Update Vendor Dashboard and Admin Panel to use new `/auth` endpoints.
 2. **Testing**: Verify flows for both new and existing accounts.
 3. **Monitor**: Watch logs for any auth failures during rollout.
+

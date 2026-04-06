@@ -1,4 +1,4 @@
-import Admin from '../../model/Admin/admin.model.js';
+﻿import Admin from '../../model/Admin/admin.model.js';
 import { generateAccessToken, generateRefreshToken, generateOTP, generateResetToken, verifyToken } from '../../utils/jwt.js';
 import { sendMail } from '../../config/mailer.js';
 import { sendTokenCookie } from '../../utils/sendTokenCookie.js';
@@ -110,21 +110,21 @@ export const forgotAdminPassword = async (req, res) => {
         // Send reset email
         await sendMail({
             to: email,
-            subject: 'Reset Your Admin Password - GrubDash',
+            subject: 'Reset Your Admin Password - MelaChow',
             html: `
       <div style="font-family: 'Segoe UI', sans-serif; background-color: #f9fafb; padding: 30px;">
         <div style="max-width: 600px; margin: auto; background-color: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">
           <div style="background-color: #FF6B00; padding: 20px; text-align: center;">
-              <h1 style="color: white; margin: 0; font-size: 24px;">GrubDash Admin</h1>
+              <h1 style="color: white; margin: 0; font-size: 24px;">MelaChow Admin</h1>
           </div>
           <div style="padding: 30px; color: #333;">
               <h2 style="color: #FF6B00; margin-bottom: 15px;">Reset Password OTP</h2>
-              <p>We received a request to reset your <strong>GrubDash Admin</strong> password. Use the OTP below to proceed:</p>
+              <p>We received a request to reset your <strong>MelaChow Admin</strong> password. Use the OTP below to proceed:</p>
               <div style="text-align: center; font-size: 28px; font-weight: bold; color: #FF6B00; margin: 25px 0;">${otp}</div>
               <p>This OTP is valid for <strong>10 minutes</strong>.</p>
           </div>
           <div style="background-color: #f4f4f4; padding: 15px; text-align: center; font-size: 12px; color: #777;">
-              © ${new Date().getFullYear()} GrubDash. All rights reserved.
+              Â© ${new Date().getFullYear()} MelaChow. All rights reserved.
           </div>
         </div>
       </div>
@@ -325,3 +325,4 @@ export const logoutAdmin = async (req, res) => {
         });
     }
 };
+

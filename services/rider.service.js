@@ -292,41 +292,61 @@ export const markDelivered = async (orderId, riderId) => {
                 console.log(`💵 Vendor-managed delivery — rider paid by vendor. No wallet transaction.`);
 
             } else {
-                // ── PLATFORM-MANAGED DELIVERY ─────────────────────────────────────────
-                // GrubDash supplied the rider. 
-                // COMMISSION SPLIT: Rider gets 80%, Platform (Admin) retains 20%.
-                
-                const riderPayout = Number((deliveryFee * 0.8).toFixed(2));
-                const platformCommission = Number((deliveryFee * 0.2).toFixed(2));
+                // ── PLATFORM-MANAGED DELIVERY (SPREAD MODEL) ──────────────────────────
+                // MelaChow supplied the rider.
+                // Revenue model: fixed rider payout, platform retains the spread.
+                // Customer paid ₦1,000 delivery fee → held in admin wallet as 'delivery_fee'.
+                // Rider receives fixed ₦600 → admin wallet debited ₦600.
+                // Platform spread ₦400 → stays in admin wallet, recorded as 'delivery_spread'.
+
+                const RIDER_FIXED_PAYOUT = 600; // naira — single source of truth, adjust here only
+                const riderPayout = Math.min(RIDER_FIXED_PAYOUT, deliveryFee); // never pay more than collected
+                const platformSpread = Number((deliveryFee - riderPayout).toFixed(2));
 
                 const adminWallet = await Wallet.findOne({ ownerModel: "Admin" }).session(session);
                 if (!adminWallet) throw new Error("Admin wallet not found");
 
-                // We only debit the rider's share from the admin wallet. 
                 if (adminWallet.balance < riderPayout) {
-                    throw new Error("Admin wallet has insufficient balance to pay rider");
+                    throw new Error(
+                        `Admin wallet insufficient to pay rider: has ₦${adminWallet.balance}, needs ₦${riderPayout}`
+                    );
                 }
 
+                // Debit rider payout from admin wallet
                 adminWallet.balance = Number((adminWallet.balance - riderPayout).toFixed(2));
                 adminWallet.transactions.push({
                     type: "debit",
                     amount: riderPayout,
-                    description: `Rider Payout (80%) for Order ${order.orderId}`,
+                    description: `Rider payout (fixed ₦${RIDER_FIXED_PAYOUT}) for Order ${order.orderId}`,
                     transactionType: 'rider_payout',
                 });
+
+                // Record platform spread — balance is already correct (₦400 never left admin wallet)
+                // This transaction exists purely for financial reporting on the admin dashboard
+                // Spread is recorded as a debit-matched informational entry.
+                // The ₦400 never left — this entry exists only for dashboard reporting.
+                // We record it as a debit of 0 to avoid inflating the credit ledger.
+                adminWallet.transactions.push({
+                    type: "debit",
+                    amount: 0,
+                    description: `Delivery spread retained ₦${platformSpread} for Order ${order.orderId} — reporting only`,
+                    transactionType: 'delivery_spread',
+                });
+
                 await adminWallet.save({ session });
 
+                // Credit rider wallet
                 riderWallet.balance = Number((riderWallet.balance + riderPayout).toFixed(2));
                 riderWallet.transactions.push({
                     type: "credit",
                     amount: riderPayout,
-                    description: `Delivery Fee (80% share) for Order ${order.orderId}`,
+                    description: `Delivery payout for Order ${order.orderId}`,
                     transactionType: 'rider_payout',
                 });
                 await riderWallet.save({ session });
 
                 riderEarningsToRecord = riderPayout;
-                console.log(`💰 Split payout — ₦${riderPayout} (Rider) | ₦${platformCommission} (Commission) for Order ${order.orderId}`);
+                console.log(`💰 Spread model — ₦${riderPayout} (Rider) | ₦${platformSpread} (Platform spread) for Order ${order.orderId}`);
             }
         }
 

@@ -1,4 +1,4 @@
-import Notification from '../model/notification/notification.model.js';
+﻿import Notification from '../model/notification/notification.model.js';
 import webpush from 'web-push';
 import PushSubscription from '../model/notification/pushSubscription.model.js';
 import VendorPushSubscription from '../model/notification/vendorPushSubscription.model.js';
@@ -13,7 +13,7 @@ dotenv.config();
 // Initialize VAPID details
 const publicKey = process.env.VAPID_PUBLIC_KEY;
 const privateKey = process.env.VAPID_PRIVATE_KEY;
-const email = process.env.VAPID_EMAIL || 'mailto:grubdash001@gmail.com';
+const email = process.env.VAPID_EMAIL || 'mailto:melachow001@gmail.com';
 
 if (publicKey && privateKey) {
     webpush.setVapidDetails(email, publicKey, privateKey);
@@ -24,56 +24,56 @@ if (publicKey && privateKey) {
  */
 const NOTIFICATION_CONFIGS = {
     order_placed: {
-        title: '🎉 Order Placed!',
+        title: 'ðŸŽ‰ Order Placed!',
         getBody: (data) => `Your order #${data.orderId} from ${data.restaurantName || 'the restaurant'} has been placed successfully.`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
     order_confirmed: {
-        title: '✅ Order Confirmed',
+        title: 'âœ… Order Confirmed',
         getBody: (data) => `Your order #${data.orderId} has been confirmed by ${data.restaurantName || 'the restaurant'}.`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
     order_preparing: {
-        title: '👨‍🍳 Order Preparing',
+        title: 'ðŸ‘¨â€ðŸ³ Order Preparing',
         getBody: (data) => `Your food from ${data.restaurantName || 'the restaurant'} is being prepared! Order #${data.orderId}`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
     order_ready: {
-        title: '📦 Order Ready',
+        title: 'ðŸ“¦ Order Ready',
         getBody: (data) => `Your order #${data.orderId} from ${data.restaurantName || 'the restaurant'} is ready!`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
     order_dispatched: {
-        title: '🚚 Order Dispatched',
+        title: 'ðŸšš Order Dispatched',
         getBody: (data) => `Your order #${data.orderId} from ${data.restaurantName || 'the restaurant'} is on the way!`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
     order_delivered: {
-        title: '🎊 Order Delivered',
+        title: 'ðŸŽŠ Order Delivered',
         getBody: (data) => `Your order #${data.orderId} has been delivered. Enjoy your meal from ${data.restaurantName || 'the restaurant'}!`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
     order_cancelled: {
-        title: '❌ Order Cancelled',
+        title: 'âŒ Order Cancelled',
         getBody: (data) => `Your order #${data.orderId} from ${data.restaurantName || 'the restaurant'} has been cancelled.`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
     delivery_nearby: {
-        title: '📍 Delivery Nearby',
+        title: 'ðŸ“ Delivery Nearby',
         getBody: (data) => `Your delivery rider is approaching with your order #${data.orderId}!`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: true,
         vibrate: [200, 100, 200, 100, 200]
     },
     vendor_new_order: {
-        title: '🔔 New Order Received!',
+        title: 'ðŸ”” New Order Received!',
         getBody: (data) => {
             const customerPart = data.customerName ? ` from ${data.customerName}` : '';
             const locationPart = data.location ? ` to ${data.location}` : '';
@@ -84,58 +84,58 @@ const NOTIFICATION_CONFIGS = {
         vibrate: [300, 100, 300, 100, 300]
     },
     vendor_order_cancelled: {
-        title: '⚠️ Order Cancelled',
+        title: 'âš ï¸ Order Cancelled',
         getBody: (data) => `Order #${data.orderId} has been cancelled by ${data.customerName || 'the customer'}.`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: true
     },
     order_assigned: {
-        title: '🛵 New Job Assigned!',
+        title: 'ðŸ›µ New Job Assigned!',
         getBody: (data) => `Head to ${data.restaurantName || 'the store'} for pickup. Order #${data.orderId}`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: true,
         vibrate: [200, 100, 200, 100, 200]
     },
     vendor_order_delivered: {
-        title: '💰 Order Delivered & Earnings Credited',
+        title: 'ðŸ’° Order Delivered & Earnings Credited',
         getBody: (data) => `Order #${data.orderId || data._id?.slice(-6)} has been successfully delivered. Your earnings have been updated.`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
     admin_order_ready: {
-        title: '🚨 Platform Order Ready',
+        title: 'ðŸš¨ Platform Order Ready',
         getBody: (data) => `${data.restaurantName || 'Restaurant'} marked Order #${data.orderId || data._id?.slice(-6)} as ready. Assign rider now!`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: true,
         vibrate: [400, 100, 400, 100, 400]
     },
     rider_assignment_needed: {
-        title: '⚠️ Manual Assignment Required',
+        title: 'âš ï¸ Manual Assignment Required',
         getBody: (data) => `Logistics alert: No rider found for Order #${data.id || data.orderId}. Immediate manual assignment needed.`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: true,
         vibrate: [500, 100, 500, 100, 500]
     },
     admin_order_delivered: {
-        title: '🏁 Order Delivery Completed',
+        title: 'ðŸ Order Delivery Completed',
         getBody: (data) => `Platform Order #${data.orderId || data._id?.slice(-6)} has been delivered correctly to the customer.`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
     vendor_review: {
-        title: '⭐ New Merchant Review',
+        title: 'â­ New Merchant Review',
         getBody: (data) => `Customer left a review for ${data.restaurantName || 'a vendor'}. View feedback in the portal.`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
     system: {
-        title: '⚙️ Platform System Alert',
+        title: 'âš™ï¸ Platform System Alert',
         getBody: (data) => data.message || 'New system update or administrative message.',
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
     promo: {
-        title: '🎁 Special Offer',
+        title: 'ðŸŽ Special Offer',
         getBody: (data) => data.message || 'Check out our latest discount!',
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
@@ -152,13 +152,13 @@ const NOTIFICATION_CONFIGS = {
  */
 export async function sendNotification(recipientId, type, data = {}, role = 'user') {
     try {
-        // ✅ Validate recipientId (Required unless role is admin OR restaurantId is provided)
+        // âœ… Validate recipientId (Required unless role is admin OR restaurantId is provided)
         if (!recipientId && role !== 'admin' && !data.restaurantId) {
-            console.error('❌ Missing recipient: neither recipientId nor restaurantId provided');
+            console.error('âŒ Missing recipient: neither recipientId nor restaurantId provided');
             throw new Error('Notification must have a recipient');
         }
 
-        console.log(`📨 Preparing notification for ${role} ${recipientId || '(Broadcast)'}, type: ${type}`);
+        console.log(`ðŸ“¨ Preparing notification for ${role} ${recipientId || '(Broadcast)'}, type: ${type}`);
 
         const config = NOTIFICATION_CONFIGS[type] || {
             title: data.title || 'System Notification',
@@ -172,7 +172,7 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
             restaurantId: role === 'vendor' ? recipientId : (data.restaurantId || null),
             riderId: role === 'rider' ? recipientId : (data.riderId || null),
             adminId: role === 'admin' ? recipientId : null,
-            role: role, // ✅ Store the role explicitly in the DB for easier filtering
+            role: role, // âœ… Store the role explicitly in the DB for easier filtering
             type,
             title: config.title,
             body: data.message || config.getBody({
@@ -195,7 +195,7 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
             data: data.additionalData || {}
         };
 
-        console.log(`💾 Saving notification to database:`, {
+        console.log(`ðŸ’¾ Saving notification to database:`, {
             recipient: role,
             recipientId: recipientId || "All Admins",
             type: notificationData.type
@@ -207,9 +207,9 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
         if (recipientId || role === 'admin') {
             try {
                 savedNotification = await Notification.create(notificationData);
-                console.log(`✅ Notification saved successfully for ${role}${recipientId ? `: ID ${savedNotification._id}` : ' (Broadcast)'}`);
+                console.log(`âœ… Notification saved successfully for ${role}${recipientId ? `: ID ${savedNotification._id}` : ' (Broadcast)'}`);
             } catch (dbError) {
-                console.error('❌ Database save error:', dbError.message);
+                console.error('âŒ Database save error:', dbError.message);
             }
         }
 
@@ -288,7 +288,7 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
                 emitToRider(recipientId, 'notification_count_update', { count });
             }
         } catch (socketError) {
-            console.error('❌ Socket.IO emission error:', socketError.message);
+            console.error('âŒ Socket.IO emission error:', socketError.message);
         }
 
         // 3. Send push notification to all recipient's devices
@@ -314,7 +314,7 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
             const subscriptions = await subModel.find(query);
 
             if (subscriptions.length > 0) {
-                console.log(`📱 Sending push to ${subscriptions.length} ${role} device(s)`);
+                console.log(`ðŸ“± Sending push to ${subscriptions.length} ${role} device(s)`);
 
                 const pushPayload = {
                     title: notificationData.title,
@@ -343,31 +343,31 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
                             sub.subscription,
                             JSON.stringify(pushPayload)
                         );
-                        console.log(`✅ Push sent to device: ${sub.deviceType}`);
+                        console.log(`âœ… Push sent to device: ${sub.deviceType}`);
                     } catch (error) {
-                        console.error(`❌ Failed to send push to ${sub.deviceType}:`, error.message);
+                        console.error(`âŒ Failed to send push to ${sub.deviceType}:`, error.message);
 
                         if (error.statusCode === 410 || error.statusCode === 404) {
                             await subModel.findByIdAndDelete(sub._id);
-                            console.log(`🗑️ Removed expired subscription for ${sub.deviceType} (${role})`);
+                            console.log(`ðŸ—‘ï¸ Removed expired subscription for ${sub.deviceType} (${role})`);
                         }
                     }
                 });
 
                 await Promise.allSettled(pushPromises);
             } else {
-                console.log(`ℹ️ No push subscriptions found for ${role}: ${recipientId}`);
+                console.log(`â„¹ï¸ No push subscriptions found for ${role}: ${recipientId}`);
             }
         } catch (pushError) {
-            console.error('❌ Push notification error:', pushError.message);
+            console.error('âŒ Push notification error:', pushError.message);
             // Don't fail if push fails
         }
 
         return savedNotification;
 
     } catch (error) {
-        console.error('❌ Notification service critical error:', error.message);
-        console.error('❌ Stack:', error.stack);
+        console.error('âŒ Notification service critical error:', error.message);
+        console.error('âŒ Stack:', error.stack);
         throw error;
     }
 }
@@ -377,22 +377,22 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
  * Convenience wrapper for order-related notifications
  */
 export async function sendOrderNotification(userId, orderId, status, orderDetails = {}) {
-    // ✅ CRITICAL: Validate and convert userId to String
+    // âœ… CRITICAL: Validate and convert userId to String
     if (!userId) {
-        console.error('❌ sendOrderNotification: userId is missing');
+        console.error('âŒ sendOrderNotification: userId is missing');
         throw new Error('userId is required for sending notifications');
     }
 
     // Convert to String if it's an ObjectId
     const userIdString = String(userId);
 
-    // ✅ Validate orderId
+    // âœ… Validate orderId
     if (!orderId) {
-        console.error('❌ sendOrderNotification: orderId is missing');
+        console.error('âŒ sendOrderNotification: orderId is missing');
         throw new Error('orderId is required for sending notifications');
     }
 
-    console.log(`📦 Sending order notification: User ${userIdString}, Order ${orderId}, Status: ${status}`);
+    console.log(`ðŸ“¦ Sending order notification: User ${userIdString}, Order ${orderId}, Status: ${status}`);
 
     const typeMap = {
         'placed': 'order_placed',
@@ -415,11 +415,11 @@ export async function sendOrderNotification(userId, orderId, status, orderDetail
     const type = typeMap[status.toLowerCase()];
 
     if (!type) {
-        console.error(`❌ Unknown order status: ${status}`);
+        console.error(`âŒ Unknown order status: ${status}`);
         throw new Error(`Unknown order status: ${status}`);
     }
 
-    console.log(`✅ Mapped status "${status}" to notification type "${type}"`);
+    console.log(`âœ… Mapped status "${status}" to notification type "${type}"`);
 
     return sendNotification(userIdString, type, {
         orderId,
@@ -434,12 +434,12 @@ export async function sendOrderNotification(userId, orderId, status, orderDetail
  */
 export async function sendRiderNotification(riderId, orderId, type, data = {}) {
     if (!riderId) {
-        console.error('❌ sendRiderNotification: riderId is missing');
+        console.error('âŒ sendRiderNotification: riderId is missing');
         throw new Error('riderId is required');
     }
 
     const riderIdString = String(riderId);
-    console.log(`🛵 Sending rider notification: Rider ${riderIdString}, Order ${orderId}, Type: ${type}`);
+    console.log(`ðŸ›µ Sending rider notification: Rider ${riderIdString}, Order ${orderId}, Type: ${type}`);
 
     return sendNotification(riderIdString, type, {
         orderId,
@@ -455,14 +455,14 @@ export async function sendRiderNotification(riderId, orderId, type, data = {}) {
  */
 export async function sendVendorNotification(restaurantId, orderId, type, data = {}) {
     if (!restaurantId) {
-        console.error('❌ sendVendorNotification: restaurantId is missing');
+        console.error('âŒ sendVendorNotification: restaurantId is missing');
         throw new Error('restaurantId is required');
     }
 
     const restaurantIdString = String(restaurantId);
-    console.log(`🏪 Sending vendor notification: Restaurant ${restaurantIdString}, Order ${orderId}, Type: ${type}`);
+    console.log(`ðŸª Sending vendor notification: Restaurant ${restaurantIdString}, Order ${orderId}, Type: ${type}`);
 
-    // ✅ Deep Link Consistency Fix: 
+    // âœ… Deep Link Consistency Fix: 
     // Vendors deep-link to /vendors/orders/[VendorOrder._id]. 
     // If orderDatabaseId is missing, we auto-resolve it from the parent Order.
     if (!data.orderDatabaseId && orderId) {
@@ -490,7 +490,7 @@ export async function sendVendorNotification(restaurantId, orderId, type, data =
                 if (subOrder) data.orderDatabaseId = subOrder._id;
             }
         } catch (e) {
-            console.warn('⚠️ Vendor notification auto-resolution failed:', e.message);
+            console.warn('âš ï¸ Vendor notification auto-resolution failed:', e.message);
         }
     }
 
@@ -517,10 +517,10 @@ export async function sendVendorNotification(restaurantId, orderId, type, data =
                 const cached = await redisClient.get(ownerCacheKey);
                 if (cached) {
                     vendorOwners = JSON.parse(cached);
-                    console.log(`✅ Vendor owners served from Redis cache`);
+                    console.log(`âœ… Vendor owners served from Redis cache`);
                 }
             } catch (err) {
-                console.warn('⚠️ Redis vendor owner cache read failed');
+                console.warn('âš ï¸ Redis vendor owner cache read failed');
             }
         }
         
@@ -529,19 +529,19 @@ export async function sendVendorNotification(restaurantId, orderId, type, data =
             vendorOwners = vendor?.owners || [];
             if (isRedisReady() && vendorOwners.length > 0) {
                 try {
-                    // Cache for 30 minutes — vendor ownership changes are infrequent
+                    // Cache for 30 minutes â€” vendor ownership changes are infrequent
                     // IMPORTANT: When a vendor's profile is updated (ownership change), 
                     // the calling controller must invalidate this cache key:
                     // await redisClient.del(`vendor:${vendorId}:owners`);
                     await redisClient.set(ownerCacheKey, JSON.stringify(vendorOwners), 'EX', 1800);
                 } catch (err) {
-                    console.warn('⚠️ Redis vendor owner cache write failed');
+                    console.warn('âš ï¸ Redis vendor owner cache write failed');
                 }
             }
         }
 
         if (vendorOwners && vendorOwners.length > 0) {
-            console.log(`👥 Notifying ${vendorOwners.length} vendor owner(s)`);
+            console.log(`ðŸ‘¥ Notifying ${vendorOwners.length} vendor owner(s)`);
             const ownerPromises = vendorOwners.map(ownerId =>
                 sendNotification(String(ownerId), type, {
                     orderId,
@@ -555,7 +555,7 @@ export async function sendVendorNotification(restaurantId, orderId, type, data =
             await vendorMainPromise;
         }
     } catch (err) {
-        console.error('❌ Error in sendVendorNotification cascade:', err.message);
+        console.error('âŒ Error in sendVendorNotification cascade:', err.message);
         await vendorMainPromise; // Ensure at least the main vendor gets it
     }
 }
@@ -594,7 +594,8 @@ export async function syncUnreadCountToRedis(userId) {
         }
         return trueCount;
     } catch (err) {
-        console.error('❌ syncUnreadCountToRedis failed:', err.message);
+        console.error('âŒ syncUnreadCountToRedis failed:', err.message);
         return null;
     }
 }
+

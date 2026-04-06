@@ -1,4 +1,4 @@
-import webpush from 'web-push';
+﻿import webpush from 'web-push';
 import PushSubscription from '../model/notification/pushSubscription.model.js';
 import dotenv from 'dotenv';
 
@@ -16,14 +16,14 @@ class PushNotificationService {
     initialize() {
         const publicKey = process.env.VAPID_PUBLIC_KEY;
         const privateKey = process.env.VAPID_PRIVATE_KEY;
-        const email = process.env.VAPID_EMAIL || 'mailto:grubdash001@gmail.com';
+        const email = process.env.VAPID_EMAIL || 'mailto:melachow001@gmail.com';
 
-        console.log('🔔 Push Notification Service: Initializing...');
+        console.log('ðŸ”” Push Notification Service: Initializing...');
 
         if (!publicKey || !privateKey) {
-            console.warn('⚠️ [Push Service] MISSING VAPID KEYS in .env file.');
-            console.warn('⚠️ Push notifications will be DISABLED.');
-            console.warn('👉 Run "node scripts/generate-vapid-keys.js" to generate them.');
+            console.warn('âš ï¸ [Push Service] MISSING VAPID KEYS in .env file.');
+            console.warn('âš ï¸ Push notifications will be DISABLED.');
+            console.warn('ðŸ‘‰ Run "node scripts/generate-vapid-keys.js" to generate them.');
             this.isConfigured = false;
             return;
         }
@@ -31,9 +31,9 @@ class PushNotificationService {
         try {
             webpush.setVapidDetails(email, publicKey, privateKey);
             this.isConfigured = true;
-            console.log('✅ [Push Service] Configured successfully.');
+            console.log('âœ… [Push Service] Configured successfully.');
         } catch (error) {
-            console.error('❌ [Push Service] Configuration failed:', error.message);
+            console.error('âŒ [Push Service] Configuration failed:', error.message);
             this.isConfigured = false;
         }
     }
@@ -97,7 +97,7 @@ class PushNotificationService {
         };
 
         const payload = {
-            title: 'Order Update - GrubDash',
+            title: 'Order Update - MelaChow',
             body: messages[status] || `Your order status has been updated to ${status}.`,
             icon: '/icons/icon-192x192.png',
             badge: '/icons/badge-72x72.png',
@@ -125,3 +125,4 @@ class PushNotificationService {
 }
 
 export default new PushNotificationService();
+

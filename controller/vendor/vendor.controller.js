@@ -3,6 +3,8 @@ import Food from "../../model/vendor/food.model.js";
 import vendorModel from "../../model/vendor/vendor.model.js";
 import walletMode from "../../model/wallet/wallet.mode.js";
 import VendorOrder from "../../model/vendor/VendorOrder.js";
+import Order from "../../model/order/Order.js";
+import User from "../../model/user.model.js";
 import { validateVendorLocation } from "../../services/locationService.js";
 import { redisClient, isRedisReady } from "../../config/redis.js";
 

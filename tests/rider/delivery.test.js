@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import Order from '../../model/order/Order.js';
 import Wallet from '../../model/wallet/wallet.mode.js';
-import { sendDeliveryOTP, verifyDeliveryOTP } from '../../services/termii.service.js';
+import { sendDeliveryOTP, verifyDeliveryOTP } from '../../services/otp.service.js';
 import {
     createTestUser,
     createTestVendor,

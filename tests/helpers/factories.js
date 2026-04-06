@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+﻿import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import User from '../../model/user.model.js';
 import Vendor from '../../model/vendor/vendor.model.js';
@@ -12,7 +12,7 @@ export const createTestUser = async (overrides = {}) => {
     const user = await User.create({
         firstname: 'Test',
         lastname: 'User',
-        email: `test-${Date.now()}@grubdash.com`,
+        email: `test-${Date.now()}@melachow.com`,
         password: await bcrypt.hash('password123', 10),
         isVerified: true,
         isActive: true,
@@ -25,7 +25,7 @@ export const createTestUser = async (overrides = {}) => {
 export const createTestVendor = async (overrides = {}) => {
     const vendor = await Vendor.create({
         storeName: 'Test Restaurant',
-        email: `vendor-${Date.now()}@grubdash.com`,
+        email: `vendor-${Date.now()}@melachow.com`,
         password: await bcrypt.hash('password123', 10),
         phone: '08098765432',
         isApproved: true,
@@ -40,7 +40,7 @@ export const createTestVendor = async (overrides = {}) => {
 export const createTestAdmin = async (overrides = {}) => {
     const admin = await Admin.create({
         name: 'Test Admin',
-        email: `admin-${Date.now()}@grubdash.com`,
+        email: `admin-${Date.now()}@melachow.com`,
         password: await bcrypt.hash('password123', 10),
         role: 'super-admin',
         ...overrides,
@@ -113,3 +113,4 @@ export const createTestRider = async (vendorId, overrides = {}) => {
         ...overrides,
     });
 };
+

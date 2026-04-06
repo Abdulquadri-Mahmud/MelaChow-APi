@@ -816,7 +816,7 @@ export const createOrderV2 = async ({
  * Called AFTER payment verification
  */
 export const createVendorOrdersAndUpdateWallets = async (order, session) => {
-    const PLATFORM_COMMISSION = 0.1; // 10%
+    const PLATFORM_COMMISSION = 0; // Commission disabled — revenue from delivery spread only
 
     // Group items by vendor
     const vendorItemsMap = {};
@@ -920,9 +920,7 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
 
                       // ── Pricing ──
                       originalPrice: item.price,
-                      vendorEarning: Number(
-                        (item.price * (1 - PLATFORM_COMMISSION)).toFixed(2)
-                      ),
+                      vendorEarning: Number(item.price.toFixed(2)), // 100% to vendor — no commission deducted
 
                       // ── Dietary & category ──
                       dietary_type: item.dietary_type || "",
@@ -990,30 +988,7 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
         }
     }
 
-    // Update admin wallet (lines 693-725)
-    const totalCommission = vendorIds.reduce((sum, vendorId) => {
-        const vendorSubtotal = vendorItemsMap[vendorId].reduce(
-            (s, item) => s + item.price * item.quantity,
-            0
-        );
-        return sum + vendorSubtotal * PLATFORM_COMMISSION;
-    }, 0);
-
-    // Link admin wallet for commission (fetch already done above)
-
-    if (adminWallet) {
-        adminWallet.balance = Number(
-            (adminWallet.balance + totalCommission).toFixed(2)
-        );
-        adminWallet.transactions.push({
-            type: "credit",
-            amount: Number(totalCommission.toFixed(2)),
-            description: `Commission from Order ${order.orderId}`,
-            orderId: order._id,
-            transactionType: 'commission',
-        });
-        await adminWallet.save({ session });
-    }
+    if (adminWallet) await adminWallet.save({ session });
 
     console.log(`✅ VendorOrders and wallets updated for Order ${order.orderId}`);
     return vendorOrderMapping;

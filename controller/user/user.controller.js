@@ -1,4 +1,4 @@
-import jwt from 'jsonwebtoken';
+﻿import jwt from 'jsonwebtoken';
 import bcryptjs from 'bcryptjs';
 import User from '../../model/user.model.js';
 import City from '../../model/location/City.js';
@@ -9,7 +9,7 @@ import { errorHandler } from '../../utils/errorHandler.js';
 // In-memory token storage (or use DB in production)
 // let verificationTokens = new Map();
 
-// 📧 Email Verification
+// ðŸ“§ Email Verification
 
 export const verifyEmail = async (req, res) => {
   const { email } = req.body;
@@ -33,21 +33,21 @@ export const verifyEmail = async (req, res) => {
 
     await sendMail({
       to: email,
-      subject: 'Verify Your Email - GrubDash',
+      subject: 'Verify Your Email - MelaChow',
       html: `
       <div style="font-family: Arial, sans-serif; background-color: #f4f7fb; padding: 40px;">
         <div style="max-width: 600px; margin: auto; background-color: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
           
           <!-- Header -->
           <div style="background-color: #1A73E8; padding: 20px; text-align: center;">
-            <h1 style="color: white; margin: 0; font-size: 24px;">GrubDash</h1>
+            <h1 style="color: white; margin: 0; font-size: 24px;">MelaChow</h1>
           </div>
 
           <!-- Body -->
           <div style="padding: 30px; text-align: center;">
             <h2 style="color: #222; margin-bottom: 10px;">Email Verification</h2>
             <p style="color: #555; font-size: 15px; line-height: 1.6;">
-              Use the OTP below to verify your email address and secure your GrubDash account:
+              Use the OTP below to verify your email address and secure your MelaChow account:
             </p>
 
             <div style="font-size: 32px; font-weight: bold; margin: 25px 0; color: #1A73E8; letter-spacing: 3px;">
@@ -64,7 +64,7 @@ export const verifyEmail = async (req, res) => {
           <hr style="border: none; border-top: 1px solid #eee; margin: 0;" />
           <div style="padding: 20px; text-align: center;">
             <p style="font-size: 12px; color: #aaa; margin: 0;">
-              &copy; ${new Date().getFullYear()} GrubDash. All rights reserved.  
+              &copy; ${new Date().getFullYear()} MelaChow. All rights reserved.  
               <br/>This is an automated message, please do not reply.
             </p>
           </div>
@@ -130,14 +130,14 @@ export const forgotPassword = async (req, res) => {
     //Send OTP to email
     await sendMail({
       to: email,
-      subject: 'Reset Your Password - GrubDash',
+      subject: 'Reset Your Password - MelaChow',
       html: `
       <div style="font-family: 'Segoe UI', sans-serif; background-color: #f9fafb; padding: 30px;">
         <div style="max-width: 600px; margin: auto; background-color: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">
 
           <!-- Header -->
           <div style="background-color: #FF6B00; padding: 20px; text-align: center;">
-              <h1 style="color: white; margin: 0; font-size: 24px;">GrubDash</h1>
+              <h1 style="color: white; margin: 0; font-size: 24px;">MelaChow</h1>
               <p style="color: #ffeede; margin: 5px 0 0; font-size: 14px;">Bringing meals closer</p>
           </div>
 
@@ -145,20 +145,20 @@ export const forgotPassword = async (req, res) => {
           <div style="padding: 30px; color: #333;">
               <h2 style="color: #FF6B00; margin-bottom: 15px;">Reset Password OTP</h2>
               <p>Hello,</p>
-              <p>We received a request to reset your <strong>GrubDash</strong> account password. Use the OTP below to proceed:</p>
+              <p>We received a request to reset your <strong>MelaChow</strong> account password. Use the OTP below to proceed:</p>
 
               <div style="text-align: center; font-size: 28px; font-weight: bold; color: #FF6B00; margin: 25px 0;">
                   ${otp}
               </div>
 
-              <p>This OTP is valid for <strong>10 minutes</strong>. For your safety, please don’t share it with anyone.</p>
+              <p>This OTP is valid for <strong>10 minutes</strong>. For your safety, please donâ€™t share it with anyone.</p>
 
-              <p>Thanks,<br/>The GrubDash Team</p>
+              <p>Thanks,<br/>The MelaChow Team</p>
           </div>
 
           <!-- Footer -->
           <div style="background-color: #f4f4f4; padding: 15px; text-align: center; font-size: 12px; color: #777;">
-              © ${new Date().getFullYear()} GrubDash. All rights reserved.
+              Â© ${new Date().getFullYear()} MelaChow. All rights reserved.
           </div>
         </div>
       </div>
@@ -273,35 +273,35 @@ export const login = async (req, res, next) => {
 
     await sendMail({
       to: user.email,
-      subject: 'Your GrubDash Login OTP',
+      subject: 'Your MelaChow Login OTP',
       html: `
         <div style="font-family: 'Segoe UI', sans-serif; background-color: #f9f9f9; padding: 30px;">
           <div style="max-width: 600px; margin: auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
 
             <!-- Header -->
             <div style="background-color: #FF6600; padding: 20px; text-align: center;">
-              <h1 style="color: white; margin: 0;">GrubDash</h1>
-              <p style="color: #ffe6d1; margin: 5px 0 0;">Bringing meals closer 🍴</p>
+              <h1 style="color: white; margin: 0;">MelaChow</h1>
+              <p style="color: #ffe6d1; margin: 5px 0 0;">Bringing meals closer ðŸ´</p>
             </div>
 
             <!-- Body -->
             <div style="padding: 30px; color: #333;">
               <h2 style="color: #FF6600;">Login Verification OTP</h2>
-              <p>Hey there 👋,</p>
-              <p>To continue logging into your <strong>GrubDash</strong> account, please use the OTP code below. This code will expire in <strong>10 minutes</strong>:</p>
+              <p>Hey there ðŸ‘‹,</p>
+              <p>To continue logging into your <strong>MelaChow</strong> account, please use the OTP code below. This code will expire in <strong>10 minutes</strong>:</p>
 
               <div style="text-align: center; margin: 30px 0;">
                 <p style="font-size: 26px; font-weight: bold; letter-spacing: 4px; color: #FF6600;">${otp}</p>
               </div>
 
-              <p>If you didn’t request this, please ignore this message — your account is safe.</p>
+              <p>If you didnâ€™t request this, please ignore this message â€” your account is safe.</p>
 
-              <p>Stay hungry, stay connected 🍔,<br/><strong>The GrubDash Team</strong></p>
+              <p>Stay hungry, stay connected ðŸ”,<br/><strong>The MelaChow Team</strong></p>
             </div>
 
             <!-- Footer -->
             <div style="background-color: #f4f4f4; padding: 15px; text-align: center; font-size: 12px; color: #888;">
-              © ${new Date().getFullYear()} GrubDash. All rights reserved.
+              Â© ${new Date().getFullYear()} MelaChow. All rights reserved.
             </div>
           </div>
         </div>
@@ -337,35 +337,35 @@ export const resendOtp = async (req, res, next) => {
     // Send mail
     await sendMail({
       to: user.email,
-      subject: "Your GrubDash OTP Code",
+      subject: "Your MelaChow OTP Code",
       html: `
         <div style="font-family: 'Segoe UI', sans-serif; background-color: #f9f9f9; padding: 30px;">
           <div style="max-width: 600px; margin: auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
             
             <!-- Header -->
             <div style="background-color: #FF6600; padding: 20px; text-align: center;">
-              <h1 style="color: white; margin: 0;">GrubDash</h1>
-              <p style="color: #ffe6d1; margin: 5px 0 0;">Bringing meals closer 🍴</p>
+              <h1 style="color: white; margin: 0;">MelaChow</h1>
+              <p style="color: #ffe6d1; margin: 5px 0 0;">Bringing meals closer ðŸ´</p>
             </div>
 
             <!-- Body -->
             <div style="padding: 30px; color: #333;">
               <h2 style="color: #FF6600;">Resend OTP</h2>
-              <p>Hello 👋,</p>
-              <p>Here’s your new OTP code to verify your <strong>GrubDash</strong> account. This code will expire in <strong>10 minutes</strong>:</p>
+              <p>Hello ðŸ‘‹,</p>
+              <p>Hereâ€™s your new OTP code to verify your <strong>MelaChow</strong> account. This code will expire in <strong>10 minutes</strong>:</p>
 
               <div style="text-align: center; margin: 30px 0;">
                 <p style="font-size: 26px; font-weight: bold; letter-spacing: 4px; color: #FF6600;">${otp}</p>
               </div>
 
-              <p>If you didn’t request a new OTP, you can safely ignore this email.</p>
+              <p>If you didnâ€™t request a new OTP, you can safely ignore this email.</p>
 
-              <p>Stay hungry, stay connected 🍔,<br/><strong>The GrubDash Team</strong></p>
+              <p>Stay hungry, stay connected ðŸ”,<br/><strong>The MelaChow Team</strong></p>
             </div>
 
             <!-- Footer -->
             <div style="background-color: #f4f4f4; padding: 15px; text-align: center; font-size: 12px; color: #888;">
-              © ${new Date().getFullYear()} GrubDash. All rights reserved.
+              Â© ${new Date().getFullYear()} MelaChow. All rights reserved.
             </div>
           </div>
         </div>
@@ -388,7 +388,7 @@ export const resendOtp = async (req, res, next) => {
 
 // Assumes you have an errorHandler() middleware/util to forward errors, or just res.status(...)
 export const getProfile = async (req, res) => {
-  // ✅ Debug logging
+  // âœ… Debug logging
   if (process.env.NODE_ENV !== 'production') {
     console.log('[getProfile] Request received:', {
       hasCookie: !!req.cookies?.token,
@@ -405,7 +405,7 @@ export const getProfile = async (req, res) => {
       return res.status(404).json({ status: false, message: "User not found" });
     }
 
-    // ✅ Debug logging before sending response
+    // âœ… Debug logging before sending response
     if (process.env.NODE_ENV !== 'production') {
       console.log('[getProfile] Sending user data:', {
         userId: user._id,
@@ -525,7 +525,7 @@ export const getUserAddresses = async (req, res) => {
     const userId = req.userId;
 
     const user = await User.findById(userId)
-      .select("addresses"); // 👈 only addresses
+      .select("addresses"); // ðŸ‘ˆ only addresses
 
     if (!user) {
       return res.status(404).json({
@@ -652,7 +652,7 @@ export const deleteAddress = async (req, res) => {
     if (!addrExists)
       return res.status(404).json({ status: false, message: "Address not found" });
 
-    // ✅ Remove address by filtering
+    // âœ… Remove address by filtering
     user.addresses = user.addresses.filter(addr => addr._id.toString() !== addressId);
 
     await user.save();
@@ -681,7 +681,7 @@ export const logoutUser = async (req, res) => {
     res.clearCookie("token", {
       httpOnly: true,
       secure: isProduction,
-      sameSite: "lax", // ✅ Match sendTokenCookie (iOS-safe)
+      sameSite: "lax", // âœ… Match sendTokenCookie (iOS-safe)
       path: "/",
     });
 
@@ -726,3 +726,4 @@ export const deleteAccount = async (req, res) => {
     });
   }
 };
+

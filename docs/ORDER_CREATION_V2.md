@@ -1,4 +1,4 @@
-# Order Creation V2 - Implementation Documentation
+﻿# Order Creation V2 - Implementation Documentation
 
 ## Overview
 
@@ -8,7 +8,7 @@ This implementation provides a **production-grade order creation flow** that acc
 
 ## Key Features
 
-### ✅ Server-Side Validation
+### âœ… Server-Side Validation
 - Food existence and availability
 - Vendor ownership verification
 - Stock validation (food, variants, choice options)
@@ -16,27 +16,27 @@ This implementation provides a **production-grade order creation flow** that acc
 - Availability schedule checking
 - Delivery fee validation
 
-### ✅ Server-Side Price Calculation
+### âœ… Server-Side Price Calculation
 - Base price from variants/portions
 - Choice options pricing
 - Packaging fees
 - Discount application (percentage or flat)
 - **Frontend prices are NEVER trusted**
 
-### ✅ Atomic Transactions
+### âœ… Atomic Transactions
 - All database operations use MongoDB sessions
 - Automatic rollback on any error
 - Stock decrements are transactional
 - Wallet updates are atomic
 
-### ✅ Vendor Order Splitting
+### âœ… Vendor Order Splitting
 - Automatically splits orders by vendor
 - Creates separate VendorOrder documents
 - Calculates commission (10% platform fee)
 - Updates vendor wallets and stats
 - Updates admin wallet with commission
 
-### ✅ Backward Compatibility
+### âœ… Backward Compatibility
 - Existing order flow remains untouched
 - V2 endpoints are separate (`/v2/create`, `/v2/verify/:reference`)
 - Existing vendor dashboards continue to work
@@ -228,11 +228,11 @@ itemTotal = unitPrice * quantity
 
 ### Example Calculation
 ```
-Item Subtotal: ₦5,000
-Platform Commission: ₦500 (10%)
-Vendor Earning: ₦4,500 (90%)
-Delivery Fee: ₦700
-Total Vendor Credit: ₦5,200
+Item Subtotal: â‚¦5,000
+Platform Commission: â‚¦500 (10%)
+Vendor Earning: â‚¦4,500 (90%)
+Delivery Fee: â‚¦700
+Total Vendor Credit: â‚¦5,200
 ```
 
 ### VendorOrder Document
@@ -338,19 +338,19 @@ Total Vendor Credit: ₦5,200
 ## Security Features
 
 ### Price Tampering Prevention
-- ✅ All prices recalculated server-side
-- ✅ Frontend prices ignored
-- ✅ Discount validation (expiry check)
-- ✅ Stock validation before deduction
+- âœ… All prices recalculated server-side
+- âœ… Frontend prices ignored
+- âœ… Discount validation (expiry check)
+- âœ… Stock validation before deduction
 
 ### Vendor Ownership Verification
-- ✅ Food must belong to specified restaurant
-- ✅ Prevents cross-vendor item injection
+- âœ… Food must belong to specified restaurant
+- âœ… Prevents cross-vendor item injection
 
 ### Transaction Safety
-- ✅ All operations in MongoDB session
-- ✅ Automatic rollback on error
-- ✅ Idempotency for payment verification
+- âœ… All operations in MongoDB session
+- âœ… Automatic rollback on error
+- âœ… Idempotency for payment verification
 
 ---
 
@@ -358,9 +358,9 @@ Total Vendor Credit: ₦5,200
 
 ### Key Logs
 ```javascript
-console.log(`✅ Order created successfully: ${orderId}`);
-console.log(`❌ CreateOrderV2 failed: ${error.message}`);
-console.log(`🔍 [V2] Received verification request for reference: ${reference}`);
+console.log(`âœ… Order created successfully: ${orderId}`);
+console.log(`âŒ CreateOrderV2 failed: ${error.message}`);
+console.log(`ðŸ” [V2] Received verification request for reference: ${reference}`);
 ```
 
 ### Metrics to Track
@@ -412,8 +412,8 @@ console.log(`🔍 [V2] Received verification request for reference: ${reference}
 ## Contact & Support
 
 For questions or issues:
-- **Backend Team:** backend@grubdash.com
-- **Documentation:** docs.grubdash.com
+- **Backend Team:** backend@melachow.com
+- **Documentation:** docs.melachow.com
 - **Slack:** #backend-orders
 
 ---
@@ -421,3 +421,4 @@ For questions or issues:
 **Last Updated:** 2026-01-26  
 **Version:** 2.0.0  
 **Author:** Backend Team
+

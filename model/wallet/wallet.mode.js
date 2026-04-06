@@ -38,6 +38,7 @@ const walletSchema = new mongoose.Schema(
                 'escrow_release',   // Escrow released to vendor after delivery
                 'delivery_fee',     // Delivery fee held in admin wallet
                 'rider_payout',     // Rider delivery earnings paid out
+                'delivery_spread',  // Platform spread retained from delivery fee after rider payout
                 'refund',           // Customer refund debited from admin
                 'order_payment',    // Customer wallet debit for order
                 'top_up',           // Customer wallet top-up via Paystack

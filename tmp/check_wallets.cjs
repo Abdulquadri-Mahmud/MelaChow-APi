@@ -1,10 +1,10 @@
-const mongoose = require('mongoose');
+﻿const mongoose = require('mongoose');
 const dotenv = require('dotenv');
 const path = require('path');
 
 dotenv.config({ path: path.join(__dirname, '.env') });
 
-const mongoUri = process.env.MONGO_URI || 'mongodb://localhost:27017/grubdash';
+const mongoUri = process.env.MONGO_URI || 'mongodb://localhost:27017/melachow';
 
 async function checkAllWallets() {
   try {
@@ -26,3 +26,4 @@ async function checkAllWallets() {
 }
 
 checkAllWallets();
+

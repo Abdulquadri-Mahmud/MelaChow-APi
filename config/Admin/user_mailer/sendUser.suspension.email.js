@@ -1,4 +1,4 @@
-import nodemailer from "nodemailer";
+﻿import nodemailer from "nodemailer";
 
 export const sendUserSuspensionEmail = async (user, reason) => {
   const transporter = nodemailer.createTransport({
@@ -15,8 +15,8 @@ export const sendUserSuspensionEmail = async (user, reason) => {
         
         <!-- Header -->
         <div style="background-color: #ff6600; color: #ffffff; padding: 20px 30px;"">
-          <h1 style="color: #ffffff; margin: 0; font-size: 28px;">GrubDash</h1>
-          <p style="color: #ffe6d1; margin: 5px 0;">Manage your store 🍴</p>
+          <h1 style="color: #ffffff; margin: 0; font-size: 28px;">MelaChow</h1>
+          <p style="color: #ffe6d1; margin: 5px 0;">Manage your store ðŸ´</p>
         </div>
 
         <!-- Body -->
@@ -24,7 +24,7 @@ export const sendUserSuspensionEmail = async (user, reason) => {
           <h2 style="color: #ff6600; text-align: center; margin-bottom: 20px;">Account Suspended</h2>
           <p style="font-size: 16px;">Dear <strong>${user.firstname || "User"}</strong>,</p>
           <p style="font-size: 15px; line-height: 1.6;">
-            We regret to inform you that your GrubDash account has been temporarily 
+            We regret to inform you that your MelaChow account has been temporarily 
             <strong>suspended</strong> due to a violation of our user policies.
           </p>
           <p style="font-size: 15px; line-height: 1.6;">
@@ -39,7 +39,7 @@ export const sendUserSuspensionEmail = async (user, reason) => {
 
           <!-- Support Button -->
           <div style="text-align: center; margin-top: 30px;">
-            <a href="mailto:support@grubdash.com" 
+            <a href="mailto:support@melachow.com" 
               style="background-color: #ff6600; color: #ffffff; padding: 12px 25px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
               Contact Support
             </a>
@@ -48,7 +48,7 @@ export const sendUserSuspensionEmail = async (user, reason) => {
 
         <!-- Footer -->
         <div style="background-color: #f9f9f9; padding: 20px; text-align: center; font-size: 13px; color: #666;">
-          <p>© ${new Date().getFullYear()} GrubDash. All rights reserved.</p>
+          <p>Â© ${new Date().getFullYear()} MelaChow. All rights reserved.</p>
           <p>123 Food Street, Lagos, Nigeria</p>
         </div>
       </div>
@@ -56,9 +56,10 @@ export const sendUserSuspensionEmail = async (user, reason) => {
   `;
 
   await transporter.sendMail({
-    from: `"GrubDash" <${process.env.ADMIN_EMAIL}>`,
+    from: `"MelaChow" <${process.env.ADMIN_EMAIL}>`,
     to: user.email,
     subject: "Account Suspension Notice",
     html,
   });
 };
+
