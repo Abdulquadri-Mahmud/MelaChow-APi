@@ -184,6 +184,17 @@ export const assignRiderToOrder = async (orderId, riderId, vendorId) => {
 
         await session.commitTransaction();
         const updatedRider = await Rider.findById(riderId);
+
+        // 🔔 Send Rider Notification (Vendor-managed flow)
+        try {
+            const { sendRiderNotification } = await import('../services/notification.service.js');
+            await sendRiderNotification(riderId, order._id, "order_assigned", {
+                restaurantName: order.storeName || "a restaurant",
+                orderDatabaseId: order._id
+            });
+            console.log(`✅ Push: Order assigned notification sent to rider:${riderId}`);
+        } catch (e) { console.error('⚠️ Notification error (rider):', e.message); }
+
         return { order, vendorOrder, rider: updatedRider };
     } catch (error) {
         await session.abortTransaction();
@@ -219,6 +230,15 @@ export const markPickedUp = async (orderId, riderId) => {
 
     // Move rider to on_delivery
     await Rider.findByIdAndUpdate(riderId, { status: "on_delivery" });
+
+    // 🔔 Send Order Notification (for user)
+    try {
+        const { sendOrderNotification } = await import('../services/notification.service.js');
+        await sendOrderNotification(order.userId, order.orderId, "out_for_delivery", {
+            orderDatabaseId: order._id,
+            restaurantName: order.vendorId?.storeName // fallback
+        });
+    } catch (notifErr) { console.error('⚠️ Notification error (customer):', notifErr.message); }
 
     return order;
 };
@@ -345,6 +365,18 @@ export const markDelivered = async (orderId, riderId) => {
                     { orderId: readableOrderId, riderPayout, adminBalance: adminWallet.balance },
                     '⚠️ Admin wallet insufficient for rider payout — queued for manual review'
                 );
+
+                // 🚨 Real-time Admin Alert for insufficient funds
+                try {
+                    const { sendNotification } = await import('../services/notification.service.js');
+                    await sendNotification(null, 'admin_insufficient_funds', {
+                        adminBalance: adminWallet.balance,
+                        riderPayout,
+                        orderId: readableOrderId,
+                        orderDatabaseId: orderDbId
+                    }, 'admin');
+                } catch (notifErr) { logger.error('❌ Admin notification for payout failure failed', notifErr.message); }
+
                 // TODO: push to a riderPayoutRetryQueue when implemented
             } else {
                 // Debit rider payout from admin wallet
