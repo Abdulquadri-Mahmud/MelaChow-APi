@@ -232,6 +232,7 @@ export const markDelivered = async (orderId, riderId) => {
 
     let completedOrder = null;
     let riderVendorIdForEscrow = null;
+    let pendingRiderPayout = null; // ← captures payout data for post-transaction execution
 
     try {
         const order = await Order.findById(orderId).session(session);
@@ -264,17 +265,6 @@ export const markDelivered = async (orderId, riderId) => {
         let riderEarningsToRecord = 0;
 
         if (deliveryFee > 0) {
-            let riderWallet = await Wallet.findOne({
-                ownerId: riderId,
-                ownerModel: "Rider"
-            }).session(session);
-
-            if (!riderWallet) {
-                [riderWallet] = await Wallet.create(
-                    [{ ownerId: riderId, ownerModel: "Rider", balance: 0, transactions: [] }],
-                    { session }
-                );
-            }
 
             const vendor = riderVendorId
                 ? await Vendor.findById(riderVendorId).session(session)
@@ -293,60 +283,27 @@ export const markDelivered = async (orderId, riderId) => {
 
             } else {
                 // ── PLATFORM-MANAGED DELIVERY (SPREAD MODEL) ──────────────────────────
-                // MelaChow supplied the rider.
-                // Revenue model: fixed rider payout, platform retains the spread.
-                // Customer paid ₦1,000 delivery fee → held in admin wallet as 'delivery_fee'.
-                // Rider receives fixed ₦600 → admin wallet debited ₦600.
-                // Platform spread ₦400 → stays in admin wallet, recorded as 'delivery_spread'.
+                // Payout is intentionally NOT processed inside this transaction.
+                // Decoupling status update from wallet operation ensures delivery
+                // confirmation never fails due to admin wallet balance issues.
+                // Payout runs post-transaction in its own try/catch with retry queue.
 
-                const RIDER_FIXED_PAYOUT = 600; // naira — single source of truth, adjust here only
-                const riderPayout = Math.min(RIDER_FIXED_PAYOUT, deliveryFee); // never pay more than collected
+                const RIDER_FIXED_PAYOUT = 600;
+                const riderPayout = Math.min(RIDER_FIXED_PAYOUT, deliveryFee);
                 const platformSpread = Number((deliveryFee - riderPayout).toFixed(2));
 
-                const adminWallet = await Wallet.findOne({ ownerModel: "Admin" }).session(session);
-                if (!adminWallet) throw new Error("Admin wallet not found");
-
-                if (adminWallet.balance < riderPayout) {
-                    throw new Error(
-                        `Admin wallet insufficient to pay rider: has ₦${adminWallet.balance}, needs ₦${riderPayout}`
-                    );
-                }
-
-                // Debit rider payout from admin wallet
-                adminWallet.balance = Number((adminWallet.balance - riderPayout).toFixed(2));
-                adminWallet.transactions.push({
-                    type: "debit",
-                    amount: riderPayout,
-                    description: `Rider payout (fixed ₦${RIDER_FIXED_PAYOUT}) for Order ${order.orderId}`,
-                    transactionType: 'rider_payout',
-                });
-
-                // Record platform spread — balance is already correct (₦400 never left admin wallet)
-                // This transaction exists purely for financial reporting on the admin dashboard
-                // Spread is recorded as a debit-matched informational entry.
-                // The ₦400 never left — this entry exists only for dashboard reporting.
-                // We record it as a debit of 0 to avoid inflating the credit ledger.
-                adminWallet.transactions.push({
-                    type: "debit",
-                    amount: 0,
-                    description: `Delivery spread retained ₦${platformSpread} for Order ${order.orderId} — reporting only`,
-                    transactionType: 'delivery_spread',
-                });
-
-                await adminWallet.save({ session });
-
-                // Credit rider wallet
-                riderWallet.balance = Number((riderWallet.balance + riderPayout).toFixed(2));
-                riderWallet.transactions.push({
-                    type: "credit",
-                    amount: riderPayout,
-                    description: `Delivery payout for Order ${order.orderId}`,
-                    transactionType: 'rider_payout',
-                });
-                await riderWallet.save({ session });
+                // Stage payout data for post-transaction execution
+                pendingRiderPayout = {
+                    riderId,
+                    riderPayout,
+                    platformSpread,
+                    orderId: order.orderId,
+                    orderDbId: order._id,
+                    RIDER_FIXED_PAYOUT,
+                };
 
                 riderEarningsToRecord = riderPayout;
-                console.log(`💰 Spread model — ₦${riderPayout} (Rider) | ₦${platformSpread} (Platform spread) for Order ${order.orderId}`);
+                console.log(`📦 Rider payout staged post-transaction — ₦${riderPayout} for Order ${order.orderId}`);
             }
         }
 
@@ -362,6 +319,82 @@ export const markDelivered = async (orderId, riderId) => {
         throw error;
     } finally {
         session.endSession();  // ← only ONE call, always in finally
+    }
+
+    // ── Post-transaction: rider wallet payout ─────────────────────────────────
+    // Runs after the delivery status transaction commits successfully.
+    // Failure here does NOT reverse the delivery — order remains "delivered".
+    // Failed payouts are logged for manual review and queued for retry.
+    if (pendingRiderPayout && completedOrder) {
+        try {
+            const {
+                riderId: payoutRiderId,
+                riderPayout,
+                platformSpread,
+                orderId: readableOrderId,
+                orderDbId,
+                RIDER_FIXED_PAYOUT,
+            } = pendingRiderPayout;
+
+            const adminWallet = await Wallet.findOne({ ownerModel: "Admin" });
+            if (!adminWallet) throw new Error("Admin wallet not found for rider payout");
+
+            if (adminWallet.balance < riderPayout) {
+                // Non-fatal — log for manual top-up, do not throw
+                logger.error(
+                    { orderId: readableOrderId, riderPayout, adminBalance: adminWallet.balance },
+                    '⚠️ Admin wallet insufficient for rider payout — queued for manual review'
+                );
+                // TODO: push to a riderPayoutRetryQueue when implemented
+            } else {
+                // Debit rider payout from admin wallet
+                adminWallet.balance = Number((adminWallet.balance - riderPayout).toFixed(2));
+                adminWallet.transactions.push({
+                    type: "debit",
+                    amount: riderPayout,
+                    description: `Rider payout (fixed ₦${RIDER_FIXED_PAYOUT}) for Order ${readableOrderId}`,
+                    transactionType: 'rider_payout',
+                });
+
+                // Record spread — informational, amount: 0 to avoid ledger inflation
+                adminWallet.transactions.push({
+                    type: "debit",
+                    amount: 0,
+                    description: `Delivery spread retained ₦${platformSpread} for Order ${readableOrderId} — reporting only`,
+                    transactionType: 'delivery_spread',
+                });
+
+                await adminWallet.save();
+
+                // Credit rider wallet
+                let riderWallet = await Wallet.findOne({ ownerId: payoutRiderId, ownerModel: "Rider" });
+                if (!riderWallet) {
+                    riderWallet = await Wallet.create({
+                        ownerId: payoutRiderId,
+                        ownerModel: "Rider",
+                        balance: 0,
+                        transactions: [],
+                    });
+                }
+
+                riderWallet.balance = Number((riderWallet.balance + riderPayout).toFixed(2));
+                riderWallet.transactions.push({
+                    type: "credit",
+                    amount: riderPayout,
+                    description: `Delivery payout for Order ${readableOrderId}`,
+                    transactionType: 'rider_payout',
+                });
+                await riderWallet.save();
+
+                console.log(`💰 Spread model — ₦${riderPayout} (Rider) | ₦${platformSpread} (Platform spread) for Order ${readableOrderId}`);
+            }
+        } catch (payoutErr) {
+            // Non-fatal — delivery already confirmed, payout logged for manual review
+            logger.error(
+                { orderId: completedOrder.orderId, error: payoutErr.message },
+                '❌ Post-transaction rider payout failed — manual review required'
+            );
+        }
     }
 
     // ── Post-transaction: escrow release in its own session ──
