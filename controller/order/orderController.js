@@ -1679,3 +1679,76 @@ export const paystackWebhook = async (req, res) => {
     return res.status(500).send("Webhook failed");
   }
 };
+
+/**
+ * =======================
+ * CUSTOMER: Cancel Order
+ * =======================
+ * Allows a user to cancel their own order ONLY IF it is still in 'pending' status.
+ * Once a restaurant accepts the order, self-cancellation is blocked and requires support.
+ */
+export const cancelOrder = async (req, res) => {
+    try {
+        const userId = req.userId;
+        const { orderId } = req.params;
+
+        const order = await Order.findOne({ _id: orderId, userId });
+
+        if (!order) {
+            return res.status(404).json({
+                success: false,
+                message: "Order not found or unauthorized"
+            });
+        }
+
+        // 🛡️ Business Rule: Only allow cancellation if order is 'pending'
+        // If it's already 'accepted', 'preparing', etc., the vendor has already started work/spent money.
+        if (order.orderStatus !== "pending") {
+            return res.status(403).json({
+                success: false,
+                message: "Cancellation failed. This order has already been accepted and is being prepared by the restaurant. Please contact support if you need further assistance."
+            });
+        }
+
+        // 💰 Perform Refund
+        const refund = await refundOrderToWallet(orderId, 'customer_cancel');
+
+        if (!refund) {
+            return res.status(500).json({
+                success: false,
+                message: "Failed to process refund. Order was not cancelled."
+            });
+        }
+
+        // 🔔 Notify Vendors (Real-time update to their dashboards)
+        try {
+            const vendorOrders = await VendorOrder.find({ userOrderId: orderId });
+            for (const vendorOrder of vendorOrders) {
+                emitOrderStatusUpdate(
+                  {
+                    userId: userId,
+                    orderId: order.orderId,
+                    status: "cancelled",
+                    restaurantId: vendorOrder.restaurantId
+                  },
+                  "pending"
+                );
+            }
+        } catch (notifErr) { 
+            console.error('❌ Failed to emit cancellation event to vendors:', notifErr.message); 
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Order cancelled successfully and funds refunded to your wallet.",
+            refundAmount: refund.amount
+        });
+
+    } catch (err) {
+        console.error("❌ Cancel Order Error:", err);
+        return res.status(500).json({
+            success: false,
+            message: err.message || "Failed to cancel order"
+        });
+    }
+};

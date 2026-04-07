@@ -9,6 +9,7 @@ import {
   verifyPayment,
   verifyPaymentV2,
   paystackWebhook,
+  cancelOrder
 } from "../../controller/order/orderController.js";
 
 import { createOrderController } from "../../controller/order/createOrderV2.controller.js";
@@ -35,6 +36,9 @@ router.get("/my-orders", auth, getUserOrders);
 
 // GET /api/orders/:orderId
 router.get("/:orderId", auth, getSingleOrder);
+
+// DELETE /api/orders/:orderId/cancel
+router.patch("/:orderId/cancel", auth, cancelOrder);
 
 
 export default router;
