@@ -1519,6 +1519,7 @@ export const completeVendorOrder = async (req, res) => {
       return res.status(404).json({ message: "Vendor order not found" });
     }
 
+    const previousStatus = vendorOrder.orderStatus; // ← capture before overwrite
     vendorOrder.orderStatus = "completed";
     await vendorOrder.save();
 
@@ -1549,7 +1550,7 @@ export const completeVendorOrder = async (req, res) => {
             totalAmount: populatedOrder.userOrderId.total,
             restaurantId: populatedOrder.restaurantId._id
           },
-          vendorOrder.orderStatus // previous status
+          previousStatus // ← now correctly reflects the status before completion
         );
       } catch (socketError) {
         console.error('Socket.IO emission error:', socketError.message);
