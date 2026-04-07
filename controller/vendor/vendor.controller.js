@@ -219,9 +219,17 @@ export const updateVendor = async (req, res) => {
     const id = req.vendor._id;
     const updates = req.body;
 
+    // Handle nested payoutDetails to prevent overwriting the whole object
+    if (updates.payoutDetails) {
+      Object.keys(updates.payoutDetails).forEach(key => {
+        updates[`payoutDetails.${key}`] = updates.payoutDetails[key];
+      });
+      delete updates.payoutDetails;
+    }
+
     const vendor = await vendorModel.findByIdAndUpdate(
       id,
-      { $set: updates }, // <-- Important: allows partial nested updates
+      { $set: updates }, 
       { new: true, runValidators: true }
     );
 
