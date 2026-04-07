@@ -124,13 +124,6 @@ const vendorSchema = new Schema(
     flatRateDeliveryFee: {
       type: Number,
       default: 0,
-      // Only applicable if acceptsDelivery is true
-      validate: {
-        validator: function (v) {
-          return this.acceptsDelivery || v === 0;
-        },
-        message: "flatRateDeliveryFee can only be set if acceptsDelivery is true"
-      }
     },
     deliveryRadiusKm: { type: Number, default: 5 },
     tags: [{ type: String }], // For search filters
