@@ -1340,6 +1340,22 @@ export const updateVendorOrderStatus = async (req, res) => {
       });
     }
 
+    // ── DELIVERY MANAGEMENT RESTRICTION ──────────────────────────────────────
+    // If delivery is managed by the platform (admin), the vendor must stop
+    // updating status once they mark it as 'ready_for_pickup'. Subsequent
+    // transitions (out_for_delivery, delivered) are handled by the rider/admin.
+    const vendor = await Vendor.findById(vendorId).select('deliveryManagedBy');
+    const isPlatformManaged = vendor?.deliveryManagedBy === 'admin';
+
+    const restrictedStatuses = ['out_for_delivery', 'delivered', 'completed'];
+    if (isPlatformManaged && restrictedStatuses.includes(status)) {
+        return res.status(403).json({
+            success: false,
+            message: `Action denied. This order is platform-managed. You can update status up to "ready_for_pickup", but subsequent updates must be handled by the rider.`
+        });
+    }
+    // ──────────────────────────────────────────────────────────────────────────
+
     console.log(`✅ VendorOrder found - Current status: ${vendorOrder.orderStatus}`);
 
     // ✅ Store previous status

@@ -1,4 +1,4 @@
-﻿import Notification from '../model/notification/notification.model.js';
+import Notification from '../model/notification/notification.model.js';
 import webpush from 'web-push';
 import PushSubscription from '../model/notification/pushSubscription.model.js';
 import VendorPushSubscription from '../model/notification/vendorPushSubscription.model.js';
@@ -127,6 +127,13 @@ const NOTIFICATION_CONFIGS = {
         getBody: (data) => `Customer left a review for ${data.restaurantName || 'a vendor'}. View feedback in the portal.`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
+    },
+    admin_insufficient_funds: {
+        title: '🚨 Financial Alert: Payout Blocked',
+        getBody: (data) => `CRITICAL: Admin wallet insufficient (₦${data.adminBalance}) for Order #${data.orderId} payout (₦${data.riderPayout}). Top up now!`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: true,
+        vibrate: [500, 200, 500, 200, 500]
     },
     system: {
         title: 'âš™ï¸ Platform System Alert',
