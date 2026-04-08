@@ -123,7 +123,7 @@ export const getVendorById = async (req, res) => {
     const id = req.vendor._id;
 
     // 1. Find vendor by MongoDB ObjectId
-    const vendor = await vendorModel.findById(id).lean();
+    const vendor = await vendorModel.findById(id).select("+payoutDetails").lean();
 
     if (!vendor)
       return res.status(404).json({ success: false, message: "Vendor not found" });
@@ -391,13 +391,14 @@ export const getWalletForVendor = async (req, res) => {
       });
     }
 
-    const wallet = await walletMode.findOne({ ownerId: id });
+    let wallet = await walletMode.findOne({ ownerId: id, ownerModel: "Vendor" });
     if (!wallet) {
-      // Optional: Create a wallet if it doesn't exist?
-      // For now, we'll just return not found or null
-      return res.status(404).json({
-        success: false,
-        message: "Wallet not found for this vendor",
+      // Create a wallet if it doesn't exist
+      wallet = await walletMode.create({
+        ownerId: id,
+        ownerModel: "Vendor",
+        balance: 0,
+        transactions: []
       });
     }
 
