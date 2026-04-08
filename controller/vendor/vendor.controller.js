@@ -111,9 +111,7 @@ export const createVendor = async (req, res) => {
 
 export const getVendorById = async (req, res) => {
   try {
-    // Security: ONLY use authenticated vendor ID from JWT token
-    // This route is protected by vendorAuth middleware
-    if (!req.vendor) {
+    if (!req.vendor?._id) {
       return res.status(401).json({
         success: false,
         message: "Unauthorized. Authentication required."
@@ -122,39 +120,54 @@ export const getVendorById = async (req, res) => {
 
     const id = req.vendor._id;
 
-    // 1. Find vendor by MongoDB ObjectId
+    // 1. Find vendor
     const vendor = await vendorModel.findById(id).select("+payoutDetails").lean();
 
-    if (!vendor)
+    if (!vendor) {
       return res.status(404).json({ success: false, message: "Vendor not found" });
+    }
 
     // 2. Fetch Wallet
-    const wallet = await walletMode.findOne({ ownerId: vendor._id }).lean();
+    const wallet = await walletMode.findOne({ 
+      ownerId: vendor._id,
+      ownerModel: "Vendor"
+    }).lean();
 
     // 3. Fetch Vendor Orders
-    const vendorOrders = await VendorOrder.find({ restaurantId: vendor._id })
-      .populate({
-        path: "userOrderId",
-        populate: {
-          path: "userId",
-          select: "fullName firstname lastname phone email avatar",
-        },
-      })
-      .lean();
+    let vendorOrders = [];
+    try {
+      vendorOrders = await VendorOrder.find({ restaurantId: vendor._id })
+        .populate({
+          path: "userOrderId",
+          populate: {
+            path: "userId",
+            select: "fullName firstname lastname phone email avatar",
+          },
+        })
+        .lean();
+    } catch (orderErr) {
+      console.error("Order fetch error in getVendorById:", orderErr);
+      // Don't 500 the whole request if orders fail
+    }
 
     // 4. Merge data
-    vendor.wallet = wallet || null;
-    vendor.vendorOrders = vendorOrders || [];
+    const result = {
+      ...vendor,
+      wallet: wallet || null,
+      vendorOrders: vendorOrders || []
+    };
 
     res.status(200).json({
       success: true,
-      data: vendor,
+      data: result,
     });
   } catch (error) {
+    console.error("DEBUG: getVendorById error:", error);
     res.status(500).json({
       success: false,
-      message: "Error retrieving vendor",
+      message: "Error retrieving vendor profile",
       error: error.message,
+      stack: process.env.NODE_ENV === "development" ? error.stack : undefined
     });
   }
 };
