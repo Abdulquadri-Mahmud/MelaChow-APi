@@ -1,4 +1,4 @@
-﻿import mongoose from 'mongoose';
+import mongoose from 'mongoose';
 import Order from '../model/order/Order.js';
 import VendorOrder from '../model/vendor/VendorOrder.js';
 import Wallet from '../model/wallet/wallet.mode.js';
@@ -20,7 +20,7 @@ export const refundOrderToWallet = async (orderId, reason) => {
     // Idempotency check before opening session
     const existingRefund = await Refund.findOne({ orderId });
     if (existingRefund) {
-        logger.info({ orderId, refundId: existingRefund._id }, 'âš¡ Refund already processed â€” skipping');
+        logger.info({ orderId, refundId: existingRefund._id }, 'Refund already processed - skipping');
         return existingRefund;
     }
 
@@ -33,7 +33,7 @@ export const refundOrderToWallet = async (orderId, reason) => {
 
         // Only refund paid orders
         if (order.paymentStatus !== 'paid') {
-            logger.info({ orderId, paymentStatus: order.paymentStatus }, 'â­ï¸ Order not paid â€” no refund needed');
+            logger.info({ orderId, paymentStatus: order.paymentStatus }, 'Order not paid - no refund needed');
             await session.abortTransaction();
             session.endSession();
             return null;
@@ -50,20 +50,20 @@ export const refundOrderToWallet = async (orderId, reason) => {
         logger.info({
             orderId, orderStatusAtCancellation,
             total: order.total, commissionRetained, refundAmount, reason,
-        }, 'ðŸ’° Processing refund');
+        }, 'Processing refund');
 
         // Debit admin wallet
         const adminWallet = await Wallet.findOne({ ownerModel: 'Admin' }).session(session);
         if (!adminWallet) throw new Error('Admin wallet not found');
         if (adminWallet.balance < refundAmount) {
-            throw new Error(`Admin wallet insufficient: has â‚¦${adminWallet.balance}, needs â‚¦${refundAmount}`);
+            throw new Error(`Admin wallet insufficient: has ₦${adminWallet.balance}, needs ₦${refundAmount}`);
         }
 
         adminWallet.balance = Number((adminWallet.balance - refundAmount).toFixed(2));
         adminWallet.transactions.push({
             type: 'debit',
             amount: refundAmount,
-            description: `Refund to customer for Order ${order.orderId} â€” ${reason}`,
+            description: `Refund to customer for Order ${order.orderId} - ${reason}`,
             orderId: order._id,
             transactionType: 'refund',
         });
@@ -121,8 +121,8 @@ export const refundOrderToWallet = async (orderId, reason) => {
                 orderStatusAtCancellation,
                 status: 'completed',
                 notes: retainCommission
-                    ? `Commission retained â‚¦${commissionRetained} â€” order was ${orderStatusAtCancellation}`
-                    : 'Full refund â€” order was pending at cancellation',
+                    ? `Commission retained N${commissionRetained} - order was ${orderStatusAtCancellation}`
+                    : 'Full refund - order was pending at cancellation',
             }],
             { session }
         );
@@ -132,15 +132,14 @@ export const refundOrderToWallet = async (orderId, reason) => {
 
         logger.info({
             orderId, refundId: refund._id, refundAmount, userId: order.userId,
-        }, 'âœ… Refund completed â€” customer wallet credited');
+        }, 'Refund completed - customer wallet credited');
 
         return refund;
 
     } catch (error) {
         if (session.inTransaction()) await session.abortTransaction();
         session.endSession();
-        logger.error({ orderId, reason, error: error.message }, 'âŒ Refund failed');
+        logger.error({ orderId, reason, error: error.message }, 'Refund failed');
         throw error;
     }
 };
-

@@ -1,4 +1,4 @@
-﻿// import axios from 'axios'; // Removed Termii dependency
+// import axios from 'axios'; // Removed Termii dependency
 import { safeRedisSet, safeRedisGet } from '../config/redis.js';
 import { sendMail } from '../config/mailer.js';
 import User from '../model/user.model.js';
@@ -20,7 +20,7 @@ const OTP_REDIS_PREFIX = 'delivery_otp:';
 export const sendDeliveryOTP = async (orderId, customerPhone, customerUserId) => {
     const redisKey = `${OTP_REDIS_PREFIX}${orderId}`;
 
-    // â”€â”€ Development bypass â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Development bypass
     if (process.env.NODE_ENV !== 'production' || process.env.BYPASS_OTP === 'true') {
         await safeRedisSet(redisKey, JSON.stringify({
             method: 'dev',
@@ -28,11 +28,11 @@ export const sendDeliveryOTP = async (orderId, customerPhone, customerUserId) =>
             otp: '123456',
         }), { EX: OTP_TTL_SECONDS });
 
-        logger.info({ orderId }, 'ðŸ”§ Dev mode: OTP bypass active â€” use 123456');
+        logger.info({ orderId }, 'Dev mode: OTP bypass active - use 123456');
         return { success: true, method: 'dev' };
     }
 
-    // â”€â”€ Primary: Nodemailer email â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // Primary: Nodemailer email
     try {
         const user = await User.findById(customerUserId).select('email firstname');
         if (!user?.email) throw new Error('Customer email not found');
@@ -62,11 +62,11 @@ export const sendDeliveryOTP = async (orderId, customerPhone, customerUserId) =>
             `,
         });
 
-        logger.info({ orderId, email: user.email }, 'âœ… Delivery OTP sent via email');
+        logger.info({ orderId, email: user.email }, 'Delivery OTP sent via email');
         return { success: true, method: 'email' };
 
     } catch (emailErr) {
-        logger.error({ orderId, error: emailErr.message }, 'âŒ Email OTP delivery failed');
+        logger.error({ orderId, error: emailErr.message }, 'Email OTP delivery failed');
         throw new Error('Failed to send delivery OTP via email. Please try again.');
     }
 };
@@ -110,7 +110,7 @@ export const verifyDeliveryOTP = async (orderId, otp) => {
         const verified = otp === storedOtp;
         if (verified) {
             await safeRedisSet(redisKey, JSON.stringify({ ...otpData, verified: true }), { EX: 60 });
-            logger.info({ orderId }, 'âœ… Delivery OTP verified via email');
+            logger.info({ orderId }, 'Delivery OTP verified via email');
         }
         return { verified };
     }
