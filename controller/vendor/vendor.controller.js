@@ -111,7 +111,9 @@ export const createVendor = async (req, res) => {
 
 export const getVendorById = async (req, res) => {
   try {
-    if (!req.vendor?._id) {
+    // Security: ONLY use authenticated vendor ID from JWT token
+    // This route is protected by vendorAuth middleware
+    if (!req.vendor) {
       return res.status(401).json({
         success: false,
         message: "Unauthorized. Authentication required."
@@ -120,20 +122,16 @@ export const getVendorById = async (req, res) => {
 
     const id = req.vendor._id;
 
-    // 1. Find vendor
+    // 1. Find vendor by MongoDB ObjectId
     const vendor = await vendorModel.findById(id).select("+payoutDetails").lean();
 
-    if (!vendor) {
+    if (!vendor)
       return res.status(404).json({ success: false, message: "Vendor not found" });
-    }
 
     // 2. Fetch Wallet
-    const wallet = await walletMode.findOne({ 
-      ownerId: vendor._id,
-      ownerModel: "Vendor"
-    }).lean();
+    const wallet = await walletMode.findOne({ ownerId: vendor._id }).lean();
 
-    // 3. Fetch Vendor Orders
+    // 3. Fetch Vendor Orders (Isolate errors to prevent 500 crashes)
     let vendorOrders = [];
     try {
       vendorOrders = await VendorOrder.find({ restaurantId: vendor._id })
@@ -145,29 +143,28 @@ export const getVendorById = async (req, res) => {
           },
         })
         .lean();
-    } catch (orderErr) {
-      console.error("Order fetch error in getVendorById:", orderErr);
-      // Don't 500 the whole request if orders fail
+    } catch (orderError) {
+      console.error("❌ Critical error populating vendor orders in getVendorById:");
+      console.error(orderError.stack);
+      // Fallback to empty array so the vendor still loads
+      vendorOrders = [];
     }
 
     // 4. Merge data
-    const result = {
-      ...vendor,
-      wallet: wallet || null,
-      vendorOrders: vendorOrders || []
-    };
+    vendor.wallet = wallet || null;
+    vendor.vendorOrders = vendorOrders || [];
 
     res.status(200).json({
       success: true,
-      data: result,
+      data: vendor,
     });
   } catch (error) {
-    console.error("DEBUG: getVendorById error:", error);
+    console.error("💥 SYSTEM CRASH in getVendorById:");
+    console.error(error.stack);
     res.status(500).json({
       success: false,
-      message: "Error retrieving vendor profile",
+      message: "Error retrieving vendor",
       error: error.message,
-      stack: process.env.NODE_ENV === "development" ? error.stack : undefined
     });
   }
 };
