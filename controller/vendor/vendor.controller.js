@@ -123,7 +123,7 @@ export const getVendorById = async (req, res) => {
     const id = req.vendor._id;
 
     // 1. Find vendor by MongoDB ObjectId
-    const vendor = await vendorModel.findById(id).lean();
+    const vendor = await vendorModel.findById(id).select("+payoutDetails").lean();
 
     if (!vendor)
       return res.status(404).json({ success: false, message: "Vendor not found" });

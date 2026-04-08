@@ -4,6 +4,7 @@ import crypto from "crypto";
 import Order from "../../model/order/Order.js";
 import PendingOrder from "../../model/order/PendingOrder.js";
 import Wallet from "../../model/wallet/wallet.mode.js";
+import Withdrawal from "../../model/wallet/Withdrawal.model.js";
 import VendorOrder from "../../model/vendor/VendorOrder.js";
 import Food from "../../model/vendor/food.model.js";
 import Vendor from "../../model/vendor/vendor.model.js";
@@ -1598,6 +1599,89 @@ export const completeVendorOrder = async (req, res) => {
   }
 };
 
+// ---------- Transfer Webhook Handlers ----------
+const handleTransferSuccess = async (data) => {
+  const withdrawal = await Withdrawal.findOne({ paystackReference: data.reference });
+  if (!withdrawal) {
+    console.warn("transfer.success: No withdrawal found for reference:", data.reference);
+    return;
+  }
+  if (withdrawal.status === "completed") {
+    console.log("transfer.success: Already completed, skipping:", data.reference);
+    return;
+  }
+  withdrawal.status = "completed";
+  withdrawal.settledAt = new Date();
+  await withdrawal.save();
+  console.log(`✅ Transfer completed: ${data.reference} — ₦${withdrawal.netAmount}`);
+};
+
+const handleTransferFailed = async (data) => {
+  const withdrawal = await Withdrawal.findOne({ paystackReference: data.reference });
+  if (!withdrawal) {
+    console.warn("transfer.failed: No withdrawal found for reference:", data.reference);
+    return;
+  }
+  if (withdrawal.status === "failed") {
+    console.log("transfer.failed: Already marked failed, skipping:", data.reference);
+    return;
+  }
+
+  // Refund the wallet
+  const wallet = await Wallet.findById(withdrawal.walletId);
+  if (wallet) {
+    wallet.balance = Number((wallet.balance + withdrawal.requestedAmount).toFixed(2));
+    wallet.totalWithdrawn = Number((wallet.totalWithdrawn - withdrawal.requestedAmount).toFixed(2));
+    wallet.transactions.push({
+      type: "credit",
+      amount: withdrawal.requestedAmount,
+      description: `Withdrawal failed — Ref: ${withdrawal.paystackReference}. Funds restored.`,
+      transactionType: null,
+    });
+    await wallet.save();
+    console.log(`💸 Wallet refunded ₦${withdrawal.requestedAmount} for failed transfer: ${data.reference}`);
+  } else {
+    console.error("transfer.failed: Wallet not found for withdrawal:", withdrawal._id);
+  }
+
+  withdrawal.status = "failed";
+  withdrawal.failureReason = data.reason || data.gateway_response || "Transfer failed";
+  await withdrawal.save();
+};
+
+const handleTransferReversed = async (data) => {
+  const withdrawal = await Withdrawal.findOne({ paystackReference: data.reference });
+  if (!withdrawal) {
+    console.warn("transfer.reversed: No withdrawal found for reference:", data.reference);
+    return;
+  }
+  if (withdrawal.status === "reversed") {
+    console.log("transfer.reversed: Already marked reversed, skipping:", data.reference);
+    return;
+  }
+
+  // Refund the wallet — same logic as failed
+  const wallet = await Wallet.findById(withdrawal.walletId);
+  if (wallet) {
+    wallet.balance = Number((wallet.balance + withdrawal.requestedAmount).toFixed(2));
+    wallet.totalWithdrawn = Number((wallet.totalWithdrawn - withdrawal.requestedAmount).toFixed(2));
+    wallet.transactions.push({
+      type: "credit",
+      amount: withdrawal.requestedAmount,
+      description: `Withdrawal reversed — Ref: ${withdrawal.paystackReference}. Funds restored.`,
+      transactionType: null,
+    });
+    await wallet.save();
+    console.log(`💸 Wallet refunded ₦${withdrawal.requestedAmount} for reversed transfer: ${data.reference}`);
+  } else {
+    console.error("transfer.reversed: Wallet not found for withdrawal:", withdrawal._id);
+  }
+
+  withdrawal.status = "reversed";
+  withdrawal.failureReason = data.reason || "Transfer reversed by Paystack";
+  await withdrawal.save();
+};
+
 // ---------- Paystack Webhook ----------
 export const paystackWebhook = async (req, res) => {
   const secret = process.env.PAYSTACK_SECRET_KEY;
@@ -1616,11 +1700,39 @@ export const paystackWebhook = async (req, res) => {
   }
 
   const event = req.body;
+  const eventType = event.event;
 
   /* -------------------------------
-   * 2️⃣ HANDLE SUCCESS ONLY
+   * 2️⃣ ROUTE TRANSFER EVENTS
    * ------------------------------- */
-  if (event.event !== "charge.success") {
+  if (eventType === "transfer.success") {
+    try {
+      await handleTransferSuccess(event.data);
+    } catch (err) {
+      console.error("❌ handleTransferSuccess error:", err.message);
+    }
+    return res.status(200).send("Transfer success processed");
+  }
+
+  if (eventType === "transfer.failed") {
+    try {
+      await handleTransferFailed(event.data);
+    } catch (err) {
+      console.error("❌ handleTransferFailed error:", err.message);
+    }
+    return res.status(200).send("Transfer failure processed");
+  }
+
+  if (eventType === "transfer.reversed") {
+    try {
+      await handleTransferReversed(event.data);
+    } catch (err) {
+      console.error("❌ handleTransferReversed error:", err.message);
+    }
+    return res.status(200).send("Transfer reversal processed");
+  }
+
+  if (eventType !== "charge.success") {
     return res.status(200).send("Event ignored");
   }
 

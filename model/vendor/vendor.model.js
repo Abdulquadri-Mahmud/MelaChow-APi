@@ -84,11 +84,17 @@ const vendorSchema = new Schema(
     // Wallet & bank payout info
     wallet: { type: mongoose.Schema.Types.ObjectId, ref: "Wallet", index: true }, // Linked wallet document
     payoutDetails: {
-      bankName: { type: String, default: "" },
-      accountName: { type: String, default: "" },
-      accountNumber: { type: String, default: "" },
-      payoutMethod: { type: String, enum: ["paystack", "flutterwave", "manual"], default: "paystack" },
-      payoutEnabled: { type: Boolean, default: false },
+      type: {
+        bankName: { type: String, default: "" },
+        bankCode: { type: String, default: "" },        // Paystack bank code e.g. "058" for GTBank
+        accountName: { type: String, default: "" },     // ALWAYS resolved from Paystack /bank/resolve — never from user input
+        accountNumber: { type: String, default: "" },
+        recipientCode: { type: String, default: "" },   // Paystack recipient_code from /transferrecipient — reused on every withdrawal
+        payoutMethod: { type: String, enum: ["paystack", "flutterwave", "manual"], default: "paystack" },
+        payoutEnabled: { type: Boolean, default: false },
+      },
+      select: false,  // Never returned in queries by default — only selected explicitly in payout controller
+      default: undefined,
     },
 
     // Foods linked to this vendor
