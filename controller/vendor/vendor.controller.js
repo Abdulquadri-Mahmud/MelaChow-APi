@@ -391,13 +391,14 @@ export const getWalletForVendor = async (req, res) => {
       });
     }
 
-    const wallet = await walletMode.findOne({ ownerId: id });
+    let wallet = await walletMode.findOne({ ownerId: id, ownerModel: "Vendor" });
     if (!wallet) {
-      // Optional: Create a wallet if it doesn't exist?
-      // For now, we'll just return not found or null
-      return res.status(404).json({
-        success: false,
-        message: "Wallet not found for this vendor",
+      // Create a wallet if it doesn't exist
+      wallet = await walletMode.create({
+        ownerId: id,
+        ownerModel: "Vendor",
+        balance: 0,
+        transactions: []
       });
     }
 
