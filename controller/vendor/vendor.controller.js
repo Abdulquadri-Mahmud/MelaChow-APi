@@ -131,16 +131,24 @@ export const getVendorById = async (req, res) => {
     // 2. Fetch Wallet
     const wallet = await walletMode.findOne({ ownerId: vendor._id }).lean();
 
-    // 3. Fetch Vendor Orders
-    const vendorOrders = await VendorOrder.find({ restaurantId: vendor._id })
-      .populate({
-        path: "userOrderId",
-        populate: {
-          path: "userId",
-          select: "fullName firstname lastname phone email avatar",
-        },
-      })
-      .lean();
+    // 3. Fetch Vendor Orders (Isolate errors to prevent 500 crashes)
+    let vendorOrders = [];
+    try {
+      vendorOrders = await VendorOrder.find({ restaurantId: vendor._id })
+        .populate({
+          path: "userOrderId",
+          populate: {
+            path: "userId",
+            select: "fullName firstname lastname phone email avatar",
+          },
+        })
+        .lean();
+    } catch (orderError) {
+      console.error("❌ Critical error populating vendor orders in getVendorById:");
+      console.error(orderError.stack);
+      // Fallback to empty array so the vendor still loads
+      vendorOrders = [];
+    }
 
     // 4. Merge data
     vendor.wallet = wallet || null;
@@ -151,6 +159,8 @@ export const getVendorById = async (req, res) => {
       data: vendor,
     });
   } catch (error) {
+    console.error("💥 SYSTEM CRASH in getVendorById:");
+    console.error(error.stack);
     res.status(500).json({
       success: false,
       message: "Error retrieving vendor",
@@ -402,9 +412,30 @@ export const getWalletForVendor = async (req, res) => {
       });
     }
 
+    const unreleasedEscrow = await VendorOrder.aggregate([
+      {
+        $match: {
+          restaurantId: id,
+          escrowReleased: false,
+          orderStatus: { $ne: "cancelled" }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$escrowAmount" }
+        }
+      }
+    ]);
+
+    const pendingBalance = unreleasedEscrow.length > 0 ? unreleasedEscrow[0].total : 0;
+
     res.status(200).json({
       success: true,
-      data: wallet,
+      data: {
+        ...wallet.toObject(),
+        pendingBalance
+      },
     });
   } catch (error) {
     res.status(500).json({
