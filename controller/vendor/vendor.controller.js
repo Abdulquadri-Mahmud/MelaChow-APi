@@ -412,9 +412,30 @@ export const getWalletForVendor = async (req, res) => {
       });
     }
 
+    const unreleasedEscrow = await VendorOrder.aggregate([
+      {
+        $match: {
+          restaurantId: id,
+          escrowReleased: false,
+          orderStatus: { $ne: "cancelled" }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          total: { $sum: "$escrowAmount" }
+        }
+      }
+    ]);
+
+    const pendingBalance = unreleasedEscrow.length > 0 ? unreleasedEscrow[0].total : 0;
+
     res.status(200).json({
       success: true,
-      data: wallet,
+      data: {
+        ...wallet.toObject(),
+        pendingBalance
+      },
     });
   } catch (error) {
     res.status(500).json({
