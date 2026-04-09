@@ -52,6 +52,7 @@ const walletSchema = new mongoose.Schema(
                 'top_up',           // Customer wallet top-up via Paystack
                 'manual_credit',    // Admin manual adjustment
                 'manual_debit',     // Admin manual adjustment
+                'withdrawal',       // Vendor withdrawal from wallet to bank account
             ],
             default: null,         // null for legacy transactions — do not require
         },

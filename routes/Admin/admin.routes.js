@@ -10,6 +10,7 @@ import {
     getRecentActivities
 } from "../../controller/Admin/admin.controller.js";
 import { adminAuth } from "../../middleware/adminAuth.js";
+import { forceFailWithdrawal } from "../../controller/wallet/withdrawal.controller.js";
 import {
     approveVendor,
     getAllVendors,
@@ -69,5 +70,8 @@ router.get("/vendors/performance", adminAuth, getVendorPerformance);
 // Vendor foods
 // GET /api/vendors/foods?vendorId=123
 router.get("/vendors/foods", adminAuth, getVendorFoods);
+
+// Force fail stuck withdrawal
+router.patch("/withdrawals/:withdrawalId/force-fail", adminAuth, forceFailWithdrawal);
 
 export default router;
