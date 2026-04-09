@@ -174,7 +174,7 @@ export const getWithdrawalHistory = async (req, res) => {
     return res.json({ withdrawals });
   } catch (error) {
     console.error("Get Withdrawal History Error:", error);
-    return res.status(500).json({ message: "Failed to fetch withdrawal history" });
+    return res.status(500).json({ message: "Failed to fetch withdrawal history", error: error.message, stack: error.stack });
   }
 };
 
