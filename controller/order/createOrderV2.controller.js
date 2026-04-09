@@ -1061,6 +1061,7 @@ export const releaseEscrowToVendor = async (vendorOrderId) => {
         }
 
         vendorWallet.balance = Number((vendorWallet.balance + escrowAmount).toFixed(2));
+        vendorWallet.totalEarned = Number((vendorWallet.totalEarned + escrowAmount).toFixed(2));
         vendorWallet.transactions.push({
             type: "credit",
             amount: escrowAmount,

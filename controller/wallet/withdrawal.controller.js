@@ -94,7 +94,7 @@ export const initiateWithdrawal = async (req, res) => {
       type: "debit",
       amount: amount,
       description: `Withdrawal initiated — Ref: ${paystackReference}`,
-      transactionType: null,
+      transactionType: "withdrawal",
     });
     await wallet.save();
 
@@ -175,5 +175,37 @@ export const getWithdrawalHistory = async (req, res) => {
   } catch (error) {
     console.error("Get Withdrawal History Error:", error);
     return res.status(500).json({ message: "Failed to fetch withdrawal history" });
+  }
+};
+
+// PATCH /api/admin/withdrawals/:withdrawalId/force-fail
+export const forceFailWithdrawal = async (req, res) => {
+  try {
+    const withdrawal = await Withdrawal.findById(req.params.withdrawalId);
+    if (!withdrawal) return res.status(404).json({ message: "Withdrawal not found" });
+    if (!["pending", "processing"].includes(withdrawal.status)) {
+      return res.status(400).json({ message: `Cannot force-fail a withdrawal with status: ${withdrawal.status}` });
+    }
+
+    const wallet = await Wallet.findById(withdrawal.walletId);
+    if (wallet) {
+      wallet.balance = Number((wallet.balance + withdrawal.requestedAmount).toFixed(2));
+      wallet.totalWithdrawn = Number((wallet.totalWithdrawn - withdrawal.requestedAmount).toFixed(2));
+      wallet.transactions.push({
+        type: "credit",
+        amount: withdrawal.requestedAmount,
+        description: `Admin override: withdrawal ${withdrawal.paystackReference} force-failed. Funds restored.`,
+        transactionType: 'refund',
+      });
+      await wallet.save();
+    }
+
+    withdrawal.status = "failed";
+    withdrawal.failureReason = "Admin override — stuck withdrawal";
+    await withdrawal.save();
+
+    return res.json({ message: "Withdrawal force-failed and balance restored", withdrawal });
+  } catch (err) {
+    return res.status(500).json({ message: err.message });
   }
 };

@@ -10,7 +10,8 @@ import {
     getVendorOrders,
     getVendorOrderById,
     restoreVendor,
-    updateVendor
+    updateVendor,
+    getVendorPayoutDetails
 } from "../../controller/vendor/vendor.controller.js";
 import {
     updateVendorOrderStatus,
@@ -29,6 +30,7 @@ router.get("/vendor", getVendorForUserDisplay); // Get nearby vendors
 router.get("/nearby", getNearbyVendors); // Get nearby vendors
 router.get("/get-vendor", vendorAuth, getVendorById);       // Get vendor by ID/slug
 router.get("/get-wallet", vendorAuth, getWalletForVendor);  // Get vendor wallet
+router.get("/payout-details", vendorAuth, getVendorPayoutDetails);  // Get hidden payout structure
 router.get("/reviews", vendorAuth, getVendorReviews);         // Get vendor reviews
 router.get("/orders", vendorAuth, getVendorOrders);         // Get vendor orders
 router.get("/orders/:vendorOrderId", vendorAuth, getVendorOrderById); // Get single vendor order

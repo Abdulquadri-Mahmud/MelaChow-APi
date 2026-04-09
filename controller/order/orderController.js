@@ -1636,7 +1636,7 @@ const handleTransferFailed = async (data) => {
       type: "credit",
       amount: withdrawal.requestedAmount,
       description: `Withdrawal failed — Ref: ${withdrawal.paystackReference}. Funds restored.`,
-      transactionType: null,
+      transactionType: "refund",
     });
     await wallet.save();
     console.log(`💸 Wallet refunded ₦${withdrawal.requestedAmount} for failed transfer: ${data.reference}`);
@@ -1669,7 +1669,7 @@ const handleTransferReversed = async (data) => {
       type: "credit",
       amount: withdrawal.requestedAmount,
       description: `Withdrawal reversed — Ref: ${withdrawal.paystackReference}. Funds restored.`,
-      transactionType: null,
+      transactionType: "refund",
     });
     await wallet.save();
     console.log(`💸 Wallet refunded ₦${withdrawal.requestedAmount} for reversed transfer: ${data.reference}`);
