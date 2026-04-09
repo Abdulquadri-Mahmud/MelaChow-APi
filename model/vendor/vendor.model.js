@@ -80,7 +80,6 @@ const vendorSchema = new Schema(
       sunday: { open: String, close: String, closed: { type: Boolean, default: false } },
     },
 
-
     // Wallet & bank payout info
     wallet: { type: mongoose.Schema.Types.ObjectId, ref: "Wallet", index: true }, // Linked wallet document
     payoutDetails: {

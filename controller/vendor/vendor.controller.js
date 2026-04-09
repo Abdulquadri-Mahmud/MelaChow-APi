@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import { sendVendorAccountCreatedEmail } from "../../config/vendorAccountCreated.mailer.js";
 import Food from "../../model/vendor/food.model.js";
 import vendorModel from "../../model/vendor/vendor.model.js";
@@ -415,7 +416,7 @@ export const getWalletForVendor = async (req, res) => {
     const unreleasedEscrow = await VendorOrder.aggregate([
       {
         $match: {
-          restaurantId: id,
+          restaurantId: new mongoose.Types.ObjectId(id),
           escrowReleased: false,
           orderStatus: { $ne: "cancelled" }
         }
@@ -441,6 +442,43 @@ export const getWalletForVendor = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Error fetching wallet",
+      error: error.message,
+    });
+  }
+};
+
+// ---------------------------------
+// GET PAYOUT DETAILS FOR VENDOR
+// ---------------------------------
+export const getVendorPayoutDetails = async (req, res) => {
+  try {
+    if (!req.vendor) {
+      return res.status(401).json({ success: false, message: "Unauthorized. Authentication required." });
+    }
+
+    const vendor = await vendorModel.findById(req.vendor._id).select("+payoutDetails");
+    if (!vendor) {
+      return res.status(404).json({ success: false, message: "Vendor not found" });
+    }
+
+    const details = vendor.payoutDetails;
+    const cleanPayoutDetails = details ? {
+      bankName: details.bankName || "",
+      bankCode: details.bankCode || "",
+      accountName: details.accountName || "",
+      accountNumber: details.accountNumber || "",
+      payoutMethod: details.payoutMethod || "paystack",
+      payoutEnabled: details.payoutEnabled || false,
+    } : null;
+
+    res.status(200).json({
+      success: true,
+      payoutDetails: cleanPayoutDetails,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error fetching payout details",
       error: error.message,
     });
   }
