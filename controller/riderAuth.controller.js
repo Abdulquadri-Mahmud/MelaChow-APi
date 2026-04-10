@@ -60,9 +60,13 @@ export const loginRider = async (req, res, next) => {
 
 export const logoutRider = async (req, res) => {
     try {
-        // Block the current token if it exists
-        const token = req.cookies?.riderToken;
-        if (token) {
+        // Block the current tokens (both refresh from cookie and access from header)
+        const tokensToBlock = [
+            req.cookies?.riderToken,
+            req.headers.authorization?.split(" ")[1]
+        ].filter(Boolean);
+
+        for (const token of tokensToBlock) {
             try {
                 const decoded = jwt.decode(token);
                 if (decoded?.exp) {

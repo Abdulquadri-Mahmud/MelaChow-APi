@@ -10,7 +10,10 @@ const COMMISSION_RETENTION_STATUSES = [
     'rider_assigned', 'out_for_delivery',
 ];
 
-const PLATFORM_COMMISSION_RATE = 0.10;
+// Commission is currently 0 — platform revenue comes from delivery spread only.
+// When commission is introduced, update this rate and the corresponding
+// PLATFORM_COMMISSION constant in createOrderV2.controller.js together.
+const PLATFORM_COMMISSION_RATE = 0;
 
 /**
  * Refund a cancelled order to the customer's MelaChow wallet.

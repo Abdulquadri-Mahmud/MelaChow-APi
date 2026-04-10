@@ -22,6 +22,7 @@ if (publicKey && privateKey) {
 /**
  * Notification type configurations
  */
+
 const NOTIFICATION_CONFIGS = {
     order_placed: {
         title: 'Order Placed!',
@@ -91,10 +92,16 @@ const NOTIFICATION_CONFIGS = {
     },
     order_assigned: {
         title: 'New Job Assigned!',
-        getBody: (data) => `Head to ${data.restaurantName || 'the store'} for pickup. Order #${data.orderId}`,
+        getBody: (data) => `Head to ${data.restaurantName || 'the store'} for pickup. Earn ₦${data.payout || 600}. Order #${data.orderId}`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: true,
         vibrate: [200, 100, 200, 100, 200]
+    },
+    rider_payout_credited: {
+        title: 'Earnings Credited! 💰',
+        getBody: (data) => `Order #${data.orderId} delivered. ₦${data.payout || 600} has been added to your wallet.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: false
     },
     vendor_order_delivered: {
         title: 'Order Delivered & Earnings Credited',
@@ -182,7 +189,7 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
             role: role, // Store the role explicitly in the DB for easier filtering
             type,
             title: config.title,
-            body: data.message || config.getBody({
+            body: data.message || config.getBody({ payout: data.payout,
                 orderId: data.orderId,
                 restaurantName: data.restaurantName,
                 customerName: data.customerName,

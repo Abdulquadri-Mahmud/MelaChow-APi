@@ -1,4 +1,4 @@
-﻿// controllers/admin.controller.js
+// controllers/admin.controller.js
 import { sendVendorApprovalEmail } from "../../../config/Admin/vendor_mailer/sendVendorApprovalEmail.js";
 import { sendVendorReactivationEmail } from "../../../config/Admin/vendor_mailer/sendVendorReactivationEmail.js";
 import { sendVendorRejectionEmail } from "../../../config/Admin/vendor_mailer/sendVendorRejectionEmail.js";
@@ -181,7 +181,7 @@ export const suspendVendor = async (req, res) => {
     // blocklisted server-side without token storage. This is handled at
     // next request via account status check in the auth middleware.
     // Full revocation requires storing the current token on the User/Vendor
-    // document â€” implement in a future hardening pass.
+    // document — implement in a future hardening pass.
 
     // Send suspension email
     try {
@@ -342,7 +342,7 @@ export const toggleVendorStatus = async (req, res) => {
     // blocklisted server-side without token storage. This is handled at
     // next request via account status check in the auth middleware.
     // Full revocation requires storing the current token on the User/Vendor
-    // document â€” implement in a future hardening pass.
+    // document — implement in a future hardening pass.
 
     res.status(200).json({
       success: true,
@@ -474,7 +474,7 @@ export const updateVendorDeliveryMode = async (req, res) => {
       });
     }
 
-    console.log(`ðŸ”„ Vendor ${vendor.storeName} delivery mode â†’ ${deliveryManagedBy}`);
+    console.log(`🔄 Vendor ${vendor.storeName} delivery mode → ${deliveryManagedBy}`);
 
     // Log action
     await ActivityLog.create({
@@ -534,7 +534,7 @@ export const updateVendorDeliveryMode = async (req, res) => {
 //     await session.commitTransaction();
 //     session.endSession();
 
-//     console.log(`ðŸ’¸ Commission split done: Vendor ${vendorAmount}, Admin ${commissionAmount}`);
+//     console.log(`💸 Commission split done: Vendor ${vendorAmount}, Admin ${commissionAmount}`);
 
 //     // Later: trigger notifications (email/SMS/push)
 //     return { vendorAmount, commissionAmount };

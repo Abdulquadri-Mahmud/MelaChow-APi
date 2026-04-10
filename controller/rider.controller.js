@@ -69,7 +69,8 @@ export const assignRider = async (req, res, next) => {
                 deliveryAddress: order.deliveryAddress,
                 customerName: order.deliveryAddress?.name || "Customer",
                 customerPhone: order.deliveryAddress?.phone,
-                note: order.note
+                note: order.note,
+                payout: 600
             })
         );
 
@@ -90,7 +91,8 @@ export const assignRider = async (req, res, next) => {
             const { sendRiderNotification } = await import("../services/notification.service.js");
             await sendRiderNotification(rider._id, order._id, "order_assigned", {
                 restaurantName: req.vendor.storeName,
-                orderDatabaseId: order._id
+                orderDatabaseId: order._id,
+                payout: 600
             });
             console.log(`✅ Assignment notification + push sent to rider: ${rider._id}`);
         } catch (notifErr) {
@@ -355,10 +357,10 @@ export const requestDeliveryOTP = async (req, res, next) => {
             return res.status(403).json({ success: false, message: 'Rider not assigned to this order' });
         }
 
-        if (order.orderStatus !== 'out_for_delivery' && order.orderStatus !== 'rider_assigned') {
+        if (order.orderStatus !== 'out_for_delivery') {
             return res.status(400).json({
                 success: false,
-                message: `Order cannot be delivered from status: ${order.orderStatus}`
+                message: `Delivery OTP can only be requested after the order has been picked up. Current status: ${order.orderStatus}`
             });
         }
 
@@ -438,7 +440,8 @@ export const confirmDelivery = async (req, res, next) => {
         }
 
         // OTP verified — proceed with delivery confirmation
-        const order = await riderService.markDelivered(orderId, riderId);
+        // markDelivered now returns a structured result, not raw order
+        const { order, payoutCredited, isVendorManagedDelivery } = await riderService.markDelivered(orderId, riderId);
 
         // Emit real-time status update to customer tracking page
         try {
@@ -457,33 +460,66 @@ export const confirmDelivery = async (req, res, next) => {
             console.warn('⚠️ Socket emit failed for confirmDelivery:', socketErr.message);
         }
 
-        // ✅ Multi-party Notification Cascade (User, Vendor, Admin)
+        // ✅ Multi-party Notification Cascade (User, Vendor, Admin, Rider)
         try {
             const {
                 sendOrderNotification,
                 sendVendorNotification,
-                sendNotification
+                sendNotification,
+                sendRiderNotification,          // ← was missing, caused ReferenceError on every delivery
             } = await import('../services/notification.service.js');
 
+            // 1. Notify customer
             await sendOrderNotification(order.userId, order._id, 'delivered', {
                 orderId: order.orderId || order._id,
                 restaurantName: order.restaurantName || 'the restaurant'
             });
 
-            await sendVendorNotification(
-                order.items?.[0]?.restaurantId || order.vendorId,
-                order._id,
-                'vendor_order_delivered',
-                {
-                    orderId: order.orderId || order._id,
-                    customerName: order.deliveryAddress?.name || 'the customer'
-                }
-            );
+            // 2. Notify every vendor whose items were in this order
+            // Single-vendor enforcement means this runs once in practice,
+            // but the loop is structurally correct.
+            const uniqueVendorIds = [...new Set(
+                (order.items || []).map(i => String(i.restaurantId)).filter(Boolean)
+            )];
+            for (const vendorId of uniqueVendorIds) {
+                await sendVendorNotification(
+                    vendorId,
+                    order._id,
+                    'vendor_order_delivered',
+                    {
+                        orderId: order.orderId || order._id,
+                        customerName: order.deliveryAddress?.name || 'the customer'
+                    }
+                );
+            }
 
+            // 3. Notify admin
             await sendNotification(null, 'admin_order_delivered', {
                 orderId: order.orderId || order._id,
                 restaurantName: order.restaurantName || 'the store'
             }, 'admin');
+
+            // 4. Notify rider — only if payout was platform-managed AND actually credited.
+            // Vendor-managed riders are paid cash by the vendor — no wallet credit occurs.
+            // If admin wallet was insufficient, payout was staged for manual review — do not
+            // tell the rider their wallet was credited when it wasn't.
+            if (!isVendorManagedDelivery) {
+                if (payoutCredited) {
+                    await sendRiderNotification(riderId, order._id, 'rider_payout_credited', {
+                        orderId: order.orderId || order._id,
+                        payout: 600
+                    });
+                } else {
+                    // Payout was blocked (admin wallet underfunded) — honest notification
+                    console.warn(`⚠️ Rider payout not credited for Order ${order.orderId} — sending pending notification`);
+                    await sendRiderNotification(riderId, order._id, 'order_assigned', {
+                        orderId: order.orderId || order._id,
+                        restaurantName: 'the restaurant',
+                        payout: 0,
+                    });
+                }
+            }
+            // If isVendorManagedDelivery — no payout notification. Rider was paid cash.
 
         } catch (notifErr) {
             // Non-fatal — delivery already confirmed

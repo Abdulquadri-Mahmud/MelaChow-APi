@@ -190,7 +190,8 @@ export const assignRiderToOrder = async (orderId, riderId, vendorId) => {
             const { sendRiderNotification } = await import('../services/notification.service.js');
             await sendRiderNotification(riderId, order._id, "order_assigned", {
                 restaurantName: order.storeName || "a restaurant",
-                orderDatabaseId: order._id
+                orderDatabaseId: order._id,
+                payout: 600
             });
             console.log(`✅ Push: Order assigned notification sent to rider:${riderId}`);
         } catch (e) { console.error('⚠️ Notification error (rider):', e.message); }
@@ -253,6 +254,8 @@ export const markDelivered = async (orderId, riderId) => {
     let completedOrder = null;
     let riderVendorIdForEscrow = null;
     let pendingRiderPayout = null; // ← captures payout data for post-transaction execution
+    let payoutActuallyCredited = false; // ← tracks whether wallet credit actually landed
+    let completedOrderDeliveryModel = 'admin'; // ← tracks vendor vs admin delivery for notification routing
 
     try {
         const order = await Order.findById(orderId).session(session);
@@ -304,6 +307,7 @@ export const markDelivered = async (orderId, riderId) => {
             // Determine if the payout should be handled by Platform (Admin) or Vendor (Direct Cash).
             // Admin riders ALWAYS use the platform-managed spread model.
             const deliveryManagedBy = isAdminRider ? "admin" : (vendor?.deliveryManagedBy || "vendor");
+            completedOrderDeliveryModel = deliveryManagedBy; // ← capture for post-transaction use
 
             if (deliveryManagedBy === "vendor") {
                 // ── PHASE 1: VENDOR-MANAGED DELIVERY ──────────────────────────────────
@@ -423,6 +427,7 @@ export const markDelivered = async (orderId, riderId) => {
                 });
                 await riderWallet.save();
 
+                payoutActuallyCredited = true; // ← wallet credit confirmed
                 console.log(`💰 Spread model — ₦${riderPayout} (Rider) | ₦${platformSpread} (Platform spread) for Order ${readableOrderId}`);
             }
         } catch (payoutErr) {
@@ -434,31 +439,38 @@ export const markDelivered = async (orderId, riderId) => {
         }
     }
 
-    // ── Post-transaction: escrow release in its own session ──
-    if (completedOrder && riderVendorIdForEscrow) {
-        const vendorOrder = await VendorOrder.findOne({
-            userOrderId: completedOrder._id,
-            restaurantId: riderVendorIdForEscrow
+    // ── Post-transaction: escrow release for ALL vendors in the order ──
+    // Loops VendorOrder documents so escrow releases correctly whether the
+    // rider is admin-managed (no vendorId) or vendor-managed (has vendorId).
+    // Single-vendor enforcement in createOrderV2 means this loop runs once
+    // in practice — but the loop makes it structurally correct regardless.
+    if (completedOrder) {
+        const allVendorOrders = await VendorOrder.find({
+            userOrderId: completedOrder._id
         });
-        if (vendorOrder) {
+
+        for (const vo of allVendorOrders) {
             try {
-                await releaseEscrowToVendor(vendorOrder._id);
+                await releaseEscrowToVendor(vo._id);
             } catch (escrowErr) {
                 logger.error(
-                    { orderId: completedOrder._id, vendorOrderId: vendorOrder._id, error: escrowErr.message },
+                    { orderId: completedOrder._id, vendorOrderId: vo._id, error: escrowErr.message },
                     '❌ Escrow release failed — adding to retry queue'
                 );
-                // Queue for retry with exponential backoff (5 attempts)
                 await escrowReleaseQueue.add(
                     'retry-escrow',
-                    { vendorOrderId: vendorOrder._id.toString() },
-                    { jobId: `escrow-${vendorOrder._id}` }   // Idempotent job ID — prevents duplicate queue entries
+                    { vendorOrderId: vo._id.toString() },
+                    { jobId: `escrow-${vo._id}` }
                 );
             }
         }
     }
 
-    return completedOrder;
+    return {
+        order: completedOrder,
+        payoutCredited: payoutActuallyCredited,
+        isVendorManagedDelivery: completedOrderDeliveryModel === 'vendor',
+    };
 };
 
 /**

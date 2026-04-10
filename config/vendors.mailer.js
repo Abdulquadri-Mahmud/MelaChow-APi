@@ -1,4 +1,4 @@
-﻿import { sendMail } from "./mailer.js";
+import { sendMail } from "./mailer.js";
 
 /**
  * Sends styled MelaChow Vendor email for login, password reset, or resend OTP
@@ -14,7 +14,7 @@ export const sendVendorEmail = async (vendor, otp, type) => {
   let subHeaderText = "";
   let bodyText = "";
 
-  // âœ… Customize email based on type
+  // ✅ Customize email based on type
   switch (type) {
     case "login":
       subject = "Your MelaChow Vendor Login OTP";
@@ -50,7 +50,7 @@ export const sendVendorEmail = async (vendor, otp, type) => {
       throw new Error("Invalid email type provided");
   }
 
-  // âœ… Main email template
+  // ✅ Main email template
   const html = `
     <div style="font-family: 'Segoe UI', sans-serif; background-color: #f9f9f9; padding: 30px;">
       <div style="max-width: 600px; margin: auto; background-color: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
@@ -67,18 +67,18 @@ export const sendVendorEmail = async (vendor, otp, type) => {
             <p style="font-size: 26px; font-weight: bold; letter-spacing: 4px; color: #FF6600;">${otp}</p>
           </div>
 
-          <p>If you didnâ€™t request this, please ignore this email.</p>
-          <p>â€” <strong>The MelaChow Team</strong></p>
+          <p>If you didn't request this, please ignore this email.</p>
+          <p>— <strong>The MelaChow Team</strong></p>
         </div>
 
         <div style="background-color: #fafafa; text-align: center; padding: 15px; font-size: 12px; color: #777;">
-          <p>Â© ${year} MelaChow. All rights reserved.</p>
+          <p>© ${year} MelaChow. All rights reserved.</p>
         </div>
       </div>
     </div>
   `;
 
-  // âœ… Send the email
+  // ✅ Send the email
   await sendMail({
     to: vendor.email,
     subject,
