@@ -224,9 +224,12 @@ export const markPickedUp = async (orderId, riderId) => {
     });
     await order.save();
 
-    await VendorOrder.findOneAndUpdate(
-        { userOrderId: order._id, restaurantId: rider.vendorId },
-        { orderStatus: "out_for_delivery" }
+    // updateMany keyed on userOrderId only — works for both admin-managed riders
+    // (vendorId: null) and vendor-managed riders. Single-vendor enforcement means
+    // this updates exactly one VendorOrder in practice.
+    await VendorOrder.updateMany(
+        { userOrderId: order._id },
+        { $set: { orderStatus: "out_for_delivery" } }
     );
 
     // Move rider to on_delivery
@@ -273,9 +276,11 @@ export const markDelivered = async (orderId, riderId) => {
         });
         await order.save({ session });
 
-        await VendorOrder.findOneAndUpdate(
-            { userOrderId: order._id, restaurantId: rider.vendorId },
-            { orderStatus: "delivered" },
+        // updateMany keyed on userOrderId only — works for admin-managed riders
+        // whose vendorId is null. Session passed for transaction atomicity.
+        await VendorOrder.updateMany(
+            { userOrderId: order._id },
+            { $set: { orderStatus: "delivered" } },
             { session }
         );
 
@@ -335,6 +340,11 @@ export const markDelivered = async (orderId, riderId) => {
                 console.log(`📦 Rider payout staged post-transaction — ₦${riderPayout} for Order ${order.orderId}`);
             }
         }
+
+        // Persist the rider's actual payout on the order document.
+        // This is what the order history card reads — never the customer delivery fee.
+        order.riderEarnings = riderEarningsToRecord;
+        await order.save({ session });
 
         await rider.freeUp(riderEarningsToRecord);
         await session.commitTransaction();

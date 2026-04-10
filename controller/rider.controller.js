@@ -203,9 +203,19 @@ export const updateRiderStatus = async (req, res, next) => {
 
         if (wasPending && orderId && io) {
             if (status === "on_delivery") {
-                // Rider accepted the order
-                if (vendorId) {
-                    io.to(SOCKET_ROOMS.vendor(vendorId)).emit(
+                // ── RIDER ACCEPTED ────────────────────────────────────────────────
+                // Resolve vendorId from the order for admin-managed riders whose
+                // rider.vendorId is null.
+                const OrderModel = (await import("../model/order/Order.js")).default;
+                const acceptedOrder = await OrderModel.findById(orderId)
+                    .select("items userId orderId");
+
+                const resolvedVendorId = vendorId ||
+                    acceptedOrder?.items?.[0]?.restaurantId?.toString() || null;
+
+                // Notify vendor via socket (works for both rider types)
+                if (resolvedVendorId) {
+                    io.to(SOCKET_ROOMS.vendor(resolvedVendorId)).emit(
                         SOCKET_EVENTS.ORDER_STATUS_UPDATE,
                         buildPayload.statusUpdate({
                             orderId,
@@ -216,8 +226,23 @@ export const updateRiderStatus = async (req, res, next) => {
                         })
                     );
                 }
+
+                // Notify admin — critical for platform-managed orders where admin
+                // assigned the rider and needs confirmation the delivery is underway
+                try {
+                    const { sendNotification } = await import("../services/notification.service.js");
+                    await sendNotification(null, 'admin_order_delivered', {
+                        orderId: acceptedOrder?.orderId || orderId,
+                        orderDatabaseId: orderId,
+                        restaurantName: 'a restaurant',
+                        message: `Rider ${rider.name} accepted delivery assignment for Order #${acceptedOrder?.orderId || orderId}. Order is now in transit.`
+                    }, 'admin');
+                } catch (notifErr) {
+                    console.warn('⚠️ Admin notification failed for rider accept:', notifErr.message);
+                }
+
             } else if (status === "available") {
-                // Rider rejected the order
+                // ── RIDER REJECTED ────────────────────────────────────────────────
                 const OrderModel = (await import("../model/order/Order.js")).default;
                 const VendorOrder = (await import("../model/vendor/VendorOrder.js")).default;
 
@@ -237,22 +262,45 @@ export const updateRiderStatus = async (req, res, next) => {
                     { new: true }
                 );
 
-                if (order && vendorId) {
-                    await VendorOrder.findOneAndUpdate(
-                        { userOrderId: order._id, restaurantId: vendorId },
-                        { orderStatus: "ready_for_pickup" }
+                if (order) {
+                    // Resolve vendorId from the order for admin-managed riders
+                    const resolvedVendorId = vendorId ||
+                        order.items?.[0]?.restaurantId?.toString() || null;
+
+                    // Update VendorOrder back to ready_for_pickup
+                    // updateMany works for both rider types (null vendorId safe)
+                    await VendorOrder.updateMany(
+                        { userOrderId: order._id },
+                        { $set: { orderStatus: "ready_for_pickup" } }
                     );
 
-                    io.to(SOCKET_ROOMS.vendor(vendorId)).emit(
-                        SOCKET_EVENTS.ORDER_STATUS_UPDATE,
-                        buildPayload.statusUpdate({
-                            orderId,
-                            status: "rider_rejected",
-                            changedBy: "rider",
-                            message: `Rider ${rider.name} rejected the assignment. Please assign another rider.`,
-                            riderName: rider.name
-                        })
-                    );
+                    // Notify vendor via socket
+                    if (resolvedVendorId) {
+                        io.to(SOCKET_ROOMS.vendor(resolvedVendorId)).emit(
+                            SOCKET_EVENTS.ORDER_STATUS_UPDATE,
+                            buildPayload.statusUpdate({
+                                orderId,
+                                status: "rider_rejected",
+                                changedBy: "rider",
+                                message: `Rider ${rider.name} rejected the assignment. Please assign another rider.`,
+                                riderName: rider.name
+                            })
+                        );
+                    }
+
+                    // Notify admin — urgent for platform-managed orders, admin must
+                    // reassign a rider manually. rider_assignment_needed triggers the
+                    // high-priority alert config in notification.service.js.
+                    try {
+                        const { sendNotification } = await import("../services/notification.service.js");
+                        await sendNotification(null, 'rider_assignment_needed', {
+                            orderId: order.orderId || orderId,
+                            orderDatabaseId: orderId,
+                            message: `Rider ${rider.name} rejected Order #${order.orderId}. Manual reassignment required.`
+                        }, 'admin');
+                    } catch (notifErr) {
+                        console.warn('⚠️ Admin notification failed for rider rejection:', notifErr.message);
+                    }
                 }
             }
         }
@@ -285,6 +333,10 @@ export const markPickedUp = async (req, res, next) => {
 
         const order = await riderService.markPickedUp(orderId, riderId);
 
+        // Resolve vendorId from order items — handles admin-managed riders
+        // where req.rider.vendorId is null
+        const pickupVendorId = (order.items?.[0]?.restaurantId || order.vendorId)?.toString() || null;
+
         // Emit real-time status update to customer tracking page
         try {
             const io = getIO();
@@ -300,22 +352,59 @@ export const markPickedUp = async (req, res, next) => {
                 })
             );
         } catch (socketErr) {
-            console.warn('⚠️ Socket emit failed for markPickedUp:', socketErr.message);
+            console.warn('⚠️ Socket emit failed for customer pickup notification:', socketErr.message);
         }
 
-        // Notify User (In-app + Push)
+        // Emit real-time status update to vendor dashboard
+        // Without this, vendor sees order stuck at rider_assigned until they refresh.
         try {
-            const { sendOrderNotification, sendVendorNotification } = await import("../services/notification.service.js");
+            const io = getIO();
+            if (pickupVendorId) {
+                io.to(SOCKET_ROOMS.vendor(pickupVendorId)).emit(
+                    SOCKET_EVENTS.ORDER_STATUS_UPDATE,
+                    buildPayload.statusUpdate({
+                        orderId: order._id,
+                        status: "out_for_delivery",
+                        changedBy: "rider",
+                        message: `Rider ${req.rider.name} has picked up the order and is on the way!`,
+                        riderName: req.rider.name,
+                    })
+                );
+            }
+        } catch (socketErr) {
+            console.warn('⚠️ Socket emit failed for vendor pickup notification:', socketErr.message);
+        }
+
+        // Notify customer, vendor (push/in-app), and admin
+        try {
+            const {
+                sendOrderNotification,
+                sendVendorNotification,
+                sendNotification
+            } = await import("../services/notification.service.js");
+
+            // 1. Customer push/in-app
             await sendOrderNotification(order.userId, order._id, "out_for_delivery", {
                 orderId: order.orderId || order._id,
                 restaurantName: order.restaurantName || "the restaurant"
             });
-            
-            // Also notify restaurant via WebSocket + In-app
-            await sendVendorNotification(order.items?.[0]?.restaurantId || order.vendorId, order._id, "order_dispatched", {
-               orderId: order.orderId || order._id,
-               message: `Rider ${req.rider.name} has picked up the order and is on the way!`
-            });
+
+            // 2. Vendor push/in-app
+            if (pickupVendorId) {
+                await sendVendorNotification(pickupVendorId, order._id, "order_dispatched", {
+                    orderId: order.orderId || order._id,
+                    message: `Rider ${req.rider.name} has picked up the order and is on the way!`
+                });
+            }
+
+            // 3. Admin notification — platform visibility on delivery progress
+            await sendNotification(null, 'admin_order_ready', {
+                orderId: order.orderId || order._id,
+                orderDatabaseId: order._id,
+                restaurantName: pickupVendorId || 'the store',
+                message: `Rider ${req.rider.name} picked up Order #${order.orderId} — now out for delivery.`
+            }, 'admin');
+
         } catch (notifErr) {
             console.warn('⚠️ Push/Notification service failed for pick-up:', notifErr.message);
         }
@@ -482,6 +571,7 @@ export const confirmDelivery = async (req, res, next) => {
                 (order.items || []).map(i => String(i.restaurantId)).filter(Boolean)
             )];
             for (const vendorId of uniqueVendorIds) {
+                // Push/in-app notification
                 await sendVendorNotification(
                     vendorId,
                     order._id,
@@ -491,6 +581,26 @@ export const confirmDelivery = async (req, res, next) => {
                         customerName: order.deliveryAddress?.name || 'the customer'
                     }
                 );
+
+                // Direct socket room emit for real-time vendor dashboard update.
+                // sendVendorNotification handles push and DB but does not emit
+                // to the vendor socket room — without this, the vendor dashboard
+                // stays on out_for_delivery until they manually refresh.
+                try {
+                    const io = getIO();
+                    io.to(SOCKET_ROOMS.vendor(vendorId)).emit(
+                        SOCKET_EVENTS.ORDER_STATUS_UPDATE,
+                        buildPayload.statusUpdate({
+                            orderId: order._id,
+                            status: "delivered",
+                            changedBy: "rider",
+                            message: `Order delivered to ${order.deliveryAddress?.name || 'the customer'}.`,
+                            riderName: req.rider.name,
+                        })
+                    );
+                } catch (socketErr) {
+                    console.warn('⚠️ Socket emit failed for vendor delivery notification:', socketErr.message);
+                }
             }
 
             // 3. Notify admin
