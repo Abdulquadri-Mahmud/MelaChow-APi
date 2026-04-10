@@ -511,6 +511,19 @@ export const updateRider = async (req, res, next) => {
     }
 };
 
+export const riderUpdateSelf = async (req, res, next) => {
+    try {
+        const { riderId } = req.params;
+        if (req.rider._id.toString() !== riderId) {
+            return res.status(403).json({ success: false, message: "Unauthorized to update this profile" });
+        }
+        const rider = await riderService.riderUpdateSelf(riderId, req.body);
+        res.status(200).json({ success: true, data: rider });
+    } catch (error) {
+        next(error);
+    }
+};
+
 export const deactivateRider = async (req, res, next) => {
     try {
         const { vendorId, riderId } = req.params;
