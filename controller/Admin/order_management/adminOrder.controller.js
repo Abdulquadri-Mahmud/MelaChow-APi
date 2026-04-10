@@ -623,14 +623,33 @@ export const assignRiderToOrder = async (req, res) => {
         console.log('✅ Database updates completed successfully');
 
         // Step 8: Fire socket events (non-fatal)
-        const { emitToRestaurant, emitToOrder, emitToAdmin } = await import("../../../socket/socketServer.js");
+        const { emitToRestaurant, emitToOrder, emitToAdmin, emitToRider } = await import("../../../socket/socketServer.js");
+        const { SOCKET_EVENTS, buildPayload } = await import("../../../socket/rider.events.js");
+
+        try {
+            // a) Notify the rider immediately via socket for real-time dashboard update
+            emitToRider(riderId, SOCKET_EVENTS.ORDER_ASSIGNED_TO_RIDER, buildPayload.orderAssigned({
+                orderId: masterOrder._id,
+                riderId: rider._id,
+                vendorId: vendor?._id,
+                vendorName: vendor?.storeName,
+                items: masterOrder.items,
+                deliveryAddress: masterOrder.deliveryAddress,
+                customerName: masterOrder.deliveryAddress?.name || "Customer",
+                customerPhone: masterOrder.deliveryAddress?.phone,
+                note: masterOrder.note,
+                payout: 600
+            }));
+            console.log(`✅ Socket: Order assigned event emitted to rider:${riderId}`);
+        } catch (e) { console.error('⚠️ Socket error (rider):', e.message); }
 
         try {
             // ✅ Use unified notification service for real-time + push capability
             const { sendRiderNotification } = await import("../../../services/notification.service.js");
             await sendRiderNotification(rider._id, masterOrder._id, "order_assigned", {
                 restaurantName: vendor?.storeName,
-                orderDatabaseId: masterOrder._id
+                orderDatabaseId: masterOrder._id,
+                payout: 600
             });
             console.log(`✅ Socket + Push: Order assigned event emitted/sent to rider:${riderId}`);
         } catch (e) { console.error('⚠️ Notification error (rider):', e.message); }

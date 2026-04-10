@@ -251,6 +251,16 @@ const orderSchema = new mongoose.Schema(
       ref: "Rider",
       default: null,
     },
+
+    // Rider's actual payout for this delivery.
+    // Set at delivery confirmation time in markDelivered.
+    // For platform-managed riders: fixed payout (e.g. ₦600).
+    // For vendor-managed riders: the vendor's delivery fee (cash paid by vendor).
+    // Null for orders created before this field was added.
+    riderEarnings: {
+      type: Number,
+      default: null,
+    },
     statusLog: [
       {
         status: String,

@@ -263,36 +263,6 @@ export const setMenuItemArchiveStatus = async (req, res) => {
             return res.status(400).json({ success: false, message: 'archived must be boolean' });
         }
 
-        // Only block archiving — restoring is always allowed
-        if (archived === true) {
-            // Find all active combos that reference this item
-            const comboComponents = await MenuVariantComponent.find({
-                menu_item_id: itemId,
-            }).lean();
-
-            if (comboComponents.length > 0) {
-                // Get the combo names for a useful error message
-                const variantIds = comboComponents.map(c => c.variant_id);
-
-                const combos = await MenuVariant.find({
-                    _id: { $in: variantIds },
-                    is_archived: { $ne: true },
-                })
-                    .select("name")
-                    .lean();
-
-                if (combos.length > 0) {
-                    const comboNames = combos.map(c => `"${c.name}"`).join(", ");
-                    return res.status(400).json({
-                        success: false,
-                        message: `This item is part of ${combos.length === 1 ? "a combo" : "combos"}: ${comboNames}. Archive or remove those combos first, or remove this item from them.`,
-                        combo_count: combos.length,
-                        combos: combos.map(c => ({ _id: c._id, name: c.name })),
-                    });
-                }
-            }
-        }
-
         const item = await MenuItem.findOne({ _id: itemId, vendor_id });
         if (!item) return res.status(404).json({ success: false, message: 'Menu item not found' });
 
@@ -331,20 +301,6 @@ export const toggleMenuItemStock = async (req, res) => {
 
         const item = await MenuItem.findOneAndUpdate({ _id: itemId, vendor_id }, { is_in_stock }, { new: true });
         if (!item) return res.status(404).json({ success: false, message: 'Item not found' });
-
-        // Cascade to any variants that include this item as a FIXED component
-        const affectedComponents = await MenuVariantComponent.find({
-            menu_item_id: itemId,
-            component_type: 'FIXED',
-        }).lean();
-
-        const affectedVariantIds = [...new Set(affectedComponents.map(c => c.variant_id.toString()))];
-
-        if (affectedVariantIds.length > 0) {
-            await Promise.all(
-                affectedVariantIds.map(variantId => MenuService.updateMenuVariantStockStatus(variantId))
-            );
-        }
 
         res.status(200).json({ success: true, item });
     } catch (error) {
@@ -886,33 +842,13 @@ export const deleteMenuItem = async (req, res) => {
         const item = await MenuItem.findOne({ _id: itemId, vendor_id }).lean();
         if (!item) return res.status(404).json({ success: false, message: 'Item not found' });
 
-        // 2. Combo membership guard — block if item is a component of an active combo
-        const comboComponents = await MenuVariantComponent.find({ menu_item_id: itemId }).lean();
-        if (comboComponents.length > 0) {
-            const variantIds = comboComponents.map(c => c.variant_id);
-            const activeCombos = await MenuVariant.find({
-                _id: { $in: variantIds },
-                is_archived: { $ne: true },
-            }).select('name').lean();
-
-            if (activeCombos.length > 0) {
-                return res.status(400).json({
-                    success: false,
-                    message: `This item is part of ${activeCombos.length === 1 ? 'a combo' : 'combos'}: ${activeCombos.map(c => `"${c.name}"`).join(', ')}. Remove it from those combos first.`,
-                    combo_count: activeCombos.length,
-                    combos: activeCombos.map(c => ({ _id: c._id, name: c.name })),
-                });
-            }
-        }
-
-        // 3. Cascade delete all sub-documents
+        // 2. Cascade delete all sub-documents
         const groupIds = (await MenuItemChoiceGroup.find({ menu_item_id: itemId }).select('_id').lean()).map(g => g._id);
 
         await Promise.all([
             MenuItemPortion.deleteMany({ menu_item_id: itemId }),
             MenuItemChoiceOption.deleteMany({ group_id: { $in: groupIds } }),
             MenuItemChoiceGroup.deleteMany({ menu_item_id: itemId }),
-            MenuVariantComponent.deleteMany({ menu_item_id: itemId }), // archived combo refs
             MenuItem.findByIdAndDelete(itemId),
         ]);
 

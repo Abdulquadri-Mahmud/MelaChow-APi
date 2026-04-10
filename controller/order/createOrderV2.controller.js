@@ -532,6 +532,21 @@ export const createOrderV2 = async ({
 
 
         /* ========================================
+         * 3.5️⃣ SINGLE-VENDOR ENFORCEMENT
+         * MelaChow MVP supports one restaurant per order.
+         * Multi-vendor orders create rider assignment conflicts
+         * and escrow complexity that are out of scope pre-launch.
+         * Remove this block when multi-vendor is deliberately implemented.
+         * ======================================== */
+        const uniqueVendorIds = Object.keys(vendorItemsMap);
+        if (uniqueVendorIds.length > 1) {
+            throw new Error(
+                "Orders can only contain items from one restaurant at a time. " +
+                "Please place separate orders for each restaurant."
+            );
+        }
+
+        /* ========================================
          * 4️⃣ CALCULATE SUBTOTAL
          * ======================================== */
         const subtotal = normalizedItems.reduce(
@@ -549,8 +564,7 @@ export const createOrderV2 = async ({
         const deliveryFeeMap = {};
         let totalDeliveryFee = 0;
 
-        // Bulk fetch all unique vendors in this order
-        const uniqueVendorIds = Object.keys(vendorItemsMap);
+        // Bulk fetch all unique vendors in this order (using uniqueVendorIds defined above)
 
         const vendorsForFees = await Vendor.find({
           _id: { $in: uniqueVendorIds },

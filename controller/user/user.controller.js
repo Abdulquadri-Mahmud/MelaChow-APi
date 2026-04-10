@@ -1,4 +1,4 @@
-﻿import jwt from 'jsonwebtoken';
+import jwt from 'jsonwebtoken';
 import bcryptjs from 'bcryptjs';
 import User from '../../model/user.model.js';
 import City from '../../model/location/City.js';
@@ -9,7 +9,7 @@ import { errorHandler } from '../../utils/errorHandler.js';
 // In-memory token storage (or use DB in production)
 // let verificationTokens = new Map();
 
-// ðŸ“§ Email Verification
+// 📧 Email Verification
 
 export const verifyEmail = async (req, res) => {
   const { email } = req.body;
@@ -287,21 +287,21 @@ export const login = async (req, res, next) => {
             <!-- Body -->
             <div style="padding: 30px; color: #333;">
               <h2 style="color: #FF6600;">Login Verification OTP</h2>
-              <p>Hey there ðŸ‘‹,</p>
+              <p>Hey there 👋,</p>
               <p>To continue logging into your <strong>MelaChow</strong> account, please use the OTP code below. This code will expire in <strong>10 minutes</strong>:</p>
 
               <div style="text-align: center; margin: 30px 0;">
                 <p style="font-size: 26px; font-weight: bold; letter-spacing: 4px; color: #FF6600;">${otp}</p>
               </div>
 
-              <p>If you didnâ€™t request this, please ignore this message â€” your account is safe.</p>
+              <p>If you didn't request this, please ignore this message — your account is safe.</p>
 
               <p>Stay hungry, stay connected ðŸ”,<br/><strong>The MelaChow Team</strong></p>
             </div>
 
             <!-- Footer -->
             <div style="background-color: #f4f4f4; padding: 15px; text-align: center; font-size: 12px; color: #888;">
-              Â© ${new Date().getFullYear()} MelaChow. All rights reserved.
+              © ${new Date().getFullYear()} MelaChow. All rights reserved.
             </div>
           </div>
         </div>
@@ -351,8 +351,8 @@ export const resendOtp = async (req, res, next) => {
             <!-- Body -->
             <div style="padding: 30px; color: #333;">
               <h2 style="color: #FF6600;">Resend OTP</h2>
-              <p>Hello ðŸ‘‹,</p>
-              <p>Hereâ€™s your new OTP code to verify your <strong>MelaChow</strong> account. This code will expire in <strong>10 minutes</strong>:</p>
+              <p>Hello 👋,</p>
+              <p>Here's your new OTP code to verify your <strong>MelaChow</strong> account. This code will expire in <strong>10 minutes</strong>:</p>
 
               <div style="text-align: center; margin: 30px 0;">
                 <p style="font-size: 26px; font-weight: bold; letter-spacing: 4px; color: #FF6600;">${otp}</p>
@@ -365,7 +365,7 @@ export const resendOtp = async (req, res, next) => {
 
             <!-- Footer -->
             <div style="background-color: #f4f4f4; padding: 15px; text-align: center; font-size: 12px; color: #888;">
-              Â© ${new Date().getFullYear()} MelaChow. All rights reserved.
+              © ${new Date().getFullYear()} MelaChow. All rights reserved.
             </div>
           </div>
         </div>
@@ -388,7 +388,7 @@ export const resendOtp = async (req, res, next) => {
 
 // Assumes you have an errorHandler() middleware/util to forward errors, or just res.status(...)
 export const getProfile = async (req, res) => {
-  // âœ… Debug logging
+  // ✅ Debug logging
   if (process.env.NODE_ENV !== 'production') {
     console.log('[getProfile] Request received:', {
       hasCookie: !!req.cookies?.token,
@@ -405,7 +405,7 @@ export const getProfile = async (req, res) => {
       return res.status(404).json({ status: false, message: "User not found" });
     }
 
-    // âœ… Debug logging before sending response
+    // ✅ Debug logging before sending response
     if (process.env.NODE_ENV !== 'production') {
       console.log('[getProfile] Sending user data:', {
         userId: user._id,
@@ -525,7 +525,7 @@ export const getUserAddresses = async (req, res) => {
     const userId = req.userId;
 
     const user = await User.findById(userId)
-      .select("addresses"); // ðŸ‘ˆ only addresses
+      .select("addresses"); // 👈 only addresses
 
     if (!user) {
       return res.status(404).json({
@@ -652,7 +652,7 @@ export const deleteAddress = async (req, res) => {
     if (!addrExists)
       return res.status(404).json({ status: false, message: "Address not found" });
 
-    // âœ… Remove address by filtering
+    // ✅ Remove address by filtering
     user.addresses = user.addresses.filter(addr => addr._id.toString() !== addressId);
 
     await user.save();
@@ -681,7 +681,7 @@ export const logoutUser = async (req, res) => {
     res.clearCookie("token", {
       httpOnly: true,
       secure: isProduction,
-      sameSite: "lax", // âœ… Match sendTokenCookie (iOS-safe)
+      sameSite: "lax", // ✅ Match sendTokenCookie (iOS-safe)
       path: "/",
     });
 
