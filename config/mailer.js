@@ -14,7 +14,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
  */
 export const sendMail = async ({ to, subject, html }) => {
     const { data, error } = await resend.emails.send({
-        from: 'MelaChow <noreply@mail.melachow.ng>',
+        from: 'MelaChow <hello@contact.melachow.com>',
         to,
         subject,
         html,
