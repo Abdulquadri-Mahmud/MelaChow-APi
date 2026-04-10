@@ -277,37 +277,42 @@ export const markDelivered = async (orderId, riderId) => {
         );
 
         const riderVendorId = rider.vendorId?.toString();
+        const isAdminRider = rider.managedBy === 'admin';
 
-        const deliveryFeeEntry = order.vendorDeliveryFees?.find(
-            v => v.restaurantId?.toString() === riderVendorId
-        );
-        const deliveryFee = Number(deliveryFeeEntry?.deliveryFee || 0);
+        // ── CALCULATE DELIVERY FEE SOURCE ──────────────────────────────────────────
+        // Admin riders are not tied to a specific vendor, so they get the TOTAL order 
+        // delivery fee. Vendor riders get only the fee from their specific restaurant.
+        let deliveryFee = 0;
+        if (isAdminRider) {
+            deliveryFee = Number(order.deliveryFee || 0);
+            console.log(`👤 Admin-managed rider ${riderId}: using total order delivery fee ₦${deliveryFee}`);
+        } else {
+            const deliveryFeeEntry = order.vendorDeliveryFees?.find(
+                v => v.restaurantId?.toString() === riderVendorId
+            );
+            deliveryFee = Number(deliveryFeeEntry?.deliveryFee || 0);
+            console.log(`🚲 Vendor-managed rider ${riderId}: using vendor delivery fee ₦${deliveryFee}`);
+        }
+
         let riderEarningsToRecord = 0;
 
         if (deliveryFee > 0) {
-
             const vendor = riderVendorId
                 ? await Vendor.findById(riderVendorId).session(session)
                 : null;
 
-            const deliveryManagedBy = vendor?.deliveryManagedBy || "vendor";
+            // Determine if the payout should be handled by Platform (Admin) or Vendor (Direct Cash).
+            // Admin riders ALWAYS use the platform-managed spread model.
+            const deliveryManagedBy = isAdminRider ? "admin" : (vendor?.deliveryManagedBy || "vendor");
 
             if (deliveryManagedBy === "vendor") {
                 // ── PHASE 1: VENDOR-MANAGED DELIVERY ──────────────────────────────────
                 // The vendor pays their rider directly in cash.
-                // The delivery fee was already credited to the vendor wallet during
-                // completeOrderFulfillment. 
-                // We'll record 100% as earnings for stats, but no wallet movement.
                 riderEarningsToRecord = deliveryFee;
                 console.log(`💵 Vendor-managed delivery — rider paid by vendor. No wallet transaction.`);
-
             } else {
-                // ── PLATFORM-MANAGED DELIVERY (SPREAD MODEL) ──────────────────────────
-                // Payout is intentionally NOT processed inside this transaction.
-                // Decoupling status update from wallet operation ensures delivery
-                // confirmation never fails due to admin wallet balance issues.
-                // Payout runs post-transaction in its own try/catch with retry queue.
-
+                // ── PHASE 2: PLATFORM-MANAGED DELIVERY (SPREAD MODEL) ──────────────────
+                // Payout runs post-transaction in its own session to prevent escrow deadlocks.
                 const RIDER_FIXED_PAYOUT = 600;
                 const riderPayout = Math.min(RIDER_FIXED_PAYOUT, deliveryFee);
                 const platformSpread = Number((deliveryFee - riderPayout).toFixed(2));
@@ -500,6 +505,31 @@ export const updateRider = async (riderId, vendorId, updateData) => {
             finalUpdate[key] = updateData[key];
         }
     });
+
+    Object.assign(rider, finalUpdate);
+    await rider.save();
+    return rider.getPublicProfile();
+};
+
+/**
+ * Rider updates their own profile info
+ */
+export const riderUpdateSelf = async (riderId, updateData) => {
+    const rider = await Rider.findById(riderId);
+    if (!rider) throw new Error("Rider not found");
+
+    const allowedUpdates = ["name", "phone", "avatar", "email"];
+    const finalUpdate = {};
+    
+    allowedUpdates.forEach(key => {
+        if (updateData[key] !== undefined) {
+            finalUpdate[key] = updateData[key];
+        }
+    });
+
+    if (updateData.password) {
+        rider.password = updateData.password;
+    }
 
     Object.assign(rider, finalUpdate);
     await rider.save();

@@ -30,6 +30,7 @@ router.post("/riders/:riderId/confirm-delivery", requireRiderAuth, riderControll
 router.get("/riders/:riderId/wallet", requireRiderAuth, riderController.getRiderWallet);
 router.get("/riders/:riderId/orders", requireRiderAuth, riderController.getRiderOrders);
 router.get("/riders/:riderId/orders/:orderId", requireRiderAuth, riderController.getRiderOrderDetails);
+router.patch("/riders/:riderId", requireRiderAuth, riderController.riderUpdateSelf);
 
 // Admin global rider management
 router.get("/admin/riders", adminAuth, riderController.adminGetAllRiders);
