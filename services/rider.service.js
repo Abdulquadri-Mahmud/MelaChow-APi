@@ -159,7 +159,12 @@ export const assignRiderToOrder = async (orderId, riderId, vendorId) => {
         const rider = await Rider.findById(riderId).session(session);
         if (!rider) throw new Error("Rider not found");
         if (!rider.vendorId || rider.vendorId.toString() !== vendorId) throw new Error("Rider does not belong to this vendor");
-        if (rider.status !== "available") throw new Error("Rider is not available");
+        
+        // Only enforce 'available' status check for platform-managed riders.
+        // For vendor-managed riders, we allow assignment regardless of status per user requirement.
+        if (rider.managedBy === 'admin' && rider.status !== "available") {
+            throw new Error("Rider is not available");
+        }
 
         order.orderStatus = "rider_assigned";
         order.riderId = riderId;

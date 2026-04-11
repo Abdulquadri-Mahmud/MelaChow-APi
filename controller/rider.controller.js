@@ -40,7 +40,9 @@ export const getSingleVendorRider = async (req, res, next) => {
 export const getAvailableRiders = async (req, res, next) => {
     try {
         const { vendorId } = req.params;
-        const riders = await riderService.getAvailableRiders(vendorId);
+        // If it's a vendor-managed fleet request, return all active riders
+        // Vendors manually manage their fleet and need to see all riders for manual assignment.
+        const riders = await riderService.getRidersByVendor(vendorId, { isActive: true });
         res.status(200).json({ success: true, count: riders.length, data: riders });
     } catch (error) {
         next(error);
