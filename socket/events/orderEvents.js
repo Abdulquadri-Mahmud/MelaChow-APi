@@ -48,6 +48,7 @@ export function emitNewOrderToRestaurant(orderAndMetadata) {
 
     const eventData = {
         orderId:         orderAndMetadata.orderId || orderAndMetadata._id,
+        vendorOrderId:   orderAndMetadata.vendorOrderId,
         customerName:    orderAndMetadata.deliveryAddress?.name,
         customerPhone:   orderAndMetadata.phone,
         items:           itemsForThisVendor,
