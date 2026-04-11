@@ -1,5 +1,5 @@
 import nodemailer from "nodemailer";
-import { wrapLayout } from "../../services/emailTemplate.service.js";
+import { wrapLayout } from "../../../services/emailTemplate.service.js";
 
 export const sendUserSuspensionEmail = async (user, reason) => {
   const transporter = nodemailer.createTransport({
