@@ -4,6 +4,7 @@ import { safeRedisSet, safeRedisGet } from '../config/redis.js';
 import { sendMail } from '../config/mailer.js';
 import User from '../model/user.model.js';
 import logger from '../config/logger.js';
+import { wrapLayout } from './emailTemplate.service.js';
 
 // MongoDB OTP fallback collection — used when Redis is unavailable.
 // TTL index on expiresAt auto-deletes documents after 10 minutes.
@@ -101,37 +102,22 @@ export const sendDeliveryOTP = async (orderId, customerPhone, customerUserId) =>
 
         await sendMail({
             to: user.email,
-            subject: 'Your MelaChow Delivery Code',
-            html: `
-                <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 480px; margin: 0 auto; background: #ffffff;">
-                    <div style="background: #f97316; padding: 24px; text-align: center; border-radius: 8px 8px 0 0;">
-                        <h1 style="color: #ffffff; margin: 0; font-size: 22px;">MelaChow</h1>
-                        <p style="color: #ffe6d1; margin: 4px 0 0; font-size: 14px;">Delivery Confirmation</p>
-                    </div>
-                    <div style="padding: 32px 24px;">
-                        <p style="color: #111827; font-size: 15px; margin: 0 0 8px;">
-                            Hi ${user.firstname || 'there'},
-                        </p>
-                        <p style="color: #374151; font-size: 14px; margin: 0 0 24px;">
-                            Your rider is at your location. Give them this code to confirm delivery:
-                        </p>
-                        <div style="background: #f3f4f6; border-radius: 12px; padding: 28px; text-align: center; margin: 0 0 24px;">
-                            <span style="font-size: 40px; font-weight: 900; letter-spacing: 10px; color: #111827;">
-                                ${otp}
-                            </span>
-                        </div>
-                        <p style="color: #6b7280; font-size: 13px; margin: 0;">
-                            This code expires in <strong>10 minutes</strong>. 
-                            Only share it with your rider — never with anyone else.
-                        </p>
-                    </div>
-                    <div style="background: #f9fafb; border-radius: 0 0 8px 8px; padding: 16px; text-align: center;">
-                        <p style="color: #9ca3af; font-size: 12px; margin: 0;">
-                            © ${new Date().getFullYear()} MelaChow. All rights reserved.
-                        </p>
-                    </div>
+            subject: 'Delivery Code: ' + otp,
+            html: wrapLayout(
+                'Verification Required',
+                `
+                <p class="p">Your rider has arrived at your location. Please provide this secure code to confirm you've received your order.</p>
+                <div style="background: #F3F4F6; border-radius: 20px; padding: 40px; text-align: center; margin: 32px 0; border: 2px dashed #E5E7EB;">
+                    <span style="font-size: 48px; font-weight: 900; letter-spacing: 12px; color: #111827; font-family: 'Courier New', Courier, monospace;">
+                        ${otp}
+                    </span>
                 </div>
-            `,
+                <p class="p" style="font-size: 14px; color: #6B7280; text-align: center;">
+                    This code expires in 10 minutes. Only share it with your rider once you have the items.
+                </p>
+                `,
+                'Security Check'
+            ),
         });
 
         logger.info({ orderId, email: user.email }, '✅ Delivery OTP sent via Resend email');
