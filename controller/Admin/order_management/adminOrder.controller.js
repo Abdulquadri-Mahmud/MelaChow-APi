@@ -533,11 +533,17 @@ export const assignRiderToOrder = async (req, res) => {
 
     try {
         // Step 2: Find the VendorOrder
-        const vendorOrder = await VendorOrder.findById(vendorOrderId).populate("userOrderId");
+        // Resiliency: Try finding by its own ID first. If not found, check if it's a Master Order ID.
+        let vendorOrder = await VendorOrder.findById(vendorOrderId).populate("userOrderId");
+        
+        if (!vendorOrder) {
+            vendorOrder = await VendorOrder.findOne({ userOrderId: vendorOrderId }).populate("userOrderId");
+        }
+
         if (!vendorOrder) {
             return res.status(404).json({
                 success: false,
-                message: "Vendor order not found"
+                message: "No order found for assignment. Please check the order ID."
             });
         }
 
@@ -581,9 +587,9 @@ export const assignRiderToOrder = async (req, res) => {
 
         // Step 7: Perform the database updates atomically using Promise.allSettled
         const updatePromises = [
-            // a) Update VendorOrder
-            VendorOrder.updateOne(
-                { _id: vendorOrderId },
+            // a) Update VendorOrder(s) — use updateMany to capture all vendors in the order
+            VendorOrder.updateMany(
+                { userOrderId: masterOrder._id },
                 { $set: { orderStatus: 'rider_assigned', riderId: riderId } }
             ),
             // b) Update master Order
