@@ -136,10 +136,16 @@ export const getFullVendorMenu = async (req, res) => {
     try {
         const { vendorId } = req.params;
 
-        // Step 1 — Fetch the vendor
-        const vendor = await Vendor.findById(vendorId).lean();
+        // Step 1 — Fetch the vendor (Support both ID and Slug)
+        const vendor = await Vendor.findOne({
+            $or: [
+                { _id: mongoose.Types.ObjectId.isValid(vendorId) ? vendorId : null },
+                { storeSlug: vendorId }
+            ].filter(Boolean)
+        }).lean();
+
         if (!vendor) {
-            return res.status(404).json({ message: "Vendor not found" });
+            return res.status(404).json({ success: false, message: "Vendor not found" });
         }
 
         // Resolve the fee the customer will actually be charged
@@ -163,33 +169,47 @@ export const getFullVendorMenu = async (req, res) => {
             storeSlug:             vendor.storeSlug,
         };
 
-        // Step 2 — Fetch all active ComboItems for this vendor
-        // And concurrently fetch Items, Portions, and Sections
-        const [rawCombos, sections, items, allPortions] = await Promise.all([
+        // Step 2 — Fetch Combos, Sections, and Items in parallel
+        const [rawCombos, sections, items] = await Promise.all([
             ComboItem.find({
-                vendor_id:   vendorId,
-                is_available: true,
+                vendor_id:   vendor._id,
+                is_available: { $ne: false },
                 is_archived:  { $ne: true },
             }).sort({ sort_order: 1, createdAt: -1 }).lean(),
 
-            VendorMenuSection.find({ vendor_id: vendorId }).sort('sort_order').lean(),
+            VendorMenuSection.find({ 
+                vendor_id: vendor._id,
+                deleted_at: null,
+                is_visible: { $ne: false }
+            }).sort('sort_order').lean(),
 
             MenuItem.find({
-                vendor_id: vendorId,
-                is_archived: false,
-                is_available: true,
-                is_in_stock: true,
-                category_deactivated: false,
+                vendor_id: vendor._id,
+                is_archived: { $ne: true },
+                is_available: { $ne: false },
+                is_in_stock: { $ne: false },
+                category_deactivated: { $ne: true },
             }).sort({ sort_order: 1, createdAt: -1 }).lean(),
-
-            MenuItemPortion.find({
-                is_available: true,
-                // Optimized: only fetch portions for items belonging to this vendor
-                // We'll filter them by itemId later in JS
-            }).lean(),
         ]);
 
-        // Step 3 — Index portions by item_id for faster lookup
+        // Step 3 — Fetch all portions and categories specifically for these items/combos
+        const itemIds = items.map(i => i._id);
+        const itemCategoryIds = items.map(i => i.platform_category_id?.toString()).filter(Boolean);
+        const comboCategoryIds = rawCombos.map(c => c.platform_category_id?.toString()).filter(Boolean);
+        const categoryIds = [...new Set([...itemCategoryIds, ...comboCategoryIds])];
+
+        const [allPortions, categories] = await Promise.all([
+            MenuItemPortion.find({
+                menu_item_id: { $in: itemIds },
+                is_available: { $ne: false },
+            }).lean(),
+
+            Category.find({ _id: { $in: categoryIds } })
+                .populate('parent', 'name')
+                .lean(),
+        ]);
+
+        // Step 4 — Index portions by item_id for faster lookup
         const portionsByItem = {};
         for (const p of allPortions) {
             const sid = p.menu_item_id?.toString();
@@ -198,15 +218,6 @@ export const getFullVendorMenu = async (req, res) => {
                 portionsByItem[sid].push(p);
             }
         }
-
-        // Step 4 — Fetch all involved categories (Items + Combos)
-        const itemCategoryIds = items.map(i => i.platform_category_id?.toString()).filter(Boolean);
-        const comboCategoryIds = rawCombos.map(c => c.platform_category_id?.toString()).filter(Boolean);
-        const categoryIds = [...new Set([...itemCategoryIds, ...comboCategoryIds])];
-
-        const categories = await Category.find({ _id: { $in: categoryIds } })
-            .populate('parent', 'name')
-            .lean();
 
         const categoryMap = {};
         for (const c of categories) {

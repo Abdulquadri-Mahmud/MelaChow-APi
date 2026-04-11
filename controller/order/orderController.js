@@ -5,6 +5,7 @@ import Order from "../../model/order/Order.js";
 import PendingOrder from "../../model/order/PendingOrder.js";
 import Wallet from "../../model/wallet/wallet.mode.js";
 import Withdrawal from "../../model/wallet/Withdrawal.model.js";
+import RiderWithdrawal from "../../model/wallet/RiderWithdrawal.model.js";
 import VendorOrder from "../../model/vendor/VendorOrder.js";
 import Food from "../../model/vendor/food.model.js";
 import Vendor from "../../model/vendor/vendor.model.js";
@@ -1601,85 +1602,147 @@ export const completeVendorOrder = async (req, res) => {
 
 // ---------- Transfer Webhook Handlers ----------
 const handleTransferSuccess = async (data) => {
-  const withdrawal = await Withdrawal.findOne({ paystackReference: data.reference });
-  if (!withdrawal) {
+    // Check vendor withdrawal first
+    const withdrawal = await Withdrawal.findOne({ paystackReference: data.reference });
+    if (withdrawal) {
+        if (withdrawal.status === "completed") {
+            console.log("transfer.success: Vendor withdrawal already completed, skipping:", data.reference);
+            return;
+        }
+        withdrawal.status = "completed";
+        withdrawal.settledAt = new Date();
+        await withdrawal.save();
+        console.log(`✅ Vendor transfer completed: ${data.reference} — ₦${withdrawal.netAmount}`);
+        return;
+    }
+
+    // Check rider withdrawal
+    const riderWithdrawal = await RiderWithdrawal.findOne({ paystackReference: data.reference });
+    if (riderWithdrawal) {
+        if (riderWithdrawal.status === "completed") {
+            console.log("transfer.success: Rider withdrawal already completed, skipping:", data.reference);
+            return;
+        }
+        riderWithdrawal.status = "completed";
+        riderWithdrawal.settledAt = new Date();
+        await riderWithdrawal.save();
+        console.log(`✅ Rider transfer completed: ${data.reference} — ₦${riderWithdrawal.netAmount}`);
+        return;
+    }
+
     console.warn("transfer.success: No withdrawal found for reference:", data.reference);
-    return;
-  }
-  if (withdrawal.status === "completed") {
-    console.log("transfer.success: Already completed, skipping:", data.reference);
-    return;
-  }
-  withdrawal.status = "completed";
-  withdrawal.settledAt = new Date();
-  await withdrawal.save();
-  console.log(`✅ Transfer completed: ${data.reference} — ₦${withdrawal.netAmount}`);
 };
 
 const handleTransferFailed = async (data) => {
-  const withdrawal = await Withdrawal.findOne({ paystackReference: data.reference });
-  if (!withdrawal) {
+    // Check vendor withdrawal first
+    const withdrawal = await Withdrawal.findOne({ paystackReference: data.reference });
+    if (withdrawal) {
+        if (withdrawal.status === "failed") {
+            console.log("transfer.failed: Vendor withdrawal already failed, skipping:", data.reference);
+            return;
+        }
+        const wallet = await Wallet.findById(withdrawal.walletId);
+        if (wallet) {
+            wallet.balance = Number((wallet.balance + withdrawal.requestedAmount).toFixed(2));
+            wallet.totalWithdrawn = Number((wallet.totalWithdrawn - withdrawal.requestedAmount).toFixed(2));
+            wallet.transactions.push({
+                type: "credit",
+                amount: withdrawal.requestedAmount,
+                description: `Withdrawal failed — Ref: ${withdrawal.paystackReference}. Funds restored.`,
+                transactionType: "refund",
+            });
+            await wallet.save();
+            console.log(`💸 Vendor wallet refunded ₦${withdrawal.requestedAmount} for failed transfer: ${data.reference}`);
+        }
+        withdrawal.status = "failed";
+        withdrawal.failureReason = data.reason || data.gateway_response || "Transfer failed";
+        await withdrawal.save();
+        return;
+    }
+
+    // Check rider withdrawal
+    const riderWithdrawal = await RiderWithdrawal.findOne({ paystackReference: data.reference });
+    if (riderWithdrawal) {
+        if (riderWithdrawal.status === "failed") {
+            console.log("transfer.failed: Rider withdrawal already failed, skipping:", data.reference);
+            return;
+        }
+        const wallet = await Wallet.findById(riderWithdrawal.walletId);
+        if (wallet) {
+            wallet.balance = Number((wallet.balance + riderWithdrawal.requestedAmount).toFixed(2));
+            wallet.totalWithdrawn = Number((wallet.totalWithdrawn - riderWithdrawal.requestedAmount).toFixed(2));
+            wallet.transactions.push({
+                type: "credit",
+                amount: riderWithdrawal.requestedAmount,
+                description: `Withdrawal failed — Ref: ${riderWithdrawal.paystackReference}. Funds restored.`,
+                transactionType: "refund",
+            });
+            await wallet.save();
+            console.log(`💸 Rider wallet refunded ₦${riderWithdrawal.requestedAmount} for failed transfer: ${data.reference}`);
+        }
+        riderWithdrawal.status = "failed";
+        riderWithdrawal.failureReason = data.reason || data.gateway_response || "Transfer failed";
+        await riderWithdrawal.save();
+        return;
+    }
+
     console.warn("transfer.failed: No withdrawal found for reference:", data.reference);
-    return;
-  }
-  if (withdrawal.status === "failed") {
-    console.log("transfer.failed: Already marked failed, skipping:", data.reference);
-    return;
-  }
-
-  // Refund the wallet
-  const wallet = await Wallet.findById(withdrawal.walletId);
-  if (wallet) {
-    wallet.balance = Number((wallet.balance + withdrawal.requestedAmount).toFixed(2));
-    wallet.totalWithdrawn = Number((wallet.totalWithdrawn - withdrawal.requestedAmount).toFixed(2));
-    wallet.transactions.push({
-      type: "credit",
-      amount: withdrawal.requestedAmount,
-      description: `Withdrawal failed — Ref: ${withdrawal.paystackReference}. Funds restored.`,
-      transactionType: "refund",
-    });
-    await wallet.save();
-    console.log(`💸 Wallet refunded ₦${withdrawal.requestedAmount} for failed transfer: ${data.reference}`);
-  } else {
-    console.error("transfer.failed: Wallet not found for withdrawal:", withdrawal._id);
-  }
-
-  withdrawal.status = "failed";
-  withdrawal.failureReason = data.reason || data.gateway_response || "Transfer failed";
-  await withdrawal.save();
 };
 
 const handleTransferReversed = async (data) => {
-  const withdrawal = await Withdrawal.findOne({ paystackReference: data.reference });
-  if (!withdrawal) {
+    // Check vendor withdrawal first
+    const withdrawal = await Withdrawal.findOne({ paystackReference: data.reference });
+    if (withdrawal) {
+        if (withdrawal.status === "reversed") {
+            console.log("transfer.reversed: Vendor withdrawal already reversed, skipping:", data.reference);
+            return;
+        }
+        const wallet = await Wallet.findById(withdrawal.walletId);
+        if (wallet) {
+            wallet.balance = Number((wallet.balance + withdrawal.requestedAmount).toFixed(2));
+            wallet.totalWithdrawn = Number((wallet.totalWithdrawn - withdrawal.requestedAmount).toFixed(2));
+            wallet.transactions.push({
+                type: "credit",
+                amount: withdrawal.requestedAmount,
+                description: `Withdrawal reversed — Ref: ${withdrawal.paystackReference}. Funds restored.`,
+                transactionType: "refund",
+            });
+            await wallet.save();
+            console.log(`💸 Vendor wallet refunded ₦${withdrawal.requestedAmount} for reversed transfer: ${data.reference}`);
+        }
+        withdrawal.status = "reversed";
+        withdrawal.failureReason = data.reason || "Transfer reversed by Paystack";
+        await withdrawal.save();
+        return;
+    }
+
+    // Check rider withdrawal
+    const riderWithdrawal = await RiderWithdrawal.findOne({ paystackReference: data.reference });
+    if (riderWithdrawal) {
+        if (riderWithdrawal.status === "reversed") {
+            console.log("transfer.reversed: Rider withdrawal already reversed, skipping:", data.reference);
+            return;
+        }
+        const wallet = await Wallet.findById(riderWithdrawal.walletId);
+        if (wallet) {
+            wallet.balance = Number((wallet.balance + riderWithdrawal.requestedAmount).toFixed(2));
+            wallet.totalWithdrawn = Number((wallet.totalWithdrawn - riderWithdrawal.requestedAmount).toFixed(2));
+            wallet.transactions.push({
+                type: "credit",
+                amount: riderWithdrawal.requestedAmount,
+                description: `Withdrawal reversed — Ref: ${riderWithdrawal.paystackReference}. Funds restored.`,
+                transactionType: "refund",
+            });
+            await wallet.save();
+            console.log(`💸 Rider wallet refunded ₦${riderWithdrawal.requestedAmount} for reversed transfer: ${data.reference}`);
+        }
+        riderWithdrawal.status = "reversed";
+        riderWithdrawal.failureReason = data.reason || "Transfer reversed by Paystack";
+        await riderWithdrawal.save();
+        return;
+    }
+
     console.warn("transfer.reversed: No withdrawal found for reference:", data.reference);
-    return;
-  }
-  if (withdrawal.status === "reversed") {
-    console.log("transfer.reversed: Already marked reversed, skipping:", data.reference);
-    return;
-  }
-
-  // Refund the wallet — same logic as failed
-  const wallet = await Wallet.findById(withdrawal.walletId);
-  if (wallet) {
-    wallet.balance = Number((wallet.balance + withdrawal.requestedAmount).toFixed(2));
-    wallet.totalWithdrawn = Number((wallet.totalWithdrawn - withdrawal.requestedAmount).toFixed(2));
-    wallet.transactions.push({
-      type: "credit",
-      amount: withdrawal.requestedAmount,
-      description: `Withdrawal reversed — Ref: ${withdrawal.paystackReference}. Funds restored.`,
-      transactionType: "refund",
-    });
-    await wallet.save();
-    console.log(`💸 Wallet refunded ₦${withdrawal.requestedAmount} for reversed transfer: ${data.reference}`);
-  } else {
-    console.error("transfer.reversed: Wallet not found for withdrawal:", withdrawal._id);
-  }
-
-  withdrawal.status = "reversed";
-  withdrawal.failureReason = data.reason || "Transfer reversed by Paystack";
-  await withdrawal.save();
 };
 
 // ---------- Paystack Webhook ----------

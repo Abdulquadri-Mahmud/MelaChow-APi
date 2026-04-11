@@ -52,6 +52,18 @@ const riderSchema = new mongoose.Schema(
         notes: { type: String },
         metadata: { type: Object },
         role: { type: String, default: "rider" },
+
+        // ── Bank account for rider payouts ────────────────────────────────────
+        // Populated when rider adds their bank account via the payout setup endpoint.
+        // recipientCode is created by Paystack and used for all future transfers.
+        payoutDetails: {
+            bankCode:       { type: String, default: null },
+            bankName:       { type: String, default: null },
+            accountNumber:  { type: String, default: null },
+            accountName:    { type: String, default: null },
+            recipientCode:  { type: String, default: null, select: false },
+            payoutEnabled:  { type: Boolean, default: false },
+        },
     },
     {
         timestamps: true,
