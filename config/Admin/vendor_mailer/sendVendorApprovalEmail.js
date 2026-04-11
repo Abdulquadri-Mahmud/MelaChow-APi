@@ -1,6 +1,6 @@
-﻿// config/Admin/adminApprovedVendor.mailer.js
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
+import { wrapLayout } from '../../services/emailTemplate.service.js';
 
 dotenv.config();
 
@@ -15,46 +15,19 @@ const transporter = nodemailer.createTransport({
 export const sendVendorApprovalEmail = async (vendor) => {
   const subject = "Your Vendor Account Has Been Approved";
 
-  const html = `
-    <div style="font-family: 'Segoe UI', sans-serif; background-color: #f4f7fb; padding: 40px 0;">
-      <div style="max-width: 600px; background: #ffffff; margin: auto; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.08);">
-
-        <!-- Header -->
-        <div style="background-color: #ff6600; padding: 20px; text-align: center;">
-            <h1 style="color: #fff; margin: 0;">MelaChow Vendor</h1>
-            <p style="color: #ffe6d1; margin: 5px 0;">Manage your store ðŸ´</p>
-        </div>
-
-        <!-- Body -->
-        <div style="padding: 30px; color: #333;">
-          <h2 style="color: #FF6600; text-align: center;">ðŸŽ‰ Congratulations, ${vendor.name}!</h2>
-          <p style="font-size: 15px; line-height: 1.6; text-align: center;">
-            Your <strong>vendor account</strong> on 
-            <span style="color: #FF6600; font-weight: 600;">MelaChow</span> has been successfully <strong>approved</strong> by our admin team.
-          </p>
-          <p style="font-size: 15px; line-height: 1.6; text-align: center; margin-top: 10px;">
-            You can now log in, add products, and start selling amazing items on our platform.
-          </p>
-
-          <div style="text-align: center; margin: 25px 0;">
-            <a href="https://auroragems.com/vendor/login"
-               style="display: inline-block; background-color: #FF6600; color: #ffffff; padding: 12px 28px; border-radius: 6px; text-decoration: none; font-weight: 600;">
-               Proceed to login
-            </a>
-          </div>
-
-          <p style="font-size: 14px; color: #FF6600; text-align: center;">
-            If you have any questions, feel free to reply to this email.
-          </p>
-        </div>
-
-        <!-- Footer -->
-        <div style="background-color: #f9fafc; padding: 20px; text-align: center; font-size: 13px; color: #888;">
-          <p>Â© ${new Date().getFullYear()} MelaChow. All rights reserved.</p>
-        </div>
-      </div>
+  const html = wrapLayout(
+    'Account Approved',
+    `
+    <p class="p">Congratulations, ${vendor.name || 'Vendor'}!</p>
+    <p class="p">Your storefront has been successfully verified and approved by our quality control team. You are now officially a part of the MelaChow merchant network.</p>
+    <p class="p">You can now stock your kitchen, set your opening hours, and start receiving orders from thousands of customers.</p>
+    <div style="text-align: center; margin: 32px 0;">
+      <a href="https://melachow.com/vendor/login" class="button">Open My Store</a>
     </div>
-  `;
+    <p class="p" style="font-size: 14px; color: #6B7280;">Need help setting up your menu? Check out our Merchant Guide in the portal sidebar.</p>
+    `,
+    'Onboarding Complete'
+  );
 
   await transporter.sendMail({
     from: `"MelaChow" <${process.env.EMAIL_USER}>`,

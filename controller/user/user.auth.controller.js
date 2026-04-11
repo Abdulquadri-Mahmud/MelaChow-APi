@@ -1,7 +1,8 @@
-﻿import User from '../../model/user.model.js';
+import User from '../../model/user.model.js';
 import { generateAccessToken, generateRefreshToken, generateOTP, generateResetToken, verifyToken } from '../../utils/jwt.js';
 import { sendMail } from '../../config/mailer.js';
 import { sendTokenCookie } from '../../utils/sendTokenCookie.js';
+import { wrapLayout } from '../../services/emailTemplate.service.js';
 
 // ============================================
 // USER REGISTRATION (with OTP verification)
@@ -50,44 +51,22 @@ export const register = async (req, res) => {
         // Send OTP email
         await sendMail({
             to: email,
-            subject: 'Verify Your Email - MelaChow',
-            html: `
-      <div style="font-family: Arial, sans-serif; background-color: #f4f7fb; padding: 40px;">
-        <div style="max-width: 600px; margin: auto; background-color: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
-          
-          <!-- Header -->
-          <div style="background-color: #FF6B00; padding: 20px; text-align: center;">
-            <h1 style="color: white; margin: 0; font-size: 24px;">MelaChow</h1>
-          </div>
-
-          <!-- Body -->
-          <div style="padding: 30px; text-align: center;">
-            <h2 style="color: #222; margin-bottom: 10px;">Email Verification</h2>
-            <p style="color: #555; font-size: 15px; line-height: 1.6;">
-              Use the OTP below to verify your email address and complete your MelaChow registration:
-            </p>
-
-            <div style="font-size: 32px; font-weight: bold; margin: 25px 0; color: #FF6B00; letter-spacing: 3px;">
-              ${otp}
-            </div>
-
-            <p style="color: #777; font-size: 14px; line-height: 1.6;">
-              This OTP will expire in <strong>10 minutes</strong>.  
-              Please do not share this code with anyone for your account safety.
-            </p>
-          </div>
-
-          <!-- Footer -->
-          <hr style="border: none; border-top: 1px solid #eee; margin: 0;" />
-          <div style="padding: 20px; text-align: center;">
-            <p style="font-size: 12px; color: #aaa; margin: 0;">
-              &copy; ${new Date().getFullYear()} MelaChow. All rights reserved.  
-              <br/>This is an automated message, please do not reply.
-            </p>
-          </div>
-        </div>
-      </div>
-      `
+            subject: 'Verify Your Email: ' + otp,
+            html: wrapLayout(
+                'Welcome to MelaChow',
+                `
+                <p class="p">Your journey to delicious meals starts here. Use the secure code below to verify your email address and join our community.</p>
+                <div style="background: #F3F4F6; border-radius: 20px; padding: 40px; text-align: center; margin: 32px 0; border: 2px dashed #E5E7EB;">
+                    <span style="font-size: 40px; font-weight: 900; letter-spacing: 12px; color: #111827; font-family: 'Courier New', Courier, monospace;">
+                        ${otp}
+                    </span>
+                </div>
+                <p class="p" style="font-size: 14px; color: #6B7280; text-align: center;">
+                    This code will expire in 10 minutes. If you didn't request this, please ignore this email.
+                </p>
+                `,
+                'Join the Club'
+            )
         });
 
         res.status(200).json({
@@ -328,42 +307,24 @@ export const forgotPasswordNew = async (req, res) => {
         user.otpExpires = otpExpires;
         await user.save();
 
-        // Send reset email
         await sendMail({
             to: email,
-            subject: 'Reset Your Password - MelaChow',
-            html: `
-      <div style="font-family: 'Segoe UI', sans-serif; background-color: #f9fafb; padding: 30px;">
-        <div style="max-width: 600px; margin: auto; background-color: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">
-
-          <!-- Header -->
-          <div style="background-color: #FF6B00; padding: 20px; text-align: center;">
-              <h1 style="color: white; margin: 0; font-size: 24px;">MelaChow</h1>
-              <p style="color: #ffeede; margin: 5px 0 0; font-size: 14px;">Bringing meals closer</p>
-          </div>
-
-          <!-- Body -->
-          <div style="padding: 30px; color: #333;">
-              <h2 style="color: #FF6B00; margin-bottom: 15px;">Reset Password OTP</h2>
-              <p>Hello,</p>
-              <p>We received a request to reset your <strong>MelaChow</strong> account password. Use the OTP below to proceed:</p>
-
-              <div style="text-align: center; font-size: 28px; font-weight: bold; color: #FF6B00; margin: 25px 0;">
-                  ${otp}
-              </div>
-
-              <p>This OTP is valid for <strong>10 minutes</strong>. For your safety, please don't share it with anyone.</p>
-
-              <p>Thanks,<br/>The MelaChow Team</p>
-          </div>
-
-          <!-- Footer -->
-          <div style="background-color: #f4f4f4; padding: 15px; text-align: center; font-size: 12px; color: #777;">
-              Â© ${new Date().getFullYear()} MelaChow. All rights reserved.
-          </div>
-        </div>
-      </div>
-      `
+            subject: 'Reset Code: ' + otp,
+            html: wrapLayout(
+                'Password Reset',
+                `
+                <p class="p">We received a request to reset your password. If you didn't make this request, please secure your account immediately.</p>
+                <div style="background: #FFFBEB; border-radius: 20px; padding: 40px; text-align: center; margin: 32px 0; border: 2px dashed #F59E0B;">
+                    <span style="font-size: 40px; font-weight: 900; letter-spacing: 12px; color: #B45309; font-family: 'Courier New', Courier, monospace;">
+                        ${otp}
+                    </span>
+                </div>
+                <p class="p" style="font-size: 14px; color: #6B7280; text-align: center;">
+                    This reset code will expire in 10 minutes. <b>Never share this code with anyone.</b>
+                </p>
+                `,
+                'Reset Request'
+            )
         });
 
         res.status(200).json({
