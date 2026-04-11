@@ -7,6 +7,7 @@ import {
     initiateRiderWithdrawal,
     getRiderWithdrawalHistory,
 } from "../controller/rider/riderWithdrawal.controller.js";
+import { getBankList } from "../controller/wallet/bankAccount.controller.js";
 import authVendor from "../middleware/vendor.middleware.js";
 import { requireRiderAuth } from "../middleware/riderAuth.middleware.js";
 import { adminAuth } from "../middleware/adminAuth.js";
@@ -47,6 +48,9 @@ router.get("/riders/:riderId/payout/bank-account", requireRiderAuth, getRiderBan
 router.post("/riders/:riderId/payout/withdraw", requireRiderAuth, initiateRiderWithdrawal);
 // History: Fetch past withdrawals
 router.get("/riders/:riderId/payout/history", requireRiderAuth, getRiderWithdrawalHistory);
+// Bank list: rider-scoped, uses same stateless Paystack controller as vendor
+// MUST NOT use /wallet/banks — that route is vendorAuth-protected and will 401 riders
+router.get("/riders/banks", requireRiderAuth, getBankList);
 router.get("/riders/:riderId/orders", requireRiderAuth, riderController.getRiderOrders);
 router.get("/riders/:riderId/orders/:orderId", requireRiderAuth, riderController.getRiderOrderDetails);
 router.patch("/riders/:riderId", requireRiderAuth, riderController.riderUpdateSelf);
