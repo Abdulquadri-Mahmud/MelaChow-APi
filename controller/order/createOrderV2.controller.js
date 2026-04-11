@@ -799,6 +799,7 @@ export const createOrderV2 = async ({
                     // Emit real-time order event for dashboard
                     emitNewOrderToRestaurant({
                         ...order.toObject(),
+                        vendorOrderId: vendorOrderMapping[restaurantId],
                         restaurantId // Specify which restaurant this broadcast is for
                     });
                 }
@@ -1225,6 +1226,7 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
                 // Real-time dashboard event
                 emitNewOrderToRestaurant({
                     ...order.toObject(),
+                    vendorOrderId: vendorOrderMapping[restaurantId],
                     restaurantId
                 });
             }
