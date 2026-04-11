@@ -186,8 +186,9 @@ export const getFullVendorMenu = async (req, res) => {
             MenuItem.find({
                 vendor_id: vendor._id,
                 is_archived: { $ne: true },
+                // Loosen filters: customers should see item even if out of stock (rendered as 'Sold Out')
+                // is_available is the only "hard hide" flag
                 is_available: { $ne: false },
-                is_in_stock: { $ne: false },
                 category_deactivated: { $ne: true },
             }).sort({ sort_order: 1, createdAt: -1 }).lean(),
         ]);
@@ -310,13 +311,36 @@ export const getFullVendorMenu = async (req, res) => {
 
         const populatedSections = sections
             .map(s => sectionMap[s._id.toString()])
-            .filter(s => s.items.length > 0); // hide empty sections
+            .filter(s => s.items.length > 0);
+
+        // Virtual "General" Section for items without a section
+        if (unsectioned.length > 0) {
+            populatedSections.push({
+                _id: "unsectioned",
+                name: "General",
+                description: "Other items from our menu",
+                items: unsectioned,
+                is_virtual: true
+            });
+        }
+
+        // Virtual "Combos" Section for combos
+        if (combos.length > 0) {
+            // We insert it at the beginning as combos are usually promos
+            populatedSections.unshift({
+                _id: "combos",
+                name: "Combos & Deals",
+                description: "Specially curated meal combinations",
+                items: combos.map(c => ({ ...c, item_type: "combo" })),
+                is_virtual: true
+            });
+        }
 
         // Step 6 — Return the response
         return res.status(200).json({
             success:    true,
             vendor:     vendorData,
-            combos,
+            combos,     // return separately too for legacy frontend support
             sections:   populatedSections,
             unsectioned,
         });
