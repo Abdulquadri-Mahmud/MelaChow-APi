@@ -1,5 +1,12 @@
 import express from "express";
 import * as riderController from "../controller/rider.controller.js";
+import {
+    resolveAccountName,
+    saveBankAccount,
+    getRiderBankAccount,
+    initiateRiderWithdrawal,
+    getRiderWithdrawalHistory,
+} from "../controller/rider/riderWithdrawal.controller.js";
 import authVendor from "../middleware/vendor.middleware.js";
 import { requireRiderAuth } from "../middleware/riderAuth.middleware.js";
 import { adminAuth } from "../middleware/adminAuth.js";
@@ -28,6 +35,18 @@ router.patch("/riders/:riderId/picked-up", requireRiderAuth, riderController.mar
 router.post("/riders/:riderId/request-delivery-otp", requireRiderAuth, riderController.requestDeliveryOTP);
 router.post("/riders/:riderId/confirm-delivery", requireRiderAuth, riderController.confirmDelivery);
 router.get("/riders/:riderId/wallet", requireRiderAuth, riderController.getRiderWallet);
+
+// ── Rider payout routes ───────────────────────────────────────────────────────
+// Step 1: Resolve account name before saving (lets rider confirm before committing)
+router.get("/riders/:riderId/payout/resolve-account", requireRiderAuth, resolveAccountName);
+// Step 2a: Save bank account and create Paystack recipient
+router.post("/riders/:riderId/payout/bank-account", requireRiderAuth, saveBankAccount);
+// Step 2b: Fetch saved bank account details
+router.get("/riders/:riderId/payout/bank-account", requireRiderAuth, getRiderBankAccount);
+// Step 3: Initiate withdrawal to bank account
+router.post("/riders/:riderId/payout/withdraw", requireRiderAuth, initiateRiderWithdrawal);
+// History: Fetch past withdrawals
+router.get("/riders/:riderId/payout/history", requireRiderAuth, getRiderWithdrawalHistory);
 router.get("/riders/:riderId/orders", requireRiderAuth, riderController.getRiderOrders);
 router.get("/riders/:riderId/orders/:orderId", requireRiderAuth, riderController.getRiderOrderDetails);
 router.patch("/riders/:riderId", requireRiderAuth, riderController.riderUpdateSelf);
