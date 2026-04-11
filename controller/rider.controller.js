@@ -485,8 +485,8 @@ export const requestDeliveryOTP = async (req, res, next) => {
             message: result.method === 'sms'
                 ? 'OTP sent to customer via SMS'
                 : result.method === 'email'
-                    ? 'OTP sent to customer via email'
-                    : 'Dev mode: use code 123456',
+                    ? 'OTP sent to customer via Email'
+                    : 'System is in Bypass Mode — use code 123456',
             method: result.method,
         });
 

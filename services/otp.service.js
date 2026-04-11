@@ -75,7 +75,7 @@ export const sendDeliveryOTP = async (orderId, customerPhone, customerUserId) =>
     const redisKey = `${OTP_REDIS_PREFIX}${orderId}`;
 
     // ── Development bypass ────────────────────────────────────────────────────
-    if (process.env.NODE_ENV !== 'production' || process.env.BYPASS_OTP === 'true') {
+    if (process.env.BYPASS_OTP === 'true') {
         await storeOtpPayload(redisKey, {
             method: 'dev',
             pinId: null,
