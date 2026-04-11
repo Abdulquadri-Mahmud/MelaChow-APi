@@ -142,6 +142,12 @@ const NOTIFICATION_CONFIGS = {
         requireInteraction: true,
         vibrate: [500, 200, 500, 200, 500]
     },
+    vendor_rider_assigned: {
+        title: 'Rider Assigned',
+        getBody: (data) => `Rider ${data.riderName || 'a driver'} has been assigned to pick up Order #${data.orderId}.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: false
+    },
     system: {
         title: 'Platform System Alert',
         getBody: (data) => data.message || 'New system update or administrative message.',
