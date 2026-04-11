@@ -1,4 +1,4 @@
-import { sendMail } from "./mailer.js";
+import { sendMail } from "../config/mailer.js";
 
 /**
  * Sends styled MelaChow Vendor email for login, password reset, or resend OTP

@@ -103,9 +103,11 @@ export const registerRiderSocketHandlers = (io, socket) => {
             });
             await order.save();
 
-            await VendorOrder.findOneAndUpdate(
-                { userOrderId: order._id, restaurantId: rider.vendorId },
-                { orderStatus: "out_for_delivery" }
+            // updateMany keyed on userOrderId only — works for admin-managed riders
+            // whose rider.vendorId is null. Matches the fix applied to rider.service.js.
+            await VendorOrder.updateMany(
+                { userOrderId: order._id },
+                { $set: { orderStatus: "out_for_delivery" } }
             );
 
             // ✅ FIX: Also update rider status to on_delivery
@@ -127,56 +129,26 @@ export const registerRiderSocketHandlers = (io, socket) => {
         }
     });
 
-    socket.on(SOCKET_EVENTS.RIDER_DELIVERED, async ({ riderId, orderId } = {}) => {
-        try {
-            if (!riderId || !orderId) throw new Error("riderId and orderId are required");
-
-            const order = await Order.findById(orderId);
-            if (!order) throw new Error("Order not found");
-            if (order.riderId?.toString() !== riderId) throw new Error("Rider not assigned to this order");
-
-            const rider = await Rider.findById(riderId);
-            if (!rider) throw new Error("Rider not found");
-
-            order.orderStatus = "delivered";
-            order.statusLog.push({
-                status: "delivered",
-                changedBy: "rider",
-                timestamp: new Date()
-            });
-            await order.save();
-
-            await VendorOrder.findOneAndUpdate(
-                { userOrderId: order._id, restaurantId: rider.vendorId },
-                { orderStatus: "delivered" }
-            );
-
-            // ✅ NOTE: freeUp() sets status=available, currentOrderId=null,
-            // totalDeliveries+1. It does NOT credit the wallet — wallet payout
-            // is handled by the REST markDelivered endpoint which runs inside
-            // a transaction. If you use this socket path for delivery confirmation
-            // instead of the REST endpoint, the rider's wallet will not be credited.
-            // Recommendation: always use the REST endpoint for delivery confirmation.
-            await rider.freeUp();
-
-            const statusPayload = buildPayload.statusUpdate({
-                orderId: order._id,
-                status: "delivered",
-                changedBy: "rider",
-                message: "Order has been delivered",
-                riderName: rider.name
-            });
-
-            const deliveredPayload = buildPayload.orderDelivered({
-                orderId: order._id,
-                riderName: rider.name
-            });
-
-            io.to(SOCKET_ROOMS.customer(order.userId)).emit(SOCKET_EVENTS.ORDER_DELIVERED, deliveredPayload);
-            io.to(SOCKET_ROOMS.vendor(rider.vendorId)).emit(SOCKET_EVENTS.ORDER_STATUS_UPDATE, statusPayload);
-
-        } catch (error) {
-            socket.emit(SOCKET_EVENTS.ERROR, { message: error.message });
-        }
+    // RIDER_DELIVERED socket event is intentionally disabled.
+    //
+    // Delivery confirmation requires OTP verification — the customer must
+    // provide a 6-digit code to the rider, which is validated server-side
+    // before the order is marked delivered. This cannot be safely enforced
+    // in a socket handler.
+    //
+    // The correct flow is:
+    //   1. Rider taps "Delivered" → POST /riders/:riderId/request-delivery-otp
+    //   2. Customer receives OTP via email
+    //   3. Rider submits code → POST /riders/:riderId/confirm-delivery
+    //   4. Server verifies OTP, then calls markDelivered (payout + escrow + status)
+    //
+    // Any client emitting this socket event receives an error directing them
+    // to the REST endpoint. No order state is written.
+    socket.on(SOCKET_EVENTS.RIDER_DELIVERED, ({ riderId, orderId } = {}) => {
+        socket.emit(SOCKET_EVENTS.ERROR, {
+            message: 'Delivery confirmation must go through the REST API to enforce customer OTP verification. Use POST /riders/:riderId/confirm-delivery.',
+            code: 'USE_REST_ENDPOINT',
+        });
+        console.warn(`⚠️ Rider ${riderId} attempted socket delivery confirmation for order ${orderId} — blocked. REST endpoint required.`);
     });
 };

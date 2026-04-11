@@ -1,73 +1,147 @@
 // import axios from 'axios'; // Removed Termii dependency
+import mongoose from 'mongoose';
 import { safeRedisSet, safeRedisGet } from '../config/redis.js';
 import { sendMail } from '../config/mailer.js';
 import User from '../model/user.model.js';
 import logger from '../config/logger.js';
 
+// MongoDB OTP fallback collection — used when Redis is unavailable.
+// TTL index on expiresAt auto-deletes documents after 10 minutes.
+// Defined inline to avoid a separate model file for a simple structure.
+const otpFallbackSchema = new mongoose.Schema({
+    redisKey:  { type: String, required: true, unique: true },
+    data:      { type: String, required: true }, // JSON stringified OTP payload
+    expiresAt: { type: Date,   required: true, index: { expires: 0 } },
+});
+const OtpFallback = mongoose.models.OtpFallback ||
+    mongoose.model('OtpFallback', otpFallbackSchema);
+
 const OTP_TTL_SECONDS = 600; // 10 minutes
 const OTP_REDIS_PREFIX = 'delivery_otp:';
 
 /**
- * Send delivery confirmation OTP to customer.
- * Primary: Nodemailer email
- * Dev: Store fixed OTP 123456 in Redis, no external call
- *
- * @param {string} orderId - MongoDB Order _id
- * @param {string} customerPhone - Phone number from order (Param retained for backward compatibility)
- * @param {string} customerUserId - Order userId for email delivery
- * @returns {{ success: boolean, method: 'email'|'dev', pinId?: string }}
+ * Store OTP payload with Redis primary and MongoDB fallback.
+ * Called by sendDeliveryOTP. Guarantees OTP is persisted even
+ * when Redis free tier is unavailable.
  */
+const storeOtpPayload = async (redisKey, payload) => {
+    const serialized = JSON.stringify(payload);
+    const stored = await safeRedisSet(redisKey, serialized, { EX: OTP_TTL_SECONDS });
+
+    if (!stored) {
+        // Redis unavailable — persist to MongoDB with TTL index
+        const expiresAt = new Date(Date.now() + OTP_TTL_SECONDS * 1000);
+        await OtpFallback.findOneAndUpdate(
+            { redisKey },
+            { redisKey, data: serialized, expiresAt },
+            { upsert: true, new: true }
+        );
+        logger.warn({ redisKey }, '⚠️ Redis unavailable — OTP stored in MongoDB fallback');
+    }
+};
+
+/**
+ * Retrieve OTP payload from Redis, falling back to MongoDB.
+ */
+const retrieveOtpPayload = async (redisKey) => {
+    const fromRedis = await safeRedisGet(redisKey);
+    if (fromRedis) return fromRedis;
+
+    // Redis miss — check MongoDB fallback
+    const fallback = await OtpFallback.findOne({ redisKey });
+    if (!fallback) return null;
+
+    // Check manual expiry in case TTL index hasn't fired yet
+    if (fallback.expiresAt < new Date()) {
+        await OtpFallback.deleteOne({ redisKey });
+        return null;
+    }
+
+    logger.info({ redisKey }, '📦 OTP retrieved from MongoDB fallback');
+    return fallback.data;
+};
+
+/**
+ * Delete OTP payload from both stores after successful verification.
+ */
+const deleteOtpPayload = async (redisKey) => {
+    // Redis delete — safeRedisSet with immediate expiry is not a true delete,
+    // so we overwrite with a 1-second TTL to flush it as fast as possible
+    await safeRedisSet(redisKey, JSON.stringify({ expired: true }), { EX: 1 });
+    await OtpFallback.deleteOne({ redisKey }).catch(() => null);
+};
+
 export const sendDeliveryOTP = async (orderId, customerPhone, customerUserId) => {
     const redisKey = `${OTP_REDIS_PREFIX}${orderId}`;
 
-    // Development bypass
+    // ── Development bypass ────────────────────────────────────────────────────
     if (process.env.NODE_ENV !== 'production' || process.env.BYPASS_OTP === 'true') {
-        await safeRedisSet(redisKey, JSON.stringify({
+        await storeOtpPayload(redisKey, {
             method: 'dev',
             pinId: null,
             otp: '123456',
-        }), { EX: OTP_TTL_SECONDS });
-
-        logger.info({ orderId }, 'Dev mode: OTP bypass active - use 123456');
+        });
+        logger.info({ orderId }, 'Dev mode: OTP bypass active — use 123456');
         return { success: true, method: 'dev' };
     }
 
-    // Primary: Nodemailer email
+    // ── Production: Email via Resend ──────────────────────────────────────────
     try {
         const user = await User.findById(customerUserId).select('email firstname');
         if (!user?.email) throw new Error('Customer email not found');
 
-        // Generate a local 6-digit OTP for email delivery
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
-        await safeRedisSet(redisKey, JSON.stringify({
+        // Store OTP before sending email — if email fails, OTP was never exposed
+        await storeOtpPayload(redisKey, {
             method: 'email',
             pinId: null,
             otp,
-        }), { EX: OTP_TTL_SECONDS });
+        });
 
         await sendMail({
             to: user.email,
-            subject: 'MelaChow Delivery Confirmation Code',
+            subject: 'Your MelaChow Delivery Code',
             html: `
-                <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto;">
-                    <h2 style="color: #f97316;">MelaChow Delivery Confirmation</h2>
-                    <p>Hi ${user.firstname || 'there'},</p>
-                    <p>Your rider is at your location. Please provide them with this code to confirm delivery:</p>
-                    <div style="background: #f3f4f6; border-radius: 12px; padding: 24px; text-align: center; margin: 24px 0;">
-                        <span style="font-size: 36px; font-weight: bold; letter-spacing: 8px; color: #111827;">${otp}</span>
+                <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 480px; margin: 0 auto; background: #ffffff;">
+                    <div style="background: #f97316; padding: 24px; text-align: center; border-radius: 8px 8px 0 0;">
+                        <h1 style="color: #ffffff; margin: 0; font-size: 22px;">MelaChow</h1>
+                        <p style="color: #ffe6d1; margin: 4px 0 0; font-size: 14px;">Delivery Confirmation</p>
                     </div>
-                    <p style="color: #6b7280; font-size: 14px;">This code expires in 10 minutes. Do not share it with anyone other than your rider.</p>
+                    <div style="padding: 32px 24px;">
+                        <p style="color: #111827; font-size: 15px; margin: 0 0 8px;">
+                            Hi ${user.firstname || 'there'},
+                        </p>
+                        <p style="color: #374151; font-size: 14px; margin: 0 0 24px;">
+                            Your rider is at your location. Give them this code to confirm delivery:
+                        </p>
+                        <div style="background: #f3f4f6; border-radius: 12px; padding: 28px; text-align: center; margin: 0 0 24px;">
+                            <span style="font-size: 40px; font-weight: 900; letter-spacing: 10px; color: #111827;">
+                                ${otp}
+                            </span>
+                        </div>
+                        <p style="color: #6b7280; font-size: 13px; margin: 0;">
+                            This code expires in <strong>10 minutes</strong>. 
+                            Only share it with your rider — never with anyone else.
+                        </p>
+                    </div>
+                    <div style="background: #f9fafb; border-radius: 0 0 8px 8px; padding: 16px; text-align: center;">
+                        <p style="color: #9ca3af; font-size: 12px; margin: 0;">
+                            © ${new Date().getFullYear()} MelaChow. All rights reserved.
+                        </p>
+                    </div>
                 </div>
             `,
         });
 
-        logger.info({ orderId, email: user.email }, 'Delivery OTP sent via email');
+        logger.info({ orderId, email: user.email }, '✅ Delivery OTP sent via Resend email');
         return { success: true, method: 'email' };
 
-    } catch (emailErr) {
-        logger.error({ orderId, error: emailErr.message }, 'Email OTP delivery failed');
-        throw new Error('Failed to send delivery OTP via email. Please try again.');
+    } catch (err) {
+        // Clean up stored OTP if email failed — don't leave an undelivered code
+        await deleteOtpPayload(redisKey).catch(() => null);
+        logger.error({ orderId, error: err.message }, '❌ Delivery OTP email failed');
+        throw new Error('Failed to send delivery OTP. Please check the customer has a valid email and try again.');
     }
 };
 
@@ -82,7 +156,8 @@ export const sendDeliveryOTP = async (orderId, customerPhone, customerUserId) =>
 export const verifyDeliveryOTP = async (orderId, otp) => {
     const redisKey = `${OTP_REDIS_PREFIX}${orderId}`;
 
-    const stored = await safeRedisGet(redisKey);
+    // Retrieve from Redis first, MongoDB fallback second
+    const stored = await retrieveOtpPayload(redisKey);
     if (!stored) {
         throw new Error('OTP expired or not found. Please request a new code.');
     }
@@ -94,30 +169,35 @@ export const verifyDeliveryOTP = async (orderId, otp) => {
         throw new Error('Invalid OTP session data. Please request a new code.');
     }
 
-    const { method, pinId, otp: storedOtp } = otpData;
+    const { method, otp: storedOtp } = otpData;
 
-    // â”€â”€ Dev bypass â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Dev bypass ────────────────────────────────────────────────────────────
     if (method === 'dev') {
         const verified = otp === '123456';
         if (verified) {
-            await safeRedisSet(redisKey, JSON.stringify({ ...otpData, verified: true }), { EX: 60 });
+            // Delete immediately — one-time use only
+            await deleteOtpPayload(redisKey);
         }
         return { verified };
     }
 
-    // â”€â”€ Email/local OTP verification â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+    // ── Email OTP verification ────────────────────────────────────────────────
     if (method === 'email' && storedOtp) {
         const verified = otp === storedOtp;
         if (verified) {
-            await safeRedisSet(redisKey, JSON.stringify({ ...otpData, verified: true }), { EX: 60 });
-            logger.info({ orderId }, 'Delivery OTP verified via email');
+            // Delete immediately after first successful verification.
+            // Prevents the same code being accepted a second time within TTL window.
+            await deleteOtpPayload(redisKey);
+            logger.info({ orderId }, '✅ Delivery OTP verified and invalidated');
         }
         return { verified };
     }
 
-    // Backwards compatibility handler for any lingering Termii OTPs in-flight right now
+    // ── Legacy SMS handler ────────────────────────────────────────────────────
+    // Termii is no longer active. Any in-flight SMS OTPs from before cutover
+    // will hit this branch and get a clear error directing rider to resend.
     if (method === 'sms') {
-        throw new Error('SMS verification is no longer supported. Please ask the rider to click "Resend Code" to receive a new OTP via Email.');
+        throw new Error('SMS verification is no longer supported. Please tap "Resend Code" for a new OTP via email.');
     }
 
     throw new Error('Invalid OTP session state. Please request a new code.');
