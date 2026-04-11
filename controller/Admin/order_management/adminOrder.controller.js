@@ -295,11 +295,32 @@ export const adminOverrideOrderStatus = async (req, res) => {
 
         await order.save();
 
-        // Update all VendorOrders
         await VendorOrder.updateMany(
             { userOrderId: order._id },
             { $set: { orderStatus: status } }
         );
+
+        // ✅ Notify Customer & Vendors (Push/In-app)
+        try {
+            const { sendOrderNotification, sendVendorNotification } = await import("../../../services/notification.service.js");
+            
+            // 1. Notify Customer
+            await sendOrderNotification(order.userId, order.orderId, status, {
+                orderDatabaseId: order._id
+            });
+
+            // 2. Notify all Vendors in this order
+            const vendorOrders = await VendorOrder.find({ userOrderId: order._id });
+            for (const vo of vendorOrders) {
+                await sendVendorNotification(vo.restaurantId, order._id, "system", {
+                    orderId: order.orderId,
+                    title: `Status Updated by Admin`,
+                    message: `The status of Order #${order.orderId} has been updated to "${status}" by platform administration.`
+                });
+            }
+        } catch (notifErr) {
+            console.warn('⚠️ Admin override notifications failed:', notifErr.message);
+        }
 
         res.status(200).json({
             success: true,
@@ -719,11 +740,10 @@ export const assignRiderToOrder = async (req, res) => {
             await sendVendorNotification(
                 vendorOrder.restaurantId,
                 masterOrder.orderId || masterOrder._id,
-                'vendor_new_order',
+                'vendor_rider_assigned',
                 {
                     orderDatabaseId: vendorOrder._id,
-                    customerName: 'Rider Assigned',
-                    message: `Rider ${rider.name} has been assigned`,
+                    riderName: rider.name
                 }
             );
             console.log('✅ Push: Vendor notification sent');

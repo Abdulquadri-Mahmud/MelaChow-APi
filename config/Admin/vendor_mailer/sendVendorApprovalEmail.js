@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
-import { wrapLayout } from '../../services/emailTemplate.service.js';
+import { wrapLayout } from '../../../services/emailTemplate.service.js';
 
 dotenv.config();
 

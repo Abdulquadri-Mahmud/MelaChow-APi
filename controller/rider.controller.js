@@ -40,7 +40,9 @@ export const getSingleVendorRider = async (req, res, next) => {
 export const getAvailableRiders = async (req, res, next) => {
     try {
         const { vendorId } = req.params;
-        const riders = await riderService.getAvailableRiders(vendorId);
+        // If it's a vendor-managed fleet request, return all active riders
+        // Vendors manually manage their fleet and need to see all riders for manual assignment.
+        const riders = await riderService.getRidersByVendor(vendorId, { isActive: true });
         res.status(200).json({ success: true, count: riders.length, data: riders });
     } catch (error) {
         next(error);
@@ -88,15 +90,35 @@ export const assignRider = async (req, res, next) => {
 
         // ✅ Use unified notification service for real-time + push capability
         try {
-            const { sendRiderNotification } = await import("../services/notification.service.js");
+            const { 
+                sendRiderNotification, 
+                sendVendorNotification, 
+                sendOrderNotification 
+            } = await import("../services/notification.service.js");
+
+            // 1. Notify Rider
             await sendRiderNotification(rider._id, order._id, "order_assigned", {
                 restaurantName: req.vendor.storeName,
                 orderDatabaseId: order._id,
                 payout: 600
             });
-            console.log(`✅ Assignment notification + push sent to rider: ${rider._id}`);
+
+            // 2. Notify Vendor (Push)
+            await sendVendorNotification(vendorId, order._id, "vendor_rider_assigned", {
+                orderId: order.orderId,
+                riderName: rider.name,
+                orderDatabaseId: order._id
+            });
+
+            // 3. Notify Customer (Push)
+            await sendOrderNotification(order.userId, order._id, "rider_assigned", {
+                orderId: order.orderId,
+                restaurantName: req.vendor.storeName
+            });
+
+            console.log(`✅ Assignment notifications + push sent to all parties for Order: ${order.orderId}`);
         } catch (notifErr) {
-            console.warn('⚠️ Push/Notification service failed for rider:', notifErr.message);
+            console.warn('⚠️ Push/Notification service failed for rider assignment:', notifErr.message);
         }
 
         res.status(200).json({
@@ -391,9 +413,10 @@ export const markPickedUp = async (req, res, next) => {
 
             // 2. Vendor push/in-app
             if (pickupVendorId) {
-                await sendVendorNotification(pickupVendorId, order._id, "order_dispatched", {
+                await sendVendorNotification(pickupVendorId, order._id, "system", {
                     orderId: order.orderId || order._id,
-                    message: `Rider ${req.rider.name} has picked up the order and is on the way!`
+                    title: 'Order Picked Up',
+                    message: `Rider ${req.rider.name} has picked up the order and is on the way to the customer.`
                 });
             }
 

@@ -427,6 +427,23 @@ export const completeOrderFulfillment = async (orderId) => {
       );
 
 
+      /* -------------------------------
+       * Notify Vendor (Push/In-app)
+       * ------------------------------- */
+      try {
+        const { sendVendorNotification } = await import("../../services/notification.service.js");
+        const OrderModel = (await import("../../model/order/Order.js")).default;
+        const fullOrder = await OrderModel.findById(order._id).populate('userId', 'firstname lastname name');
+        
+        await sendVendorNotification(vendorId, order._id, 'vendor_new_order', {
+          orderId: order.orderId,
+          orderDatabaseId: createdVendorOrder._id,
+          customerName: fullOrder.userId?.name || fullOrder.userId?.firstname || "a customer",
+          location: order.deliveryAddress?.addressLine || order.deliveryAddress?.address || "specified location"
+        });
+      } catch (notifErr) {
+        console.warn('⚠️ Vendor fulfillment notification failed:', notifErr.message);
+      }
     }
 
     if (adminWallet) {
@@ -1396,6 +1413,20 @@ export const updateVendorOrderStatus = async (req, res) => {
     // ✅ Sync parent order status
     await syncParentOrderStatus(vendorOrder.userOrderId);
 
+    // ✅ Notify Customer (Push/In-app)
+    try {
+        const { sendOrderNotification } = await import("../../services/notification.service.js");
+        const ParentOrder = await Order.findById(vendorOrder.userOrderId);
+        if (ParentOrder) {
+            await sendOrderNotification(ParentOrder.userId, ParentOrder.orderId, status, {
+                orderDatabaseId: ParentOrder._id,
+                restaurantName: vendor.storeName || "the restaurant"
+            });
+        }
+    } catch (notifErr) {
+        console.warn('⚠️ Status transition notification failed:', notifErr.message);
+    }
+
     console.log(`✅ Status updated: ${previousStatus} → ${status}`);
 
     // ✅ Populate order for notifications
@@ -1899,6 +1930,7 @@ export const cancelOrder = async (req, res) => {
         try {
             const vendorOrders = await VendorOrder.find({ userOrderId: orderId });
             for (const vendorOrder of vendorOrders) {
+                // Socket
                 emitOrderStatusUpdate(
                   {
                     userId: userId,
@@ -1908,6 +1940,17 @@ export const cancelOrder = async (req, res) => {
                   },
                   "pending"
                 );
+
+                // Push
+                try {
+                    const { sendVendorNotification } = await import("../../services/notification.service.js");
+                    await sendVendorNotification(vendorOrder.restaurantId, order._id, "vendor_order_cancelled", {
+                        orderId: order.orderId,
+                        customerName: "the customer"
+                    });
+                } catch (pushErr) {
+                    console.warn('⚠️ Cancellation push failed for vendor:', pushErr.message);
+                }
             }
         } catch (notifErr) { 
             console.error('❌ Failed to emit cancellation event to vendors:', notifErr.message); 
