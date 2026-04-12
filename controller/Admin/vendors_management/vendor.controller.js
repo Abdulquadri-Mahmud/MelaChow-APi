@@ -25,7 +25,7 @@ export const approveVendor = async (req, res) => {
     const { vendorId } = req.query;
     const { state, city, createLocation = false } = req.body;
 
-    const vendor = await vendorModel.findById(vendorId);
+    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails");
     if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
 
     // ========================================
@@ -115,7 +115,7 @@ export const rejectVendor = async (req, res) => {
   try {
     const { vendorId, reason } = req.query;
 
-    const vendor = await vendorModel.findById(vendorId);
+    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails");
     if (!vendor)
       return res.status(404).json({ success: false, message: "Vendor not found" });
 
@@ -163,7 +163,7 @@ export const suspendVendor = async (req, res) => {
     const { vendorId, reason } = req.query;
 
     // Find vendor
-    const vendor = await vendorModel.findById(vendorId);
+    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails");
     if (!vendor)
       return res.status(404).json({ success: false, message: "Vendor not found" });
 
@@ -219,7 +219,7 @@ export const reactivateVendor = async (req, res) => {
   try {
     const { vendorId } = req.query;
 
-    const vendor = await vendorModel.findById(vendorId);
+    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails");
     if (!vendor)
       return res.status(404).json({ success: false, message: "Vendor not found" });
 
@@ -278,6 +278,7 @@ export const getAllVendors = async (req, res) => {
     if (isApproved !== undefined) filters.isApproved = isApproved === "true";
 
     const vendors = await vendorModel.find(filters)
+      .select("+payoutDetails")
       .populate("wallet")
       .populate("foods")
       .sort({ createdAt: -1 })
@@ -297,6 +298,7 @@ export const getVendor = async (req, res) => {
       return res.status(400).json({ success: false, message: "vendorId is required" });
 
     const vendor = await vendorModel.findById(vendorId)
+      .select("+payoutDetails")
       .populate("wallet")
       .populate({
         path: "foods",
@@ -327,7 +329,7 @@ export const toggleVendorStatus = async (req, res) => {
     if (!vendorId)
       return res.status(400).json({ success: false, message: "vendorId is required" });
 
-    const vendor = await vendorModel.findById(vendorId);
+    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails");
     if (!vendor)
       return res.status(404).json({ success: false, message: "Vendor not found" });
 
