@@ -1,15 +1,4 @@
-﻿// config/Admin/adminRejectVendor.mailer.js
-import nodemailer from "nodemailer";
-import dotenv from "dotenv";
-dotenv.config();
-
-const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: { 
-        user: process.env.EMAIL_USER, 
-        pass: process.env.EMAIL_PASS 
-    },
-});
+import { sendMail } from '../../../config/mailer.js';
 
 export const sendVendorRejectionEmail = async (vendor, reason) => {
   const subject = "Your Vendor Application Was Rejected";
@@ -29,11 +18,6 @@ export const sendVendorRejectionEmail = async (vendor, reason) => {
       </div>
     </div>
   `;
-  await transporter.sendMail({
-    from: `"MelaChow" <${process.env.EMAIL_USER}>`,
-    to: vendor.email,
-    subject,
-    html,
-  });
+  
+  await sendMail({ to: vendor.email, subject, html });
 };
-

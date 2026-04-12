@@ -1,15 +1,4 @@
-﻿// config/Admin/adminSuspendVendor.mailer.js
-import nodemailer from "nodemailer";
-import dotenv from "dotenv";
-dotenv.config();
-
-const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: { 
-        user: process.env.EMAIL_USER, 
-        pass: process.env.EMAIL_PASS 
-    },
-});
+import { sendMail } from '../../../config/mailer.js';
 
 export const sendVendorSuspensionEmail = async (vendor, reason) => {
   const subject = "Your Vendor Account Has Been Suspended";
@@ -19,7 +8,7 @@ export const sendVendorSuspensionEmail = async (vendor, reason) => {
         <!-- Header -->
         <div style="background-color: #ff6600; padding: 20px; text-align: center;">
           <h1 style="color: #ffffff; margin: 0; font-size: 28px;">MelaChow Vendor</h1>
-          <p style="color: #ffe6d1; margin: 5px 0;">Manage your store ðŸ´</p>
+          <p style="color: #ffe6d1; margin: 5px 0;">Manage your store 🍴</p>
         </div>
 
         <!-- Body -->
@@ -50,17 +39,12 @@ export const sendVendorSuspensionEmail = async (vendor, reason) => {
 
         <!-- Footer -->
         <div style="background-color: #f9f9f9; padding: 20px; text-align: center; font-size: 13px; color: #666;">
-          <p>Â© ${new Date().getFullYear()} MelaChow. All rights reserved.</p>
+          <p>© ${new Date().getFullYear()} MelaChow. All rights reserved.</p>
           <p>123 Food Street, Lagos, Nigeria</p>
         </div>
       </div>
     </div>
   `;
-  await transporter.sendMail({
-    from: `"MelaChow" <${process.env.EMAIL_USER}>`,
-    to: vendor.email,
-    subject,
-    html,
-  });
-};
 
+  await sendMail({ to: vendor.email, subject, html });
+};

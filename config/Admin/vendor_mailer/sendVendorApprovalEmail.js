@@ -1,16 +1,5 @@
-import nodemailer from 'nodemailer';
-import dotenv from 'dotenv';
+import { sendMail } from '../../../config/mailer.js';
 import { wrapLayout } from '../../../services/emailTemplate.service.js';
-
-dotenv.config();
-
-const transporter = nodemailer.createTransport({
-  service: 'gmail', // or your email service
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
 
 export const sendVendorApprovalEmail = async (vendor) => {
   const subject = "Your Vendor Account Has Been Approved";
@@ -29,11 +18,6 @@ export const sendVendorApprovalEmail = async (vendor) => {
     'Onboarding Complete'
   );
 
-  await transporter.sendMail({
-    from: `"MelaChow" <${process.env.EMAIL_USER}>`,
-    to: vendor.email,
-    subject,
-    html,
-  });
+  await sendMail({ to: vendor.email, subject, html });
 };
 

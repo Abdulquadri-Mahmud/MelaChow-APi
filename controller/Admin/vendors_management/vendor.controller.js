@@ -75,14 +75,17 @@ export const approveVendor = async (req, res) => {
     // ========================================
     // APPROVE VENDOR
     // ========================================
+    console.log("✅ [Approval Workflow] About to save vendor...");
     vendor.isApproved = true;
     vendor.verified = true; // Ensure they are marked verified too
     await vendor.save();
+    console.log("✅ [Approval Workflow] Vendor saved - firing background notification...");
 
     // Send approval email (Non-blocking)
     sendVendorApprovalEmail(vendor).catch((emailError) => {
       console.error("Approval email failed (non-blocking):", emailError.message);
     });
+    console.log("✅ [Approval Workflow] Background task triggered - sending response.");
 
     // Log action
     await ActivityLog.create({
