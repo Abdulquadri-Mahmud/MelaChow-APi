@@ -434,6 +434,7 @@ export const markDelivered = async (orderId, riderId) => {
                 }
 
                 riderWallet.balance = Number((riderWallet.balance + riderPayout).toFixed(2));
+                riderWallet.totalEarned = Number(((riderWallet.totalEarned || 0) + riderPayout).toFixed(2));
                 riderWallet.transactions.push({
                     type: "credit",
                     amount: riderPayout,

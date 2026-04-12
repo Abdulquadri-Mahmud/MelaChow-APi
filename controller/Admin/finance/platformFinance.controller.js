@@ -76,40 +76,26 @@ export const getRevenueSummary = async (req, res) => {
             }
         ]);
 
-        // 4. Platform Delivery Revenue (Platform-Managed Vendors only)
-        const platformDeliveryStats = await VendorOrder.aggregate([
-            {
-                $lookup: {
-                    from: "orders",
-                    localField: "userOrderId",
-                    foreignField: "_id",
-                    as: "parentOrder"
-                }
-            },
-            { $unwind: "$parentOrder" },
-            {
-                $lookup: {
-                    from: "vendors",
-                    localField: "restaurantId",
-                    foreignField: "_id",
-                    as: "vendor"
-                }
-            },
-            { $unwind: "$vendor" },
-            {
-                $match: {
-                    "parentOrder.paymentStatus": "paid",
-                    "vendor.deliveryManagedBy": "admin",
-                    ...dateFilter
-                }
-            },
-            {
-                $group: {
-                    _id: null,
-                    totalPlatformDeliveryRevenue: { $sum: "$deliveryShare" }
-                }
-            }
-        ]);
+        // 4. Platform Delivery Spread Revenue
+        // Revenue comes from the spread between customer delivery fee (₦1,000)
+        // and rider fixed payout (₦600). The ₦400 spread is recorded as
+        // 'delivery_spread' transactions in the admin wallet.
+        // delivery_spread entries use amount: 0 (informational) so we extract
+        // the actual spread from the description field.
+        let totalPlatformDeliveryRevenue = 0;
+        if (adminWallet && adminWallet.transactions) {
+            adminWallet.transactions.forEach(tx => {
+                if (tx.transactionType !== 'delivery_spread') return;
+                const txDate = new Date(tx.date);
+                const inRange = (!startDate || txDate >= new Date(startDate)) &&
+                    (!endDate || txDate <= new Date(endDate));
+                if (!inRange) return;
+                // Extract spread amount from description: "Delivery spread retained ₦400 for Order..."
+                const match = tx.description?.match(/retained\s+₦?([\d.]+)/);
+                if (match) totalPlatformDeliveryRevenue += Number(match[1]) || 0;
+            });
+        }
+        const platformDeliveryStats = [{ totalPlatformDeliveryRevenue }];
 
         // 5. Active Escrow Holdings
         const activeEscrowStats = await VendorOrder.aggregate([
@@ -137,10 +123,15 @@ export const getRevenueSummary = async (req, res) => {
         ]);
 
         const commEarned = commissionStats[0]?.totalCommissionEarned || 0;
-        const delivRevenue = platformDeliveryStats[0]?.totalPlatformDeliveryRevenue || 0;
+        const delivRevenue = totalPlatformDeliveryRevenue;
         const totalEscrowHeld = activeEscrowStats[0]?.totalEscrowHeld || 0;
         const currentPlatformBalance = adminWallet?.balance || 0;
+        
+        // availableBalance = platform balance minus funds committed to vendor escrow.
+        // Delivery fees and spread are platform revenue — not committed to anyone.
+        // This gives admin a clear view of what they can actually withdraw or spend.
         const availableBalance = Math.max(0, currentPlatformBalance - totalEscrowHeld);
+        const totalDeliverySpreadEarned = totalPlatformDeliveryRevenue; // alias for clarity in response
 
         res.status(200).json({
             success: true,
@@ -148,14 +139,23 @@ export const getRevenueSummary = async (req, res) => {
                 currentPlatformBalance,
                 totalEscrowHeld,
                 availableBalance,
-                totalCommissionEarned: commEarned,
-                totalPlatformDeliveryRevenue: delivRevenue,
+                // Revenue breakdown — admin sees exactly where money comes from
+                totalCommissionEarned: commEarned,         // ₦0 currently (commission disabled)
+                totalDeliverySpreadEarned,                  // ₦400 per platform-managed delivery
                 combinedPlatformRevenue: commEarned + delivRevenue,
+                // Order volume stats
                 totalOrderRevenue: orderStats[0]?.totalOrderRevenue || 0,
                 totalDeliveryFeesCollected: orderStats[0]?.totalDeliveryFeesCollected || 0,
+                // Wallet transaction totals (excludes zero-amount spread entries)
                 totalCredits,
                 totalDebits,
-                period: { startDate, endDate }
+                period: { startDate, endDate },
+                // Explanation for admin dashboard tooltip
+                revenueModel: {
+                    commissionRate: '0% (disabled)',
+                    spreadPerOrder: '₦400 (platform-managed delivery only)',
+                    riderPayout: '₦600 fixed per platform delivery'
+                }
             }
         });
 
@@ -291,7 +291,9 @@ export const getTransactionLedger = async (req, res) => {
             });
         }
 
-        let allTransactions = [...wallet.transactions];
+        // Exclude zero-amount entries — these are informational delivery_spread records
+        // used for reporting only. Including them creates confusing ₦0 debit rows in the ledger.
+        let allTransactions = wallet.transactions.filter(tx => tx.amount > 0);
 
         // 1. Compute Full History for Running Balance
         allTransactions.sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -436,7 +438,7 @@ export const getVendorBreakdown = async (req, res) => {
                     deliveryShareGenerated: 1
                 }
             },
-            { $sort: { commissionPaid: -1 } },
+            { $sort: { orderCount: -1 } }, // commission is 0 for all vendors currently — sort by volume instead
             {
                 $facet: {
                     vendors: [{ $skip: skip }, { $limit: parseInt(limit) }],

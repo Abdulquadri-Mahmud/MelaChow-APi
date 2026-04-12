@@ -140,8 +140,11 @@ export const initiateWithdrawal = async (req, res) => {
       // ROLLBACK: reverse wallet debit
       wallet.balance = Number((wallet.balance + amount).toFixed(2));
       wallet.totalWithdrawn = Number((wallet.totalWithdrawn - amount).toFixed(2));
-      // Remove the debit transaction we just pushed
-      wallet.transactions.pop();
+      // Remove only the specific withdrawal debit — never use pop() which removes the wrong
+      // transaction if any concurrent credit landed between the debit save and this rollback
+      wallet.transactions = wallet.transactions.filter(
+          t => !t.description?.includes(paystackReference)
+      );
       await wallet.save();
 
       // Mark withdrawal as failed
