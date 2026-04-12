@@ -104,7 +104,7 @@ export const registerVendor = async (req, res) => {
             bank_code: payoutDetails.bankCode
           });
         } catch (err) {
-          console.error("Failed to create Paystack recipient during initial registration:", err.message);
+          // Failed to create recipient
         }
       }
 
@@ -190,7 +190,6 @@ export const registerVendor = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Vendor registration error:', error);
     res.status(500).json({ message: 'Registration failed', error: error.message });
   }
 };
@@ -236,7 +235,6 @@ export const verifyVendorRegistration = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Vendor verification error:', error);
     res.status(500).json({ message: 'Verification failed', error: error.message });
   }
 };
@@ -300,7 +298,6 @@ export const setVendorPassword = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Set password error:', error);
     res.status(500).json({ message: 'Failed to set password', error: error.message });
   }
 };
@@ -402,7 +399,6 @@ export const loginVendorWithPassword = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Vendor login error:', error);
     res.status(500).json({ message: 'Login failed', error: error.message });
   }
 };
@@ -465,7 +461,6 @@ export const vendorForgotPasswordNew = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Vendor forgot password error:', error);
     res.status(500).json({ message: 'Failed to send reset code', error: error.message });
   }
 };
@@ -511,7 +506,6 @@ export const verifyVendorResetCode = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Verify reset code error:', error);
     res.status(500).json({ message: 'Verification failed', error: error.message });
   }
 };
@@ -567,7 +561,6 @@ export const resetVendorPasswordNew = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Vendor reset password error:', error);
     res.status(500).json({ message: 'Password reset failed', error: error.message });
   }
 };
@@ -606,7 +599,6 @@ export const refreshVendorToken = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Refresh token error:', error);
     res.status(401).json({ message: 'Token refresh failed', error: error.message });
   }
 };
@@ -624,7 +616,7 @@ export const vendorLogout = async (req, res) => {
           await blockToken(token, decoded.exp);
         }
       } catch (e) {
-        console.warn("[vendorLogout] Token blocking failed:", e.message);
+        // Token blocking failed
       }
     }
 
@@ -640,7 +632,6 @@ export const vendorLogout = async (req, res) => {
       message: "Logged out successfully",
     });
   } catch (error) {
-    console.error("Logout error:", error);
     res.status(500).json({
       success: false,
       message: "Server error during logout",
