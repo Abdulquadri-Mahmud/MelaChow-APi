@@ -51,7 +51,8 @@ const authVendor = async (req, res, next) => {
     }
 
     // Check vendor is active and not soft-deleted
-    if (!vendor.isActive || vendor.deletedAt) {
+    // NOTE: Schema field is `active`, not `isActive`
+    if (!vendor.active || vendor.deletedAt) {
       return res.status(403).json({
         success: false,
         message: "Vendor account is inactive or has been removed"
