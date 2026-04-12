@@ -1,5 +1,6 @@
 import axios from "axios";
 import Vendor from "../../model/vendor/vendor.model.js";
+import { fetchBankList, resolveBankAccount as resolveAccountService, createTransferRecipient, deleteTransferRecipient } from "../../services/bank.service.js";
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const PAYSTACK_BASE_URL = "https://api.paystack.co";
@@ -15,11 +16,8 @@ const handlePaystackError = (error, defaultMessage) => {
 // ─── FUNCTION 1: getBankList ───
 export const getBankList = async (req, res) => {
   try {
-    const response = await axios.get(`${PAYSTACK_BASE_URL}/bank?currency=NGN&per_page=100`, {
-      headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` },
-    });
-
-    return res.json({ banks: response.data.data });
+    const banks = await fetchBankList();
+    return res.json({ banks });
   } catch (error) {
     const message = handlePaystackError(error, "Failed to fetch bank list");
     return res.status(502).json({ message });
@@ -35,14 +33,9 @@ export const resolveAccount = async (req, res) => {
       return res.status(400).json({ message: "Account number and bank code are required" });
     }
 
-    const response = await axios.get(
-      `${PAYSTACK_BASE_URL}/bank/resolve?account_number=${account_number}&bank_code=${bank_code}`,
-      {
-        headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` },
-      }
-    );
+    const account_name = await resolveAccountService(account_number, bank_code);
 
-    return res.json({ account_name: response.data.data.account_name });
+    return res.json({ account_name });
   } catch (error) {
     const message = handlePaystackError(error, "Could not resolve account. Check the account number and bank.");
     return res.status(502).json({ message });
@@ -65,32 +58,15 @@ export const saveBankAccount = async (req, res) => {
 
     // Delete old recipient if exists
     if (vendor.payoutDetails && vendor.payoutDetails.recipientCode) {
-      try {
-        await axios.delete(`${PAYSTACK_BASE_URL}/transferrecipient/${vendor.payoutDetails.recipientCode}`, {
-          headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` },
-        });
-      } catch (delError) {
-        console.error("Failed to delete old Paystack recipient:", delError.response?.data || delError.message);
-        // Continue even if delete fails
-      }
+      await deleteTransferRecipient(vendor.payoutDetails.recipientCode);
     }
 
     // Create new transfer recipient
-    const response = await axios.post(
-      `${PAYSTACK_BASE_URL}/transferrecipient`,
-      {
-        type: "nuban",
-        name: account_name,
-        account_number: account_number,
-        bank_code: bank_code,
-        currency: "NGN",
-      },
-      {
-        headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` },
-      }
-    );
-
-    const recipient_code = response.data.data.recipient_code;
+    const recipient_code = await createTransferRecipient({
+      name: account_name,
+      account_number: account_number,
+      bank_code: bank_code
+    });
 
     // Update vendor details
     vendor.payoutDetails = {
@@ -129,13 +105,8 @@ export const removeBankAccount = async (req, res) => {
     }
 
     // Delete recipient from Paystack
-    try {
-      await axios.delete(`${PAYSTACK_BASE_URL}/transferrecipient/${vendor.payoutDetails.recipientCode}`, {
-        headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` },
-      });
-    } catch (delError) {
-      console.error("Failed to delete Paystack recipient:", delError.response?.data || delError.message);
-      // Continue to cleanup DB regardless
+    if (vendor.payoutDetails.recipientCode) {
+      await deleteTransferRecipient(vendor.payoutDetails.recipientCode);
     }
 
     // Reset payout details

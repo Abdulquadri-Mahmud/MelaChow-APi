@@ -1,9 +1,10 @@
-﻿import Vendor from '../../model/vendor/vendor.model.js';
+import Vendor from '../../model/vendor/vendor.model.js';
 import { generateAccessToken, generateRefreshToken, generateOTP, generateResetToken, verifyToken } from '../../utils/jwt.js';
 import { sendMail } from '../../config/mailer.js';
 import { sendTokenCookie } from '../../utils/sendTokenCookie.js';
 import jwt from "jsonwebtoken";
 import { blockToken } from "../../middleware/tokenBlocklist.js";
+import { createTransferRecipient } from '../../services/bank.service.js';
 
 // ============================================
 // VENDOR REGISTRATION (with OTP verification)
@@ -59,19 +60,54 @@ export const registerVendor = async (req, res) => {
         postalCode: address?.postalCode || existingVendor.address?.postalCode || "",
       };
       if (openingHours) existingVendor.openingHours = openingHours;
-      if (payoutDetails) existingVendor.payoutDetails = {
-        bankName: payoutDetails?.bankName || existingVendor.payoutDetails?.bankName || "",
-        accountName: payoutDetails?.accountName || existingVendor.payoutDetails?.accountName || "",
-        accountNumber: payoutDetails?.accountNumber || existingVendor.payoutDetails?.accountNumber || "",
-        payoutMethod: payoutDetails?.payoutMethod || existingVendor.payoutDetails?.payoutMethod || "paystack",
-        payoutEnabled: payoutDetails?.payoutEnabled ?? existingVendor.payoutDetails?.payoutEnabled ?? true,
-      };
+      if (payoutDetails) {
+        let recipientCode = existingVendor.payoutDetails?.recipientCode || "";
+        
+        // If bank details changed, generate new recipient code
+        if (payoutDetails.accountNumber && payoutDetails.bankCode && 
+           (payoutDetails.accountNumber !== existingVendor.payoutDetails?.accountNumber || 
+            payoutDetails.bankCode !== existingVendor.payoutDetails?.bankCode)) {
+          try {
+            recipientCode = await createTransferRecipient({
+              name: payoutDetails.accountName,
+              account_number: payoutDetails.accountNumber,
+              bank_code: payoutDetails.bankCode
+            });
+          } catch (err) {
+            console.error("Failed to create Paystack recipient during registration update:", err.message);
+            // Non-fatal, but recipientCode remains empty
+          }
+        }
+
+        existingVendor.payoutDetails = {
+          bankName: payoutDetails?.bankName || existingVendor.payoutDetails?.bankName || "",
+          bankCode: payoutDetails?.bankCode || existingVendor.payoutDetails?.bankCode || "",
+          accountName: payoutDetails?.accountName || existingVendor.payoutDetails?.accountName || "",
+          accountNumber: payoutDetails?.accountNumber || existingVendor.payoutDetails?.accountNumber || "",
+          recipientCode: recipientCode,
+          payoutMethod: payoutDetails?.payoutMethod || existingVendor.payoutDetails?.payoutMethod || "paystack",
+          payoutEnabled: payoutDetails?.payoutEnabled ?? existingVendor.payoutDetails?.payoutEnabled ?? true,
+        };
+      }
 
       if (deliveryManagedBy) existingVendor.deliveryManagedBy = deliveryManagedBy;
       if (flatRateDeliveryFee !== undefined) existingVendor.flatRateDeliveryFee = flatRateDeliveryFee;
 
       await existingVendor.save();
     } else {
+      let recipientCode = "";
+      if (payoutDetails?.accountNumber && payoutDetails?.bankCode) {
+        try {
+          recipientCode = await createTransferRecipient({
+            name: payoutDetails.accountName,
+            account_number: payoutDetails.accountNumber,
+            bank_code: payoutDetails.bankCode
+          });
+        } catch (err) {
+          console.error("Failed to create Paystack recipient during initial registration:", err.message);
+        }
+      }
+
       // Create new vendor
       await Vendor.create({
         email,
@@ -90,8 +126,10 @@ export const registerVendor = async (req, res) => {
         openingHours: openingHours || undefined,
         payoutDetails: {
           bankName: payoutDetails?.bankName || "",
+          bankCode: payoutDetails?.bankCode || "",
           accountName: payoutDetails?.accountName || "",
           accountNumber: payoutDetails?.accountNumber || "",
+          recipientCode: recipientCode,
           payoutMethod: payoutDetails?.payoutMethod || "paystack",
           payoutEnabled: payoutDetails?.payoutEnabled ?? true,
         },
