@@ -79,13 +79,10 @@ export const approveVendor = async (req, res) => {
     vendor.verified = true; // Ensure they are marked verified too
     await vendor.save();
 
-    // Send approval email
-    try {
-      await sendVendorApprovalEmail(vendor);
-    } catch (emailError) {
+    // Send approval email (Non-blocking)
+    sendVendorApprovalEmail(vendor).catch((emailError) => {
       console.error("Approval email failed (non-blocking):", emailError.message);
-      // Email failure must not block the approval response
-    }
+    });
 
     // Log action
     await ActivityLog.create({
@@ -126,13 +123,10 @@ export const rejectVendor = async (req, res) => {
     vendor.rejectionReason = reason || "Your verification request has been rejected.";
     await vendor.save();
 
-    // Send rejection email
-    try {
-      await sendVendorRejectionEmail(vendor, reason);
-    } catch (emailError) {
+    // Send rejection email (Non-blocking)
+    sendVendorRejectionEmail(vendor, reason).catch((emailError) => {
       console.error("Rejection email failed (non-blocking):", emailError.message);
-      // Email failure must not block the rejection response
-    }
+    });
 
     // Log action
     await ActivityLog.create({
@@ -183,13 +177,10 @@ export const suspendVendor = async (req, res) => {
     // Full revocation requires storing the current token on the User/Vendor
     // document — implement in a future hardening pass.
 
-    // Send suspension email
-    try {
-      await sendVendorSuspensionEmail(vendor, vendor.suspensionReason);
-    } catch (emailError) {
+    // Send suspension email (Non-blocking)
+    sendVendorSuspensionEmail(vendor, vendor.suspensionReason).catch((emailError) => {
       console.error("Suspension email failed (non-blocking):", emailError.message);
-      // Email failure must not block the suspension response
-    }
+    });
 
     // Log action
     await ActivityLog.create({
@@ -230,13 +221,10 @@ export const reactivateVendor = async (req, res) => {
     vendor.suspensionReason = null;
     await vendor.save();
 
-    // Optional email
-    try {
-      await sendVendorReactivationEmail(vendor);
-    } catch (emailError) {
+    // Optional email (Non-blocking)
+    sendVendorReactivationEmail(vendor).catch((emailError) => {
       console.error("Reactivation email failed (non-blocking):", emailError.message);
-      // Email failure must not block the reactivation response
-    }
+    });
 
     // Log action
     await ActivityLog.create({
