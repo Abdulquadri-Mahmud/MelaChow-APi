@@ -323,7 +323,11 @@ export const initiateRiderWithdrawal = async (req, res) => {
             // Rollback wallet debit
             wallet.balance = Number((wallet.balance + amount).toFixed(2));
             wallet.totalWithdrawn = Number((wallet.totalWithdrawn - amount).toFixed(2));
-            wallet.transactions.pop();
+            // Remove only the specific withdrawal debit — never use pop() which removes the wrong
+            // transaction if any concurrent credit landed between the debit save and this rollback
+            wallet.transactions = wallet.transactions.filter(
+                t => !t.description?.includes(paystackReference)
+            );
             await wallet.save();
 
             withdrawal.status = "failed";

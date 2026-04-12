@@ -300,6 +300,21 @@ export const adminOverrideOrderStatus = async (req, res) => {
             { $set: { orderStatus: status } }
         );
 
+        // ── Trigger refund when admin cancels a paid order ────────────────────────
+        // Every other cancellation path calls refundOrderToWallet.
+        // Admin override was the only path that bypassed it — leaving customers
+        // with cancelled paid orders and no refund.
+        if (status === 'cancelled' && order.paymentStatus === 'paid') {
+            try {
+                const { refundOrderToWallet } = await import("../../../services/refund.service.js");
+                await refundOrderToWallet(order._id, 'admin_cancel');
+                console.log(`✅ Admin cancel refund processed for Order ${order.orderId}`);
+            } catch (refundErr) {
+                // Non-fatal — status update already saved, refund logged for manual review
+                console.error(`❌ Refund failed after admin cancel for Order ${order.orderId}:`, refundErr.message);
+            }
+        }
+
         // ✅ Notify Customer & Vendors (Push/In-app)
         try {
             const { sendOrderNotification, sendVendorNotification } = await import("../../../services/notification.service.js");

@@ -55,45 +55,58 @@ export const refundOrderToWallet = async (orderId, reason) => {
             total: order.total, commissionRetained, refundAmount, reason,
         }, 'Processing refund');
 
-        // Debit admin wallet
+        // Attempt wallet credit — non-fatal if admin wallet is insufficient.
+        // Order cancellation proceeds regardless. Shortfall logged for manual top-up.
+        let walletCreditSucceeded = false;
+
         const adminWallet = await Wallet.findOne({ ownerModel: 'Admin' }).session(session);
         if (!adminWallet) throw new Error('Admin wallet not found');
+
         if (adminWallet.balance < refundAmount) {
-            throw new Error(`Admin wallet insufficient: has ₦${adminWallet.balance}, needs ₦${refundAmount}`);
+            // Log shortfall — order will still be cancelled and audit doc created
+            logger.error({
+                orderId: order.orderId,
+                adminBalance: adminWallet.balance,
+                refundAmount,
+                reason,
+            }, '⚠️ Admin wallet insufficient for refund — order cancelled, wallet credit pending manual resolution');
+        } else {
+            // Debit admin wallet
+            adminWallet.balance = Number((adminWallet.balance - refundAmount).toFixed(2));
+            adminWallet.transactions.push({
+                type: 'debit',
+                amount: refundAmount,
+                description: `Refund to customer for Order ${order.orderId} - ${reason}`,
+                orderId: order._id,
+                transactionType: 'refund',
+            });
+            await adminWallet.save({ session });
+
+            // Credit customer wallet
+            let userWallet = await Wallet.findOne({
+                ownerId: order.userId,
+                ownerModel: 'User',
+            }).session(session);
+
+            if (!userWallet) {
+                [userWallet] = await Wallet.create(
+                    [{ ownerId: order.userId, ownerModel: 'User', balance: 0, transactions: [] }],
+                    { session }
+                );
+            }
+
+            userWallet.balance = Number((userWallet.balance + refundAmount).toFixed(2));
+            userWallet.transactions.push({
+                type: 'credit',
+                amount: refundAmount,
+                description: `Refund for cancelled Order ${order.orderId}`,
+                orderId: order._id,
+                transactionType: 'refund',
+            });
+            await userWallet.save({ session });
+
+            walletCreditSucceeded = true;
         }
-
-        adminWallet.balance = Number((adminWallet.balance - refundAmount).toFixed(2));
-        adminWallet.transactions.push({
-            type: 'debit',
-            amount: refundAmount,
-            description: `Refund to customer for Order ${order.orderId} - ${reason}`,
-            orderId: order._id,
-            transactionType: 'refund',
-        });
-        await adminWallet.save({ session });
-
-        // Credit customer wallet
-        let userWallet = await Wallet.findOne({
-            ownerId: order.userId,
-            ownerModel: 'User',
-        }).session(session);
-
-        if (!userWallet) {
-            [userWallet] = await Wallet.create(
-                [{ ownerId: order.userId, ownerModel: 'User', balance: 0, transactions: [] }],
-                { session }
-            );
-        }
-
-        userWallet.balance = Number((userWallet.balance + refundAmount).toFixed(2));
-        userWallet.transactions.push({
-            type: 'credit',
-            amount: refundAmount,
-            description: `Refund for cancelled Order ${order.orderId}`,
-            orderId: order._id,
-            transactionType: 'refund',
-        });
-        await userWallet.save({ session });
 
         // Update order status
         order.paymentStatus = 'refunded';
@@ -122,10 +135,13 @@ export const refundOrderToWallet = async (orderId, reason) => {
                 commissionRetained,
                 reason,
                 orderStatusAtCancellation,
-                status: 'completed',
-                notes: retainCommission
-                    ? `Commission retained N${commissionRetained} - order was ${orderStatusAtCancellation}`
-                    : 'Full refund - order was pending at cancellation',
+                // 'pending_wallet' signals admin must manually credit customer wallet
+                status: walletCreditSucceeded ? 'completed' : 'pending_wallet',
+                notes: !walletCreditSucceeded
+                    ? `Admin wallet insufficient — order cancelled but wallet credit pending. Customer owed ₦${refundAmount}. Manual resolution required.`
+                    : retainCommission
+                        ? `Commission retained ₦${commissionRetained} - order was ${orderStatusAtCancellation}`
+                        : 'Full refund - order was pending at cancellation',
             }],
             { session }
         );
@@ -133,9 +149,15 @@ export const refundOrderToWallet = async (orderId, reason) => {
         await session.commitTransaction();
         session.endSession();
 
-        logger.info({
-            orderId, refundId: refund._id, refundAmount, userId: order.userId,
-        }, 'Refund completed - customer wallet credited');
+        if (walletCreditSucceeded) {
+            logger.info({
+                orderId, refundId: refund._id, refundAmount, userId: order.userId,
+            }, '✅ Refund completed — customer wallet credited');
+        } else {
+            logger.warn({
+                orderId, refundId: refund._id, refundAmount, userId: order.userId,
+            }, '⚠️ Order cancelled — refund audit created but wallet credit PENDING manual resolution');
+        }
 
         return refund;
 

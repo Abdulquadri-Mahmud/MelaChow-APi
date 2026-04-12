@@ -28,7 +28,7 @@ const refundSchema = new mongoose.Schema(
         },
         reason: {
             type: String,
-            enum: ['auto_cancel', 'vendor_cancel', 'admin_cancel'],
+            enum: ['auto_cancel', 'vendor_cancel', 'admin_cancel', 'customer_cancel'],
             required: true,
         },
         orderStatusAtCancellation: {
@@ -37,7 +37,7 @@ const refundSchema = new mongoose.Schema(
         },
         status: {
             type: String,
-            enum: ['completed', 'failed'],
+            enum: ['completed', 'failed', 'pending_wallet'],
             default: 'completed',
         },
         notes: {

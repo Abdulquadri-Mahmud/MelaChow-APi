@@ -12,8 +12,30 @@ const multiAuth = async (req, res, next) => {
     if (req.method === "OPTIONS") return next();
 
     try {
-        // 1. Check for User token (Cookie or Auth Header)
-        const userToken = req.cookies.token || (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.split(' ')[1] : null);
+        // Extract raw token — prefer role-specific cookie, fall back to Authorization header.
+        // The Authorization header is read ONCE and routed by the JWT role claim
+        // to prevent cross-role token confusion where one role's token inadvertently
+        // authenticates as another role.
+        const headerToken = req.headers.authorization?.startsWith('Bearer ')
+            ? req.headers.authorization.split(' ')[1]
+            : null;
+
+        // Decode header token (without verifying) to read role claim for routing
+        // Full verification happens inside each branch below
+        let headerTokenRole = null;
+        if (headerToken) {
+            try {
+                const peek = jwt.decode(headerToken);
+                headerTokenRole = peek?.role || null;
+            } catch (_) {
+                // Malformed token — role stays null, branches will reject it
+            }
+        }
+
+        // 1. Check for User token
+        const userToken = req.cookies.token ||
+            (headerToken && (!headerTokenRole || headerTokenRole === 'user') ? headerToken : null);
+
         if (userToken) {
             const blocked = await isTokenBlocked(userToken);
             if (!blocked) {
@@ -35,8 +57,10 @@ const multiAuth = async (req, res, next) => {
             }
         }
 
-        // 2. Check for Vendor token (Cookie or Auth Header)
-        const vendorToken = req.cookies.vendorToken || (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.split(' ')[1] : null);
+        // 2. Check for Vendor token
+        const vendorToken = req.cookies.vendorToken ||
+            (headerToken && headerTokenRole === 'vendor' ? headerToken : null);
+
         if (vendorToken) {
             const blocked = await isTokenBlocked(vendorToken);
             if (!blocked) {
@@ -57,8 +81,10 @@ const multiAuth = async (req, res, next) => {
             }
         }
 
-        // 3. Check for Admin token (Cookie or Auth Header)
-        const adminToken = req.cookies.adminToken || (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.split(' ')[1] : null);
+        // 3. Check for Admin token
+        const adminToken = req.cookies.adminToken ||
+            (headerToken && headerTokenRole === 'admin' ? headerToken : null);
+
         if (adminToken) {
             const blocked = await isTokenBlocked(adminToken);
             if (!blocked) {
@@ -79,7 +105,6 @@ const multiAuth = async (req, res, next) => {
             }
         }
 
-        // If no valid token found in any supported cookie or header
         return res.status(401).json({
             success: false,
             message: "Unauthorized. Token missing or invalid."

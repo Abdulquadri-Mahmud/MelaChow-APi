@@ -50,6 +50,14 @@ const authVendor = async (req, res, next) => {
       });
     }
 
+    // Check vendor is active and not soft-deleted
+    if (!vendor.isActive || vendor.deletedAt) {
+      return res.status(403).json({
+        success: false,
+        message: "Vendor account is inactive or has been removed"
+      });
+    }
+
     // Attach vendor to request object for use in controllers
     req.vendor = vendor;
     next();
