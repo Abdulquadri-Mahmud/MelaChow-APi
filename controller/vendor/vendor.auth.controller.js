@@ -273,6 +273,17 @@ export const setVendorPassword = async (req, res) => {
 
     // If not approved, notify but don't log in
     if (!vendor.isApproved) {
+      // Notify admins about new vendor registration (Non-blocking)
+      try {
+        const { notifyAdmins } = await import('../../services/notification.service.js');
+        notifyAdmins('admin_new_vendor', { 
+            storeName: vendor.storeName,
+            url: `/admin/vendors/pending/${vendor._id}` 
+        }).catch(err => console.error("Admin notification failed:", err.message));
+      } catch (err) {
+        console.error("Failed to import notification service:", err.message);
+      }
+
       return res.status(200).json({
         success: true,
         message: 'Password set successfully. Your account is currently pending admin approval. You will receive an email once your account is activated.',
