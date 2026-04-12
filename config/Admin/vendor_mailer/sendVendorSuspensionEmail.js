@@ -1,50 +1,25 @@
 import { sendMail } from '../../../config/mailer.js';
+import { wrapLayout } from '../../../services/emailTemplate.service.js';
 
 export const sendVendorSuspensionEmail = async (vendor, reason) => {
   const subject = "Your Vendor Account Has Been Suspended";
-  const html = `
-    <div style="font-family: 'Segoe UI', sans-serif; background-color: #f4f7fb; padding: 40px 0;">
-      <div style="max-width: 600px; background: #ffffff; margin: auto; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.08);">
-        <!-- Header -->
-        <div style="background-color: #ff6600; padding: 20px; text-align: center;">
-          <h1 style="color: #ffffff; margin: 0; font-size: 28px;">MelaChow Vendor</h1>
-          <p style="color: #ffe6d1; margin: 5px 0;">Manage your store 🍴</p>
-        </div>
-
-        <!-- Body -->
-        <div style="padding: 30px; color: #333333;">
-          <h2 style="color: #ff6600; text-align: center; margin-bottom: 20px;">Account Suspended</h2>
-          <p style="font-size: 16px;">Dear <strong>${vendor.name}</strong>,</p>
-          <p style="font-size: 15px; line-height: 1.6;">
-            We regret to inform you that your vendor account has been temporarily <strong>suspended</strong>.
-          </p>
-          <p style="font-size: 15px; line-height: 1.6;">
-            <strong>Reason:</strong> ${reason || "No reason specified."}
-          </p>
-          <p style="font-size: 15px; line-height: 1.6;">
-            During this suspension, you will not be able to access your dashboard or perform vendor activities.
-          </p>
-          <p style="font-size: 15px; line-height: 1.6;">
-            If you believe this action was taken in error, please contact our support team for assistance.
-          </p>
-
-          <!-- Support Button -->
-          <div style="text-align: center; margin-top: 30px;">
-            <a href="mailto:support@melachow.com" 
-              style="background-color: #ff6600; color: #ffffff; padding: 12px 25px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block;">
-              Contact Support
-            </a>
-          </div>
-        </div>
-
-        <!-- Footer -->
-        <div style="background-color: #f9f9f9; padding: 20px; text-align: center; font-size: 13px; color: #666;">
-          <p>© ${new Date().getFullYear()} MelaChow. All rights reserved.</p>
-          <p>123 Food Street, Lagos, Nigeria</p>
-        </div>
-      </div>
+  const html = wrapLayout(
+    'Account Suspended',
+    `
+    <p class="p">Urgent Notice: ${vendor.name || 'Partner'},</p>
+    <p class="p">We are writing to inform you that your vendor account has been <b>temporarily suspended</b> from the MelaChow platform.</p>
+    <div style="background: #FFFBEB; border-left: 4px solid #F59E0B; padding: 16px; margin: 24px 0;">
+      <p class="p" style="margin: 0; font-weight: 700; color: #92400E;">Reason for Suspension:</p>
+      <p class="p" style="margin: 4px 0 0; color: #B45309; font-size: 14px;">${reason || "Policy violations detected by our automated auditing system."}</p>
     </div>
-  `;
+    <p class="p">While suspended, your storefront will be invisible to customers and you will be unable to process orders. This action is taken to protect the integrity of our marketplace.</p>
+    <div style="text-align: center; margin: 32px 0;">
+      <a href="mailto:support@melachow.com" class="button" style="background-color: #111827;">Contact Support</a>
+    </div>
+    <p class="p" style="font-size: 14px; color: #6B7280;">Please reference your merchant ID when contacting support for faster resolution.</p>
+    `,
+    'Action Required'
+  );
 
   await sendMail({ to: vendor.email, subject, html });
 };
