@@ -34,7 +34,7 @@ const authVendor = async (req, res, next) => {
           message: "Token expired. Please login again."
         });
       }
-      return res.status(403).json({
+      return res.status(401).json({
         success: false,
         message: "Invalid or expired token"
       });
