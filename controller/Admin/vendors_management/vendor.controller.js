@@ -278,6 +278,7 @@ export const getAllVendors = async (req, res) => {
     if (isApproved !== undefined) filters.isApproved = isApproved === "true";
 
     const vendors = await vendorModel.find(filters)
+      .select("+payoutDetails")
       .populate("wallet")
       .populate("foods")
       .sort({ createdAt: -1 })
@@ -297,6 +298,7 @@ export const getVendor = async (req, res) => {
       return res.status(400).json({ success: false, message: "vendorId is required" });
 
     const vendor = await vendorModel.findById(vendorId)
+      .select("+payoutDetails")
       .populate("wallet")
       .populate({
         path: "foods",
