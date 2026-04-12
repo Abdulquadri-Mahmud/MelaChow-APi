@@ -1,4 +1,5 @@
 import MenuItem from "../../model/menu/MenuItem.js";
+import ComboItem from "../../model/menu/ComboItem.js";
 import MenuItemPortion from "../../model/menu/MenuItemPortion.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 import Order from "../../model/order/Order.js";
@@ -95,8 +96,8 @@ const buildRecommendationItems = async (items) => {
       _id:              item._id,
       name:             item.name,
       image:            item.image_url || "",
-      price:            cheapest ? cheapest.price / 100 : null,
-      portionLabel:     cheapest?.label || null,
+      price: item.item_type === "combo" ? item.price / 100 : (cheapest ? cheapest.price / 100 : null),
+      portionLabel: item.item_type === "combo" ? "Combo" : (cheapest?.label || null),
       item_type:        item.item_type,
       dietary_type:     item.dietary_type || "mixed",
       tags:             item.tags || [],
@@ -207,77 +208,64 @@ export const getRecommendations = async (req, res) => {
         // --- A. Time-of-Day Recommendations ---
         const timeContext = getTimeOfDayContext();
         const timeQuery = {
-            is_available: true,
-            is_in_stock:  true,
-            is_archived:  false,
-            tags: {
-                $in: timeContext.tags.map(t => new RegExp(t, "i"))
-            },
+            is_available: true, is_in_stock: true, is_archived: false,
+            tags: { $in: timeContext.tags.map(t => new RegExp(t, "i")) },
+            ...(locationVendorIds.length > 0 ? { vendor_id: { $in: locationVendorIds } } : {})
         };
-        if (locationVendorIds.length > 0) {
-            timeQuery.vendor_id = { $in: locationVendorIds };
-        }
 
-        const timeRaw = await MenuItem.find(timeQuery)
-            .select(
-                "_id name image_url item_type dietary_type " +
-                "tags rating ratingCount vendor_id"
-            )
-            .sort({ ratingCount: -1 })
-            .limit(6)
-            .lean();
+        const [timeRawMenu, timeRawCombos] = await Promise.all([
+            MenuItem.find(timeQuery).select("_id name image_url item_type dietary_type tags rating ratingCount vendor_id").sort({ ratingCount: -1 }).limit(6).lean(),
+            ComboItem.find(timeQuery).select("_id name image_url dietary_type tags rating ratingCount vendor_id price").sort({ ratingCount: -1 }).limit(6).lean()
+        ]);
 
-        promises.timeOfDay = buildRecommendationItems(timeRaw);
+        const timeMerged = [
+            ...timeRawMenu,
+            ...timeRawCombos.map(c => ({ ...c, item_type: "combo" }))
+        ].sort((a, b) => (b.ratingCount || 0) - (a.ratingCount || 0)).slice(0, 6);
+
+        promises.timeOfDay = buildRecommendationItems(timeMerged);
 
 
         // --- B. Underrated Vendors (Hidden Gems) ---
         const underratedQuery = {
-            is_available: true,
-            is_in_stock:  true,
-            is_archived:  false,
-            rating:       { $gte: 4.0 },
-            ratingCount:  { $lt: 50 },
+            is_available: true, is_in_stock: true, is_archived: false,
+            rating: { $gte: 4.0 }, ratingCount: { $lt: 50 },
+            ...(locationVendorIds.length > 0 ? { vendor_id: { $in: locationVendorIds } } : {})
         };
-        if (locationVendorIds.length > 0) {
-            underratedQuery.vendor_id = { $in: locationVendorIds };
-        }
 
-        const underratedRaw = await MenuItem.find(underratedQuery)
-            .select(
-                "_id name image_url item_type dietary_type " +
-                "tags rating ratingCount vendor_id"
-            )
-            .sort({ rating: -1 })
-            .limit(6)
-            .lean();
+        const [underratedMenu, underratedCombos] = await Promise.all([
+            MenuItem.find(underratedQuery).select("_id name image_url item_type dietary_type tags rating ratingCount vendor_id").sort({ rating: -1 }).limit(6).lean(),
+            ComboItem.find(underratedQuery).select("_id name image_url dietary_type tags rating ratingCount vendor_id price").sort({ rating: -1 }).limit(6).lean()
+        ]);
 
-        promises.underrated = buildRecommendationItems(underratedRaw);
+        const underratedMerged = [
+            ...underratedMenu,
+            ...underratedCombos.map(c => ({ ...c, item_type: "combo" }))
+        ].sort((a, b) => (b.rating || 0) - (a.rating || 0)).slice(0, 6);
+
+        promises.underrated = buildRecommendationItems(underratedMerged);
 
 
         // --- C. Weather-Based ---
         const weatherTags = getWeatherTags(weather);
         if (weatherTags.length > 0) {
             const weatherQuery = {
-                is_available: true,
-                is_in_stock:  true,
-                is_archived:  false,
-                tags: {
-                    $in: weatherTags.map(t => new RegExp(t, "i"))
-                },
+                is_available: true, is_in_stock: true, is_archived: false,
+                tags: { $in: weatherTags.map(t => new RegExp(t, "i")) },
+                ...(locationVendorIds.length > 0 ? { vendor_id: { $in: locationVendorIds } } : {})
             };
-            if (locationVendorIds.length > 0) {
-                weatherQuery.vendor_id = { $in: locationVendorIds };
-            }
 
-            const weatherRaw = await MenuItem.find(weatherQuery)
-                .select(
-                    "_id name image_url item_type dietary_type " +
-                    "tags rating ratingCount vendor_id"
-                )
-                .limit(6)
-                .lean();
+            const [weatherMenu, weatherCombos] = await Promise.all([
+                MenuItem.find(weatherQuery).select("_id name image_url item_type dietary_type tags rating ratingCount vendor_id").limit(6).lean(),
+                ComboItem.find(weatherQuery).select("_id name image_url dietary_type tags rating ratingCount vendor_id price").limit(6).lean()
+            ]);
 
-            promises.weatherBased = buildRecommendationItems(weatherRaw);
+            const weatherMerged = [
+                ...weatherMenu,
+                ...weatherCombos.map(c => ({ ...c, item_type: "combo" }))
+            ].slice(0, 6);
+
+            promises.weatherBased = buildRecommendationItems(weatherMerged);
         } else {
             promises.weatherBased = Promise.resolve([]);
         }
@@ -357,35 +345,27 @@ export const getRecommendations = async (req, res) => {
             }
         });
 
-        const budgetItemIds = Object.keys(budgetItemIdMap);
+        const budgetQuery = {
+            _id: { $in: budgetItemIds },
+            is_available: true, is_in_stock: true, is_archived: false,
+            ...(locationVendorIds.length > 0 ? { vendor_id: { $in: locationVendorIds } } : {})
+        };
 
-        if (budgetItemIds.length > 0) {
-            const budgetQuery = {
-                _id:          { $in: budgetItemIds },
-                is_available: true,
-                is_in_stock:  true,
-                is_archived:  false,
-            };
-            if (locationVendorIds.length > 0) {
-                budgetQuery.vendor_id = { $in: locationVendorIds };
-            }
+        const [budgetMenu, budgetCombos] = await Promise.all([
+            MenuItem.find(budgetQuery).select("_id name image_url item_type dietary_type tags rating ratingCount vendor_id").limit(20).lean(),
+            ComboItem.find({
+                price: { $lte: 250000 },
+                is_available: true, is_in_stock: true, is_archived: false,
+                ...(locationVendorIds.length > 0 ? { vendor_id: { $in: locationVendorIds } } : {})
+            }).select("_id name image_url dietary_type tags rating ratingCount vendor_id price").limit(20).lean()
+        ]);
 
-            const budgetRaw = await MenuItem.find(budgetQuery)
-                .select(
-                    "_id name image_url item_type dietary_type " +
-                    "tags rating ratingCount vendor_id"
-                )
-                .limit(20)
-                .lean();
+        const budgetMerged = [
+            ...budgetMenu.map(m => ({ ...m, finalPrice: budgetItemIdMap[m._id.toString()]?.price ?? Infinity })),
+            ...budgetCombos.map(c => ({ ...c, item_type: "combo", finalPrice: c.price }))
+        ].sort((a, b) => a.finalPrice - b.finalPrice).slice(0, 8);
 
-            budgetRaw.sort((a, b) => {
-                const aPrice = budgetItemIdMap[a._id.toString()]?.price ?? Infinity;
-                const bPrice = budgetItemIdMap[b._id.toString()]?.price ?? Infinity;
-                return aPrice - bPrice;
-            });
-
-            const budgetTrimmed = budgetRaw.slice(0, 8);
-            promises.budgetFriendly = buildRecommendationItems(budgetTrimmed);
+        promises.budgetFriendly = buildRecommendationItems(budgetMerged);
         } else {
             promises.budgetFriendly = Promise.resolve([]);
         }
