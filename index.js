@@ -78,8 +78,8 @@ app.set('trust proxy', 1); // Trust first proxy (Render/Cloudflare) for real cli
 // -----------------------------
 const allowedOrigins = [
   'https://grub-dash-frontend-xi.vercel.app',
-  'https://www.melachow.com',
-  'https://melachow.com',
+  'www.melachow.com',
+  // 'https://melachow.com',
   'http://localhost:3000',
   process.env.CLIENT_URL, // Dynamic from env
 ].filter(Boolean);
