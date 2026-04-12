@@ -29,7 +29,11 @@ router.get("/verify/:reference", auth, verifyWalletFunding); // Verify Paystack
 // Admin Routes (Credit/Refund User)
 router.post("/admin/credit", adminAuth, creditUserWallet);
 
-// Vendor Bank Registration Routes
+// Public Bank Discovery (for registration onboarding)
+router.get("/public/banks", getBankList);
+router.get("/public/resolve-account", resolveAccount);
+
+// Vendor Bank Registration Routes (Protected)
 router.get("/banks", vendorAuth, getBankList);
 router.get("/resolve-account", vendorAuth, resolveAccount);
 router.post("/bank-account", vendorAuth, saveBankAccount);
