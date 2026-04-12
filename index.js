@@ -78,8 +78,9 @@ app.set('trust proxy', 1); // Trust first proxy (Render/Cloudflare) for real cli
 // -----------------------------
 const allowedOrigins = [
   'https://grub-dash-frontend-xi.vercel.app',
+  'https://www.melachow.com',
+  'https://melachow.com',
   'http://localhost:3000',
-  'http://localhost:3001', // Backend URL
   process.env.CLIENT_URL, // Dynamic from env
 ].filter(Boolean);
 
@@ -114,12 +115,14 @@ app.use(helmet({
   contentSecurityPolicy: {
     directives: {
       defaultSrc: ["'self'"],
-      scriptSrc: ["'self'", "https://grub-dash-frontend-xi.vercel.app"],
+      scriptSrc: ["'self'", "https://grub-dash-frontend-xi.vercel.app", "https://www.melachow.com", "https://melachow.com"],
       styleSrc: ["'self'", "'unsafe-inline'"], // Required for inline styles
       imgSrc: ["'self'", "data:", "https:"], // Allow external images
       connectSrc: [
         "'self'",
         "https://grub-dash-frontend-xi.vercel.app",
+        "https://www.melachow.com",
+        "https://melachow.com",
         process.env.CLIENT_URL,
       ].filter(Boolean),
       fontSrc: ["'self'", "data:"],
