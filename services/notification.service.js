@@ -159,6 +159,13 @@ const NOTIFICATION_CONFIGS = {
         getBody: (data) => data.message || 'Check out our latest discount!',
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
+    },
+    admin_new_vendor: {
+        title: 'New Vendor Alert!',
+        getBody: (data) => `Merchant "${data.storeName}" has just registered. Audit required for activation.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: true,
+        vibrate: [500, 100, 500, 100, 500]
     }
 };
 
@@ -618,3 +625,11 @@ export async function syncUnreadCountToRedis(userId) {
         return null;
     }
 }
+
+/**
+ * Broadcast notification to all admins
+ */
+export async function notifyAdmins(type, data = {}) {
+    return sendNotification(null, type, data, 'admin');
+}
+

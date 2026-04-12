@@ -34,7 +34,7 @@ const authVendor = async (req, res, next) => {
           message: "Token expired. Please login again."
         });
       }
-      return res.status(403).json({
+      return res.status(401).json({
         success: false,
         message: "Invalid or expired token"
       });
@@ -51,7 +51,8 @@ const authVendor = async (req, res, next) => {
     }
 
     // Check vendor is active and not soft-deleted
-    if (!vendor.isActive || vendor.deletedAt) {
+    // NOTE: Schema field is `active`, not `isActive`
+    if (!vendor.active || vendor.deletedAt) {
       return res.status(403).json({
         success: false,
         message: "Vendor account is inactive or has been removed"
