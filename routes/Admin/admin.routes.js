@@ -11,6 +11,7 @@ import {
 } from "../../controller/Admin/admin.controller.js";
 import { adminAuth } from "../../middleware/adminAuth.js";
 import { getOperationalVelocity } from "../../controller/Admin/dashboard.controller.js";
+import { getVendorMetrics } from "../../controller/Admin/vendorMetrics.controller.js";
 import { forceFailWithdrawal } from "../../controller/wallet/withdrawal.controller.js";
 import {
     approveVendor,
@@ -44,6 +45,7 @@ router.get("/activities", adminAuth, getRecentActivities);
 router.get("/dashboard/operational-velocity", adminAuth, getOperationalVelocity);
 
 // Vendor Management Routes (Admin Protected)
+router.get("/vendors/metrics", adminAuth, getVendorMetrics);
 router.patch("/vendors/approve", adminAuth, approveVendor);
 router.patch("/vendors/reject", adminAuth, rejectVendor);
 router.patch("/vendors/suspend", adminAuth, suspendVendor);
