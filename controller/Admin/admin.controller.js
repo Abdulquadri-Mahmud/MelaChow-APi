@@ -10,7 +10,6 @@ import { sendTokenCookie } from "../../utils/sendTokenCookie.js";
 import { generateAccessToken, generateRefreshToken } from "../../utils/generateTokens.js";
 import ActivityLog from "../../model/ActivityLog.js";
 
-
 export const registerAdmin = async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
