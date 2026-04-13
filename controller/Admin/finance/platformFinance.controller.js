@@ -224,11 +224,12 @@ export const getRevenueChart = async (req, res) => {
                     platformDeliveryShare: {
                         $cond: [
                             { $eq: ["$vendor.deliveryManagedBy", "admin"] },
-                            "$deliveryShare",
+                            400, // ₦400 flat delivery spread
                             0
                         ]
                     },
                     userOrderId: 1,
+                    parentOrderTotal: "$parentOrder.total",
                     label: { $dateToString: { format: dateFormat, date: "$createdAt" } }
                 }
             },
@@ -237,6 +238,7 @@ export const getRevenueChart = async (req, res) => {
                     _id: "$label",
                     commission: { $sum: "$commission" },
                     deliveryRevenue: { $sum: "$platformDeliveryShare" },
+                    globalGMV: { $sum: "$parentOrderTotal" },
                     orderCount: { $addToSet: "$userOrderId" }
                 }
             },
@@ -245,6 +247,7 @@ export const getRevenueChart = async (req, res) => {
                     label: "$_id",
                     commission: 1,
                     deliveryRevenue: 1,
+                    globalGMV: 1,
                     totalRevenue: { $add: ["$commission", "$deliveryRevenue"] },
                     orderCount: { $size: "$orderCount" }
                 }

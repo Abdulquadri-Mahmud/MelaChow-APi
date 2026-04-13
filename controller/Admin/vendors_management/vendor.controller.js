@@ -5,6 +5,8 @@ import { sendVendorRejectionEmail } from "../../../config/Admin/vendor_mailer/se
 import { sendVendorSuspensionEmail } from "../../../config/Admin/vendor_mailer/sendVendorSuspensionEmail.js";
 import Food from "../../../model/vendor/food.model.js";
 import vendorModel from "../../../model/vendor/vendor.model.js";
+import MenuItem from "../../../model/menu/MenuItem.js";
+import ComboItem from "../../../model/menu/ComboItem.js";
 import { resolveVendorLocation } from "../../../services/locationService.js";
 import ActivityLog from "../../../model/ActivityLog.js";
 
@@ -303,7 +305,15 @@ export const getVendor = async (req, res) => {
     if (!vendor)
       return res.status(404).json({ success: false, message: "Vendor not found" });
 
-    res.json({ success: true, vendor });
+    const menuItems = await MenuItem.find({ vendor_id: vendorId }).lean();
+    const comboItems = await ComboItem.find({ vendor_id: vendorId }).lean();
+    
+    // We convert to plain object to attach new arrays
+    const vendorObj = vendor.toObject();
+    vendorObj.menuItems = menuItems;
+    vendorObj.comboItems = comboItems;
+
+    res.json({ success: true, vendor: vendorObj });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

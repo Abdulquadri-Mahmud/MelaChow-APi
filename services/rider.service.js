@@ -240,14 +240,7 @@ export const markPickedUp = async (orderId, riderId) => {
     // Move rider to on_delivery
     await Rider.findByIdAndUpdate(riderId, { status: "on_delivery" });
 
-    // 🔔 Send Order Notification (for user)
-    try {
-        const { sendOrderNotification } = await import('../services/notification.service.js');
-        await sendOrderNotification(order.userId, order.orderId, "out_for_delivery", {
-            orderDatabaseId: order._id,
-            restaurantName: order.vendorId?.storeName // fallback
-        });
-    } catch (notifErr) { console.error('⚠️ Notification error (customer):', notifErr.message); }
+    // Notification handled in controller — service is data-only
 
     return order;
 };
