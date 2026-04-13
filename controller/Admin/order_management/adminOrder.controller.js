@@ -103,12 +103,26 @@ export const getSingleOrder = async (req, res) => {
             ? { _id: orderId } 
             : { orderId: orderId };
 
-        const order = await Order.findOne(query)
+        let order = await Order.findOne(query)
             .populate("userId", "firstname lastname email phone")
             .populate("riderId", "name phone avatar status")
             .populate("items.restaurantId", "storeName logo deliveryManagedBy")
             .populate("items.foodId", "name image_url item_type")
             .lean();
+
+        // Resiliency: If not found in Parent Orders, check if it's a VendorOrder (sub-order) ID.
+        // Notifications often embed the sub-order ID, so gracefully resolve its parent.
+        if (!order && String(orderId).match(/^[0-9a-fA-F]{24}$/)) {
+            const vendorOrderFallback = await VendorOrder.findById(orderId).select("userOrderId").lean();
+            if (vendorOrderFallback && vendorOrderFallback.userOrderId) {
+                order = await Order.findById(vendorOrderFallback.userOrderId)
+                    .populate("userId", "firstname lastname email phone")
+                    .populate("riderId", "name phone avatar status")
+                    .populate("items.restaurantId", "storeName logo deliveryManagedBy")
+                    .populate("items.foodId", "name image_url item_type")
+                    .lean();
+            }
+        }
 
         if (!order) {
             return res.status(404).json({ success: false, message: "Order not found" });

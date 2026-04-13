@@ -1413,19 +1413,7 @@ export const updateVendorOrderStatus = async (req, res) => {
     // ✅ Sync parent order status
     await syncParentOrderStatus(vendorOrder.userOrderId);
 
-    // ✅ Notify Customer (Push/In-app)
-    try {
-        const { sendOrderNotification } = await import("../../services/notification.service.js");
-        const ParentOrder = await Order.findById(vendorOrder.userOrderId);
-        if (ParentOrder) {
-            await sendOrderNotification(ParentOrder.userId, ParentOrder.orderId, status, {
-                orderDatabaseId: ParentOrder._id,
-                restaurantName: vendor.storeName || "the restaurant"
-            });
-        }
-    } catch (notifErr) {
-        console.warn('⚠️ Status transition notification failed:', notifErr.message);
-    }
+
 
     console.log(`✅ Status updated: ${previousStatus} → ${status}`);
 
