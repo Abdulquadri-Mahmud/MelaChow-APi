@@ -10,6 +10,7 @@ import {
     getRecentActivities
 } from "../../controller/Admin/admin.controller.js";
 import { adminAuth } from "../../middleware/adminAuth.js";
+import { getOperationalVelocity } from "../../controller/Admin/dashboard.controller.js";
 import { forceFailWithdrawal } from "../../controller/wallet/withdrawal.controller.js";
 import {
     approveVendor,
@@ -38,6 +39,9 @@ router.post("/logout", logoutAdmin);
 router.get("/get-all", adminAuth, getAllAdmins);
 router.delete("/delete/:id", adminAuth, deleteAdmin);
 router.get("/activities", adminAuth, getRecentActivities);
+
+// Admin Dashboard Analytics
+router.get("/dashboard/operational-velocity", adminAuth, getOperationalVelocity);
 
 // Vendor Management Routes (Admin Protected)
 router.patch("/vendors/approve", adminAuth, approveVendor);
