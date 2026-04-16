@@ -161,7 +161,7 @@ export const getFoodReviews = async (req, res) => {
     const food = await MenuItem.findById(foodId)
       .populate(
         "vendor_id", 
-        "storeName address.city deliveryManagedBy flatRateDeliveryFee platformDeliveryFeeOverride"
+        "storeName address.city platformDeliveryFeeOverride"
       )
       .populate({
         path: "platform_category_id",
@@ -246,9 +246,7 @@ export const getFoodReviews = async (req, res) => {
     // Resolve delivery fee
     const v = food.vendor_id || {};
     let resolvedDeliveryFee = 0;
-    if (v.deliveryManagedBy === "vendor") {
-      resolvedDeliveryFee = v.flatRateDeliveryFee || 0;
-    } else if (v.platformDeliveryFeeOverride != null && v.platformDeliveryFeeOverride > 0) {
+    if (v.platformDeliveryFeeOverride != null && v.platformDeliveryFeeOverride > 0) {
       resolvedDeliveryFee = v.platformDeliveryFeeOverride;
     } else if (v.address?.city) {
       const city = await City.findOne({

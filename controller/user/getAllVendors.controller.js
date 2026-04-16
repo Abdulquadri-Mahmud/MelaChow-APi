@@ -20,16 +20,14 @@ export const getAllVendors = async (req, res) => {
 
         const vendors = await Vendor.find(filter)
             .populate("cityId", "name platformDeliveryFee")
-            .select("storeName storeSlug storeDescription logo address fullAddress rating ratingCount cuisineTypes openingHours deliveryRadiusKm acceptsDelivery flatRateDeliveryFee platformDeliveryFeeOverride deliveryManagedBy")
+            .select("storeName storeSlug storeDescription logo address fullAddress rating ratingCount cuisineTypes openingHours deliveryRadiusKm acceptsDelivery platformDeliveryFeeOverride")
             .sort({ rating: -1, createdAt: -1 })
             .lean();
 
         // 2. Resolve precise delivery fee for each vendor
         const vendorsWithFee = vendors.map(v => {
             let deliveryFee = 0;
-            if (v.deliveryManagedBy === "vendor") {
-                deliveryFee = v.flatRateDeliveryFee || 0;
-            } else if (v.platformDeliveryFeeOverride != null && v.platformDeliveryFeeOverride > 0) {
+            if (v.platformDeliveryFeeOverride != null && v.platformDeliveryFeeOverride > 0) {
                 deliveryFee = v.platformDeliveryFeeOverride;
             } else {
                 deliveryFee = v.cityId?.platformDeliveryFee || 0;

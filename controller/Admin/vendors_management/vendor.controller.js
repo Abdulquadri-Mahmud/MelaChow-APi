@@ -452,54 +452,18 @@ export const getVendorFoods = async (req, res) => {
  * or uses MelaChow platform riders.
  * Body: { deliveryManagedBy: "vendor" | "admin" }
  */
+/**
+ * @deprecated All deliveries are now platform-managed.
+ * Vendor-managed delivery has been permanently retired.
+ * This endpoint is disabled and will be removed in a future cleanup.
+ */
 export const updateVendorDeliveryMode = async (req, res) => {
-  try {
-    const { vendorId } = req.params;
-    const { deliveryManagedBy } = req.body;
-
-    if (!["vendor", "admin"].includes(deliveryManagedBy)) {
-      return res.status(400).json({
+    return res.status(410).json({
         success: false,
-        message: "deliveryManagedBy must be either 'vendor' or 'admin'",
-      });
-    }
-
-    const vendor = await vendorModel.findByIdAndUpdate(
-      vendorId,
-      { deliveryManagedBy },
-      { new: true, runValidators: true }
-    ).select("storeName deliveryManagedBy active"); // isActive is 'active' in the schema
-
-    if (!vendor) {
-      return res.status(404).json({
-        success: false,
-        message: "Vendor not found",
-      });
-    }
-
-    console.log(`🔄 Vendor ${vendor.storeName} delivery mode → ${deliveryManagedBy}`);
-
-    // Log action
-    await ActivityLog.create({
-      adminId: req.admin._id,
-      action: "UPDATE_DELIVERY_MODE",
-      targetType: "Vendor",
-      targetId: vendor._id,
-      details: `Updated ${vendor.storeName} delivery mode to ${deliveryManagedBy}`,
+        message:
+            "Vendor-managed delivery has been retired. " +
+            "All deliveries are handled by the MelaChow platform.",
     });
-
-    return res.status(200).json({
-      success: true,
-      message: `Delivery mode updated to '${deliveryManagedBy}'`,
-      vendor,
-    });
-  } catch (err) {
-    console.error("updateVendorDeliveryMode error:", err.message);
-    return res.status(500).json({
-      success: false,
-      message: "Server error",
-    });
-  }
 };
 
 // Handle automatic commission split

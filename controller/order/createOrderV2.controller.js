@@ -211,20 +211,13 @@ const validateCombo = async (cartItem) => {
 
 
 /**
- * Resolve the correct delivery fee for a vendor.
- * Mirrors resolveStorefrontDeliveryFee in customerMenuController.
+ * Resolve the delivery fee for a vendor.
+ * All deliveries are platform-managed. Fee resolution order:
+ * 1. platformDeliveryFeeOverride (per-vendor admin override)
+ * 2. City.platformDeliveryFee (city-level default)
  * Returns fee in NAIRA.
- *
- * Priority:
- * 1. vendor.deliveryManagedBy === "vendor" → flatRateDeliveryFee
- * 2. platformDeliveryFeeOverride set → use override
- * 3. Fall back to City.platformDeliveryFee
  */
 const resolveVendorDeliveryFee = async (vendor) => {
-    if (vendor.deliveryManagedBy === "vendor") {
-        return vendor.flatRateDeliveryFee ?? 0;
-    }
-
     if (
         vendor.platformDeliveryFeeOverride != null &&
         vendor.platformDeliveryFeeOverride > 0
@@ -569,8 +562,7 @@ export const createOrderV2 = async ({
         const vendorsForFees = await Vendor.find({
           _id: { $in: uniqueVendorIds },
         }).select(
-          "storeName deliveryManagedBy flatRateDeliveryFee " +
-          "platformDeliveryFeeOverride address"
+          "storeName platformDeliveryFeeOverride address"
         ).lean();
 
         if (vendorsForFees.length !== uniqueVendorIds.length) {
@@ -893,21 +885,10 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
             continue;
         }
 
-        const vendor = await Vendor.findById(vendorId).session(session);
-        const deliveryManagedBy = vendor?.deliveryManagedBy || "admin";
-
-        // Only credit delivery fee to vendor if THEY manage delivery.
-        // If platform manages delivery, delivery fee goes to admin
-        // wallet and vendor deliveryShare on their order is 0.
-        const vendorOwnDelivery = deliveryManagedBy === "vendor";
-
         // ── ESCROW: Hold vendor food revenue in admin wallet until delivery ──
-        // vendorTotal = vendor's food share (subtotal minus commission)
-        // This moves to vendor wallet only after order is delivered/completed.
-        // deliveryShare for vendor-managed delivery is also escrowed.
-        const escrowAmount = vendorOwnDelivery
-            ? Number((vendorTotal + vendorDeliveryShare).toFixed(2))
-            : Number(vendorTotal.toFixed(2));
+        // All deliveries are platform-managed. Vendor earns food revenue only.
+        // Delivery fee is retained by the platform — never escrowed to vendor.
+        const escrowAmount = Number(vendorTotal.toFixed(2));
 
         // Create VendorOrder
         const [vendorOrder] = await VendorOrder.create(
@@ -951,9 +932,8 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
                     })),
                     commission,
                     vendorTotal,
-                    // deliveryShare only shown on vendor's order if
-                    // THEY handle delivery — otherwise 0 (platform keeps it)
-                    deliveryShare: vendorOwnDelivery ? vendorDeliveryShare : 0,
+                    // Platform handles all deliveries. Vendor earns food revenue only.
+                    deliveryShare: 0,
                     escrowAmount,
                     escrowReleased: false,
                     orderStatus: "pending"
@@ -980,6 +960,7 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
         );
 
         if (adminWallet) {
+            // Hold vendor food revenue in escrow until delivery confirmed
             adminWallet.balance = Number((adminWallet.balance + escrowAmount).toFixed(2));
             adminWallet.transactions.push({
                 type: "credit",
@@ -989,13 +970,13 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
                 transactionType: 'escrow_hold',
             });
 
-            // Platform-managed delivery fee also held in admin wallet
-            if (!vendorOwnDelivery && vendorDeliveryShare > 0) {
+            // Platform always retains the delivery fee — credit immediately
+            if (vendorDeliveryShare > 0) {
                 adminWallet.balance = Number((adminWallet.balance + vendorDeliveryShare).toFixed(2));
                 adminWallet.transactions.push({
                     type: "credit",
                     amount: vendorDeliveryShare,
-                    description: `Delivery fee held for admin rider - Order ${order.orderId}`,
+                    description: `Delivery fee received - Order ${order.orderId}`,
                     orderId: order._id,
                     transactionType: 'delivery_fee',
                 });

@@ -180,7 +180,7 @@ export const getVendorForUserDisplay = async (req, res) => {
       .findOne({
         $or: [{ _id: id }, { storeSlug: id }],
       })
-      .select("storeName fullAddress storeDescription address logo email phone openingHours acceptsDelivery rating ratingCount flatRateDeliveryFee deliveryManagedBy deliveryRadiusKm")
+      .select("storeName fullAddress storeDescription address logo email phone openingHours acceptsDelivery rating ratingCount deliveryRadiusKm")
       .lean(); // lean makes it return a plain JS object
 
     if (!vendor) {
@@ -641,26 +641,19 @@ export const updateVendorOrderStatus = async (req, res) => {
 
     // Role-based delivery restrictions
     if (req.vendor) {
-      const vendor = await vendorModel.findById(req.vendor._id).select("deliveryManagedBy").lean();
-      if (!vendor) {
-        return res.status(404).json({ success: false, message: "Vendor not found" });
-      }
-
-      // If the admin/platform handles delivery, vendors must stop at "ready_for_pickup" or cancellation
-      if (vendor.deliveryManagedBy === "admin") {
-        const restrictedStatuses = [
-          "rider_assigned",
-          "out_for_delivery",
-          "delivered",
-          "completed"
-        ];
-        
-        if (restrictedStatuses.includes(status)) {
-          return res.status(403).json({
-            success: false,
-            message: `Platform delivery is enabled. You cannot manually update the order to '${status}'. Only riders/admins can perform this action.`
-          });
-        }
+      // All deliveries are platform-managed. Vendors must stop at "ready_for_pickup" or cancellation.
+      const restrictedStatuses = [
+        "rider_assigned",
+        "out_for_delivery",
+        "delivered",
+        "completed"
+      ];
+      
+      if (restrictedStatuses.includes(status)) {
+        return res.status(403).json({
+          success: false,
+          message: `Platform delivery is enabled. You cannot manually update the order to '${status}'. Only riders/admins can perform this action.`
+        });
       }
     }
 

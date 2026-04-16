@@ -256,7 +256,6 @@ export const markDelivered = async (orderId, riderId) => {
     let riderVendorIdForEscrow = null;
     let pendingRiderPayout = null; // ← captures payout data for post-transaction execution
     let payoutActuallyCredited = false; // ← tracks whether wallet credit actually landed
-    let completedOrderDeliveryModel = 'admin'; // ← tracks vendor vs admin delivery for notification routing
 
     try {
         const order = await Order.findById(orderId).session(session);
@@ -303,40 +302,24 @@ export const markDelivered = async (orderId, riderId) => {
         let riderEarningsToRecord = 0;
 
         if (deliveryFee > 0) {
-            const vendor = riderVendorId
-                ? await Vendor.findById(riderVendorId).session(session)
-                : null;
+            // All deliveries are platform-managed — always use the spread model.
+            // Rider receives fixed ₦600; platform retains the spread.
+            const RIDER_FIXED_PAYOUT = 600;
+            const riderPayout = Math.min(RIDER_FIXED_PAYOUT, deliveryFee);
+            const platformSpread = Number((deliveryFee - riderPayout).toFixed(2));
 
-            // Determine if the payout should be handled by Platform (Admin) or Vendor (Direct Cash).
-            // Admin riders ALWAYS use the platform-managed spread model.
-            const deliveryManagedBy = isAdminRider ? "admin" : (vendor?.deliveryManagedBy || "vendor");
-            completedOrderDeliveryModel = deliveryManagedBy; // ← capture for post-transaction use
+            // Stage payout for post-transaction execution to prevent escrow deadlocks
+            pendingRiderPayout = {
+                riderId,
+                riderPayout,
+                platformSpread,
+                orderId: order.orderId,
+                orderDbId: order._id,
+                RIDER_FIXED_PAYOUT,
+            };
 
-            if (deliveryManagedBy === "vendor") {
-                // ── PHASE 1: VENDOR-MANAGED DELIVERY ──────────────────────────────────
-                // The vendor pays their rider directly in cash.
-                riderEarningsToRecord = deliveryFee;
-                console.log(`💵 Vendor-managed delivery — rider paid by vendor. No wallet transaction.`);
-            } else {
-                // ── PHASE 2: PLATFORM-MANAGED DELIVERY (SPREAD MODEL) ──────────────────
-                // Payout runs post-transaction in its own session to prevent escrow deadlocks.
-                const RIDER_FIXED_PAYOUT = 600;
-                const riderPayout = Math.min(RIDER_FIXED_PAYOUT, deliveryFee);
-                const platformSpread = Number((deliveryFee - riderPayout).toFixed(2));
-
-                // Stage payout data for post-transaction execution
-                pendingRiderPayout = {
-                    riderId,
-                    riderPayout,
-                    platformSpread,
-                    orderId: order.orderId,
-                    orderDbId: order._id,
-                    RIDER_FIXED_PAYOUT,
-                };
-
-                riderEarningsToRecord = riderPayout;
-                console.log(`📦 Rider payout staged post-transaction — ₦${riderPayout} for Order ${order.orderId}`);
-            }
+            riderEarningsToRecord = riderPayout;
+            console.log(`📦 Rider payout staged post-transaction — ₦${riderPayout} for Order ${order.orderId}`);
         }
 
         // Persist the rider's actual payout on the order document.
@@ -349,7 +332,6 @@ export const markDelivered = async (orderId, riderId) => {
 
         // Capture values needed after session closes
         completedOrder = order;
-        riderVendorIdForEscrow = rider.vendorId;
 
     } catch (error) {
         if (session.inTransaction()) await session.abortTransaction();
@@ -478,7 +460,6 @@ export const markDelivered = async (orderId, riderId) => {
     return {
         order: completedOrder,
         payoutCredited: payoutActuallyCredited,
-        isVendorManagedDelivery: completedOrderDeliveryModel === 'vendor',
     };
 };
 
