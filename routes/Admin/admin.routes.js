@@ -12,6 +12,9 @@ import {
 import { adminAuth } from "../../middleware/adminAuth.js";
 import { getOperationalVelocity } from "../../controller/Admin/dashboard.controller.js";
 import { getVendorMetrics } from "../../controller/Admin/vendorMetrics.controller.js";
+import { getUserMetrics } from "../../controller/Admin/userMetrics.controller.js";
+import { getCategoryMetrics } from "../../controller/Admin/categoryMetrics.controller.js";
+import { getLocationMetrics } from "../../controller/Admin/locationMetrics.controller.js";
 import { forceFailWithdrawal } from "../../controller/wallet/withdrawal.controller.js";
 import {
     approveVendor,
@@ -29,6 +32,12 @@ import {
 
 const router = express.Router();
 
+// Category Management Routes
+router.get("/categories/metrics", adminAuth, getCategoryMetrics);
+
+// Location Management Routes
+router.get("/locations/metrics", adminAuth, getLocationMetrics);
+
 // Auth routes
 router.post("/register", registerAdmin);
 router.post("/login", loginAdmin);
@@ -43,6 +52,9 @@ router.get("/activities", adminAuth, getRecentActivities);
 
 // Admin Dashboard Analytics
 router.get("/dashboard/operational-velocity", adminAuth, getOperationalVelocity);
+
+// User Management Routes
+router.get("/users/metrics", adminAuth, getUserMetrics);
 
 // Vendor Management Routes (Admin Protected)
 router.get("/vendors/metrics", adminAuth, getVendorMetrics);

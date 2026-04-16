@@ -19,14 +19,32 @@ export const getAllVendors = async (req, res) => {
         console.log("🔍 Fetching vendors with filters:", filter);
 
         const vendors = await Vendor.find(filter)
-            .select("storeName storeSlug storeDescription logo address fullAddress rating ratingCount cuisineTypes openingHours deliveryRadiusKm acceptsDelivery")
-            .sort({ rating: -1, createdAt: -1 }); // Prioritize higher rated & newer vendors
+            .populate("cityId", "name platformDeliveryFee")
+            .select("storeName storeSlug storeDescription logo address fullAddress rating ratingCount cuisineTypes openingHours deliveryRadiusKm acceptsDelivery flatRateDeliveryFee platformDeliveryFeeOverride deliveryManagedBy")
+            .sort({ rating: -1, createdAt: -1 })
+            .lean();
 
-        // 2. Format Response
+        // 2. Resolve precise delivery fee for each vendor
+        const vendorsWithFee = vendors.map(v => {
+            let deliveryFee = 0;
+            if (v.deliveryManagedBy === "vendor") {
+                deliveryFee = v.flatRateDeliveryFee || 0;
+            } else if (v.platformDeliveryFeeOverride != null && v.platformDeliveryFeeOverride > 0) {
+                deliveryFee = v.platformDeliveryFeeOverride;
+            } else {
+                deliveryFee = v.cityId?.platformDeliveryFee || 0;
+            }
+            return {
+                ...v,
+                deliveryFee
+            };
+        });
+
+        // 3. Format Response
         return res.json({
             success: true,
-            count: vendors.length,
-            vendors,
+            count: vendorsWithFee.length,
+            vendors: vendorsWithFee,
         });
     } catch (error) {
         console.error("GetAllVendors Error:", error);
