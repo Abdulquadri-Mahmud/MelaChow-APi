@@ -83,25 +83,28 @@ export const getTrendingSearch = async (req, res) => {
     if (hasSearchSignal) {
       const keywordRegexes = topKeywords.map((k) => new RegExp(k.keyword, "i"));
 
+      const trendQuery = {
+        is_available: true,
+        is_in_stock: true,
+        is_archived: false,
+        $or: [
+          { name: { $in: keywordRegexes } },
+          { description: { $in: keywordRegexes } },
+          { tags: { $in: keywordRegexes } },
+        ],
+        ...(vendorIds.length > 0 ? { vendor_id: { $in: vendorIds } } : {})
+      };
+
       const [matchedMenu, matchedCombos] = await Promise.all([
         MenuItem.find(trendQuery)
           .select("_id name image_url item_type dietary_type rating ratingCount vendor_id platform_category_id tags createdAt")
           .sort({ ratingCount: -1, rating: -1 })
-          .limit(10)
+          .limit(50) // Fetch enough for general browsing
           .lean(),
-        ComboItem.find({
-          is_available: true,
-          is_in_stock: true,
-          is_archived: false,
-          $or: [
-            { name: { $in: keywordRegexes } },
-            { tags: { $in: keywordRegexes } },
-          ],
-          ...(vendorIds.length > 0 ? { vendor_id: { $in: vendorIds } } : {})
-        })
+        ComboItem.find(trendQuery)
           .select("_id name image_url dietary_type rating ratingCount vendor_id platform_category_id tags price createdAt")
           .sort({ ratingCount: -1, rating: -1 })
-          .limit(10)
+          .limit(50)
           .lean()
       ]);
 
@@ -112,9 +115,15 @@ export const getTrendingSearch = async (req, res) => {
     }
 
     // ── PHASE 2: Fallback — newest items ─────────────────────────
-    // Triggered when: no SearchTrend data yet, or Phase 1 returned < 3 items.
-    // Sort by createdAt (not ratingCount) — honest signal for a fresh market.
-    if (trendingItems.length < 3) {
+    if (trendingItems.length < itemsPerPage || trendingItems.length < 5) {
+      const existingIds = trendingItems.map(i => i._id);
+      const fallbackQuery = {
+        is_available: true,
+        is_in_stock: true,
+        is_archived: false,
+        ...(vendorIds.length > 0 ? { vendor_id: { $in: vendorIds } } : {})
+      };
+
       const [fallbackMenu, fallbackCombos] = await Promise.all([
         MenuItem.find({
           ...fallbackQuery,
@@ -122,7 +131,7 @@ export const getTrendingSearch = async (req, res) => {
         })
           .select("_id name image_url item_type dietary_type rating ratingCount vendor_id platform_category_id tags createdAt")
           .sort({ createdAt: -1 })
-          .limit(10)
+          .limit(50)
           .lean(),
         ComboItem.find({
           ...fallbackQuery,
@@ -130,7 +139,7 @@ export const getTrendingSearch = async (req, res) => {
         })
           .select("_id name image_url dietary_type rating ratingCount vendor_id platform_category_id tags price createdAt")
           .sort({ createdAt: -1 })
-          .limit(10)
+          .limit(50)
           .lean()
       ]);
 
@@ -207,7 +216,7 @@ export const getTrendingSearch = async (req, res) => {
 
     // ── Price map (cheapest portion) ───────────────────────────
     const trendingPriceMap = {};
-    trendingPortions.forEach((p) => {
+    allTrendingPortions.forEach((p) => {
       const key = p.menu_item_id.toString();
       if (!trendingPriceMap[key]) trendingPriceMap[key] = p;
     });
