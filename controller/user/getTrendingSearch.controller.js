@@ -156,6 +156,7 @@ export const getTrendingSearch = async (req, res) => {
     const trendingVendorIds  = [...new Set(trendingItems.map((i) => i.vendor_id?.toString()).filter(Boolean))];
     const trendingCategoryIds = [...new Set(trendingItems.map((i) => i.platform_category_id?.toString()).filter(Boolean))];
 
+    const [trendingVendors, allTrendingPortions, trendingCategories] = await Promise.all([
       Vendor.find(
         { _id: { $in: trendingVendorIds } },
         "storeName logo address openingHours " +
