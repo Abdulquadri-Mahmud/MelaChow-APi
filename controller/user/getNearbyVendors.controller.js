@@ -1,5 +1,5 @@
-import User from "../../model/user.model.js";
 import Vendor from "../../model/vendor/vendor.model.js";
+import City from "../../model/location/City.js";
 
 /**
  * @desc    Get all vendors near the logged-in user
@@ -56,15 +56,34 @@ export const getNearbyVendorsForUser = async (req, res) => {
 
         // 4. Find Active Vendors in that location
         const vendors = await Vendor.find(query)
-            .select("storeName storeSlug storeDescription logo address fullAddress rating ratingCount cuisineTypes openingHours deliveryRadiusKm acceptsDelivery")
-            .sort({ rating: -1, createdAt: -1 });
+            .select("storeName storeSlug storeDescription logo address fullAddress rating ratingCount cuisineTypes openingHours deliveryRadiusKm acceptsDelivery flatRateDeliveryFee platformDeliveryFeeOverride deliveryManagedBy")
+            .sort({ rating: -1, createdAt: -1 })
+            .lean();
+
+        // 4.5 Resolve precise delivery fee for each vendor
+        // Priority: Vendor Managed -> Platform Override -> City Level platformDeliveryFee
+        const cityPlatformFee = cityDoc?.platformDeliveryFee || 0;
+        const vendorsWithFee = vendors.map(v => {
+            let deliveryFee = 0;
+            if (v.deliveryManagedBy === "vendor") {
+                deliveryFee = v.flatRateDeliveryFee || 0;
+            } else if (v.platformDeliveryFeeOverride != null && v.platformDeliveryFeeOverride > 0) {
+                deliveryFee = v.platformDeliveryFeeOverride;
+            } else {
+                deliveryFee = cityPlatformFee;
+            }
+            return {
+                ...v,
+                deliveryFee
+            };
+        });
 
         // 5. Response
         return res.json({
             success: true,
             userLocation: { city, state },
-            count: vendors.length,
-            vendors,
+            count: vendorsWithFee.length,
+            vendors: vendorsWithFee,
         });
 
     } catch (error) {
