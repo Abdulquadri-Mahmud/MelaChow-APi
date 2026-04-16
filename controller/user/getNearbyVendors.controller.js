@@ -1,3 +1,4 @@
+import User from "../../model/user.model.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 import City from "../../model/location/City.js";
 
