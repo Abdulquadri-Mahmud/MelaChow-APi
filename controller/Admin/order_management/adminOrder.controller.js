@@ -36,22 +36,7 @@ export const getAllOrders = async (req, res) => {
             if (endDate) filters.createdAt.$lte = new Date(endDate);
         }
 
-        // deliveryType filtering requires joining with Vendor
-        if (deliveryType) {
-            const deliveryManagedBy = deliveryType === "platform_managed" ? "admin" : "vendor";
-            const vendors = await Vendor.find({ deliveryManagedBy }).select("_id");
-            const vendorIds = vendors.map(v => v._id);
-
-            if (deliveryType === "platform_managed") {
-                filters["items.restaurantId"] = { $in: vendorIds };
-            } else {
-                // For vendor_managed, strictly ALL vendors in order must be "vendor"
-                // This is complex for a single query, so we find orders with platform vendors first
-                const platformVendors = await Vendor.find({ deliveryManagedBy: "admin" }).select("_id");
-                const platformVendorIds = platformVendors.map(v => v._id);
-                filters["items.restaurantId"] = { $nin: platformVendorIds };
-            }
-        }
+        // All deliveries are platform-managed. deliveryType filter is removed.
 
         if (search) {
             filters.$or = [
@@ -145,11 +130,8 @@ export const getSingleOrder = async (req, res) => {
             return acc;
         }, {});
 
-        // Determine deliveryType
-        const hasPlatformVendor = order.items.some(
-            item => item.restaurantId.deliveryManagedBy === "admin"
-        );
-        const deliveryType = hasPlatformVendor ? "platform_managed" : "vendor_managed";
+        // All deliveries are platform-managed
+        const deliveryType = "platform_managed";
 
         // Financial Summary
         const financialSummary = {
@@ -212,17 +194,11 @@ export const getOrderStats = async (req, res) => {
             { $group: { _id: null, totalCommission: { $sum: "$commission" } } }
         ]);
 
-        // 3. Platform Delivery Revenue
-        // Note: This requires filtering orders where deliveryManagedBy is 'admin'
-        // We'll approximate this by joining with vendors or checking those with admin delivery
-        const adminVendors = await Vendor.find({ deliveryManagedBy: "admin" }).select("_id");
-        const adminVendorIds = adminVendors.map(v => v._id);
-
+        // All deliveries are platform-managed
         const deliveryStats = await Order.aggregate([
             {
                 $match: {
                     ...dateFilter,
-                    "items.restaurantId": { $in: adminVendorIds },
                     paymentStatus: "paid"
                 }
             },
@@ -371,14 +347,9 @@ export const getPlatformManagedOrders = async (req, res) => {
         const { status, paymentStatus, startDate, endDate, search, page = 1, limit = 20 } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        // 1. Find platform-managed vendor IDs
-        const adminVendors = await Vendor.find({ deliveryManagedBy: "admin" }).select("_id");
-        const adminVendorIds = adminVendors.map(v => v._id);
-
+        // 1. All orders are platform-managed in this model.
         // 2. Build filters
-        const filter = {
-            "items.restaurantId": { $in: adminVendorIds }
-        };
+        const filter = {};
 
         if (status) filter.orderStatus = status;
         if (paymentStatus) filter.paymentStatus = paymentStatus;
@@ -477,17 +448,8 @@ export const getCommissionLedger = async (req, res) => {
                     total: 1,
                     numberOfVendors: { $size: "$vOrders" },
                     totalCommission: { $sum: "$vOrders.commission" },
-                    // deliveryFee is held only for vendors with deliveryManagedBy === 'admin'
-                    // We check if ANY vendor in this order is platform managed
-                    isPlatformManaged: {
-                        $anyElementTrue: {
-                            $map: {
-                                input: "$vendors",
-                                as: "v",
-                                in: { $eq: ["$$v.deliveryManagedBy", "admin"] }
-                            }
-                        }
-                    }
+                    // All delivery fees are held by the platform
+                    isPlatformManaged: true
                 }
             },
             {

@@ -100,13 +100,15 @@ async function buildFullItem(item, { vendorView = false } = {}) {
  * this vendor, using the same logic as the order controller.
  * Returns fee in NAIRA (not kobo).
  */
+/**
+ * Resolve the delivery fee a customer will be charged for this vendor.
+ * All deliveries are platform-managed. Resolution order:
+ * 1. platformDeliveryFeeOverride (per-vendor admin override)
+ * 2. City.platformDeliveryFee (city-level default)
+ * Returns fee in NAIRA.
+ */
 async function resolveStorefrontDeliveryFee(vendor) {
-    // Case 1: vendor manages own delivery
-    if (vendor.deliveryManagedBy === "vendor") {
-        return vendor.flatRateDeliveryFee ?? 0;
-    }
-
-    // Case 2: admin-managed but vendor has a specific override
+    // Case 1: admin override for this specific vendor
     if (
         vendor.platformDeliveryFeeOverride != null &&
         vendor.platformDeliveryFeeOverride > 0
@@ -114,7 +116,7 @@ async function resolveStorefrontDeliveryFee(vendor) {
         return vendor.platformDeliveryFeeOverride;
     }
 
-    // Case 3: fall back to city-level platform fee
+    // Case 2: fall back to city-level platform fee
     try {
         const cityName = vendor.address?.city;
         if (!cityName) return 0;
@@ -162,7 +164,6 @@ export const getFullVendorMenu = async (req, res) => {
             isOpen:                vendor.isOpen ?? true,
             openingHours:          vendor.openingHours,
             acceptsDelivery:       vendor.acceptsDelivery ?? true,
-            deliveryManagedBy:     vendor.deliveryManagedBy || "admin",
             deliveryFee:           resolvedDeliveryFee,  // ← resolved, not raw field
             estimatedDeliveryTime: vendor.estimatedDeliveryTime ?? 30,
             rating:                vendor.rating ?? null,
@@ -369,7 +370,7 @@ export const getMenuItemDetails = async (req, res) => {
         let vendorJson = null;
         if (!isVendorRequest) {
             const vendor = await Vendor.findById(item.vendor_id)
-                .select("storeName logo address openingHours rating storeSlug isOpen estimatedDeliveryTime deliveryManagedBy flatRateDeliveryFee platformDeliveryFeeOverride")
+                .select("storeName logo address openingHours rating storeSlug isOpen estimatedDeliveryTime platformDeliveryFeeOverride")
                 .lean();
             if (vendor) {
                 const deliveryFee = await resolveStorefrontDeliveryFee(vendor);
@@ -416,7 +417,7 @@ export const getComboDetails = async (req, res) => {
 
         // Fetch vendor info
         const vendor = await Vendor.findById(combo.vendor_id)
-            .select("storeName logo address openingHours rating storeSlug isOpen estimatedDeliveryTime deliveryManagedBy flatRateDeliveryFee platformDeliveryFeeOverride")
+            .select("storeName logo address openingHours rating storeSlug isOpen estimatedDeliveryTime platformDeliveryFeeOverride")
             .lean();
         
         let vendorJson = null;
@@ -586,8 +587,7 @@ export const getPublicFoodDetail = async (req, res) => {
         const vendor = await Vendor.findById(item.vendor_id)
             .select(
                 "storeName logo address openingHours rating " +
-                "storeSlug deliveryManagedBy flatRateDeliveryFee " +
-                "platformDeliveryFeeOverride isOpen estimatedDeliveryTime"
+                "storeSlug platformDeliveryFeeOverride isOpen estimatedDeliveryTime"
             )
             .lean();
 

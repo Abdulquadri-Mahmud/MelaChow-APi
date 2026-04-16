@@ -156,11 +156,11 @@ export const getTrendingSearch = async (req, res) => {
     const trendingVendorIds  = [...new Set(trendingItems.map((i) => i.vendor_id?.toString()).filter(Boolean))];
     const trendingCategoryIds = [...new Set(trendingItems.map((i) => i.platform_category_id?.toString()).filter(Boolean))];
 
-    const [trendingVendors, trendingPortions, trendingCategories] = await Promise.all([
+    const [trendingVendors, allTrendingPortions, trendingCategories] = await Promise.all([
       Vendor.find(
         { _id: { $in: trendingVendorIds } },
         "storeName logo address openingHours " +
-        "deliveryManagedBy flatRateDeliveryFee platformDeliveryFeeOverride"
+        "platformDeliveryFeeOverride"
       ).lean(),
       MenuItemPortion.find({ menu_item_id: { $in: trendingItemIds } })
         .sort({ price: 1 })
@@ -188,9 +188,7 @@ export const getTrendingSearch = async (req, res) => {
     const trendingVendorMap = {};
     trendingVendors.forEach((v) => {
       let resolvedFee = 0;
-      if (v.deliveryManagedBy === "vendor") {
-        resolvedFee = v.flatRateDeliveryFee || 0;
-      } else if (v.platformDeliveryFeeOverride != null && v.platformDeliveryFeeOverride > 0) {
+      if (v.platformDeliveryFeeOverride != null && v.platformDeliveryFeeOverride > 0) {
         resolvedFee = v.platformDeliveryFeeOverride;
       } else {
         const cityName = v.address?.city?.toLowerCase();

@@ -46,7 +46,7 @@ export const getFoodsByLocation = async (req, res) => {
     const vendors = await Vendor.find(vendorQuery)
       .select(
         "_id storeName logo address openingHours " +
-        "deliveryManagedBy flatRateDeliveryFee platformDeliveryFeeOverride"
+        "platformDeliveryFeeOverride"
       )
       .lean();
 
@@ -76,11 +76,10 @@ export const getFoodsByLocation = async (req, res) => {
 
     const vendorMap = {};
     vendors.forEach((v) => {
-      // Resolve fee logic
+      // All deliveries are platform-managed. Resolution order:
+      // 1. Per-vendor admin override, 2. City-level platform fee
       let resolvedFee = 0;
-      if (v.deliveryManagedBy === "vendor") {
-        resolvedFee = v.flatRateDeliveryFee || 0;
-      } else if (v.platformDeliveryFeeOverride != null && v.platformDeliveryFeeOverride > 0) {
+      if (v.platformDeliveryFeeOverride != null && v.platformDeliveryFeeOverride > 0) {
         resolvedFee = v.platformDeliveryFeeOverride;
       } else {
         const cityName = v.address?.city?.toLowerCase();

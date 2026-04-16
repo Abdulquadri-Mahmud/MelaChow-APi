@@ -13,18 +13,9 @@ import { createTransferRecipient } from '../../services/bank.service.js';
 export const registerVendor = async (req, res) => {
   try {
     const {
-      email,
-      name,
-      phone,
-      storeName,
-      storeDescription,
-      logo,
-      cuisineTypes,
       address,
       openingHours,
       payoutDetails,
-      deliveryManagedBy,
-      flatRateDeliveryFee
     } = req.body;
 
     // Validate input
@@ -90,8 +81,8 @@ export const registerVendor = async (req, res) => {
         };
       }
 
-      if (deliveryManagedBy) existingVendor.deliveryManagedBy = deliveryManagedBy;
-      if (flatRateDeliveryFee !== undefined) existingVendor.flatRateDeliveryFee = flatRateDeliveryFee;
+      // Delivery management is strictly platform-managed
+      existingVendor.deliveryManagedBy = "admin";
 
       await existingVendor.save();
     } else {
@@ -136,8 +127,7 @@ export const registerVendor = async (req, res) => {
         otp,
         otpExpires,
         verified: false,
-        deliveryManagedBy: deliveryManagedBy || "admin",
-        flatRateDeliveryFee: flatRateDeliveryFee || 0
+        deliveryManagedBy: "admin",
       });
     }
 

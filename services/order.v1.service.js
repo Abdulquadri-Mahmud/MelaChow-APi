@@ -60,7 +60,7 @@ export const OrderV1Service = {
                     vendorSubtotal,
                     commission,
                     vendorTotal: vendorSubtotal - commission, // What vendor keeps from food
-                    deliveryFee: vendor.flatRateDeliveryFee || 0, // Simplified for now
+                    deliveryFee: 0, // Legacy service — delivery fees handled by V2
                 });
             }
 

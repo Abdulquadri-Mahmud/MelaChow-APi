@@ -30,9 +30,7 @@ const resolveDeliveryFees = async (vendors) => {
   const feeMap = {};
   vendors.forEach(v => {
     let fee = 0;
-    if (v.deliveryManagedBy === "vendor") {
-      fee = v.flatRateDeliveryFee || 0;
-    } else if (v.platformDeliveryFeeOverride > 0) {
+    if (v.platformDeliveryFeeOverride > 0) {
       fee = v.platformDeliveryFeeOverride;
     } else {
       const key = v.address?.city?.toLowerCase();
@@ -61,7 +59,6 @@ const buildRecommendationItems = async (items) => {
     Vendor.find(
       { _id: { $in: vendorIds } },
       "storeName logo address openingHours " +
-      "deliveryManagedBy flatRateDeliveryFee " +
       "platformDeliveryFeeOverride"
     ).lean(),
 

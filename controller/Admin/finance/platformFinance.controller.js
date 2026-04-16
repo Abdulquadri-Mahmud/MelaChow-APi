@@ -221,13 +221,8 @@ export const getRevenueChart = async (req, res) => {
                 $project: {
                     createdAt: 1,
                     commission: 1,
-                    platformDeliveryShare: {
-                        $cond: [
-                            { $eq: ["$vendor.deliveryManagedBy", "admin"] },
-                            400, // ₦400 flat delivery spread
-                            0
-                        ]
-                    },
+                    // All deliveries are platform-managed — spread applies to every order
+                    platformDeliveryShare: 400,
                     userOrderId: 1,
                     parentOrderTotal: "$parentOrder.total",
                     label: { $dateToString: { format: dateFormat, date: "$createdAt" } }
@@ -433,7 +428,6 @@ export const getVendorBreakdown = async (req, res) => {
                 $project: {
                     vendorId: "$_id",
                     storeName: "$vendorInfo.storeName",
-                    deliveryManagedBy: "$vendorInfo.deliveryManagedBy",
                     orderCount: 1,
                     totalSubtotal: 1,
                     commissionPaid: 1,
