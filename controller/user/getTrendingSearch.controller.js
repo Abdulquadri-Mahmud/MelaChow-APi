@@ -16,7 +16,9 @@ export const getTrendingSearch = async (req, res) => {
   try {
     // ── FIX 1: Resolve location from query params first,
     // then fall back to authenticated user's saved address ──
-    const { city: queryCity, state: queryState } = req.query;
+    const { city: queryCity, state: queryState, limit = 10, page = 1 } = req.query;
+    const itemsPerPage = Number(limit);
+    const skipItems = (Number(page) - 1) * itemsPerPage;
 
     let userCity  = queryCity?.trim()  || null;
     let userState = queryState?.trim() || null;
@@ -106,7 +108,7 @@ export const getTrendingSearch = async (req, res) => {
       trendingItems = [
         ...matchedMenu,
         ...matchedCombos.map(c => ({ ...c, item_type: "combo" }))
-      ].sort((a, b) => (b.ratingCount || 0) - (a.ratingCount || 0)).slice(0, 10);
+      ].sort((a, b) => (b.ratingCount || 0) - (a.ratingCount || 0));
     }
 
     // ── PHASE 2: Fallback — newest items ─────────────────────────
@@ -137,14 +139,19 @@ export const getTrendingSearch = async (req, res) => {
         ...fallbackCombos.map(c => ({ ...c, item_type: "combo" }))
       ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 
-      trendingItems = [...trendingItems, ...additionalItems].slice(0, 10);
+      trendingItems = [...trendingItems, ...additionalItems];
     }
+
+    // Apply pagination slice after merging all sources
+    const totalItems = trendingItems.length;
+    trendingItems = trendingItems.slice(skipItems, skipItems + itemsPerPage);
 
     // Nothing at all — respond gracefully
     if (!trendingItems.length) {
       return res.json({
         success:  true,
         count:    0,
+        total:    totalItems,
         trending: [],
         location: { city: userCity, state: userState },
         meta:     { signal: "none" },
@@ -252,6 +259,9 @@ export const getTrendingSearch = async (req, res) => {
     return res.json({
       success:  true,
       count:    formattedFoods.length,
+      total:    totalItems,
+      currentPage: Number(page),
+      totalPages: Math.ceil(totalItems / itemsPerPage),
       trending: formattedFoods,
       location: { city: userCity, state: userState },
       meta: {
