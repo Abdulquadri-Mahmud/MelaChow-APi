@@ -19,6 +19,7 @@
 import SearchTrend from "../../model/search/analytics/searchTrend.model.js";
 import User from "../../model/user.model.js";
 import MenuItem from "../../model/menu/MenuItem.js";
+import ComboItem from "../../model/menu/ComboItem.js";
 import MenuItemPortion from "../../model/menu/MenuItemPortion.js";
 import Category from "../../model/category.model.js";
 import vendorModel from "../../model/vendor/vendor.model.js";
@@ -243,8 +244,8 @@ export const autocompleteFoods = async (req, res) => {
       });
     }
 
-    // ── Build MenuItem query ─────────────────────────
-    const itemQuery = {
+    // ── Build Search query ──────────────────────────
+    const matchQuery = {
       is_available: true,
       is_in_stock: true,
       is_archived: false,
@@ -257,7 +258,7 @@ export const autocompleteFoods = async (req, res) => {
 
     // Always apply location filter if we have vendor IDs
     if (vendorIds !== null) {
-      itemQuery.vendor_id = { $in: vendorIds };
+      matchQuery.vendor_id = { $in: vendorIds };
     }
 
     // Also match vendors by store name within location
@@ -272,21 +273,33 @@ export const autocompleteFoods = async (req, res) => {
 
     if (vendorNameMatches.length > 0) {
       // Include items from matching vendors in results
-      itemQuery.$or.push({
+      matchQuery.$or.push({
         vendor_id: { $in: vendorNameMatches.map((v) => v._id) },
       });
     }
 
-    // ── Fetch items ──────────────────────────────────
-    const items = await MenuItem.find(itemQuery)
-      .select(
-        "_id name image_url item_type dietary_type " +
-          "tags rating ratingCount vendor_id choice_groups"
-      )
-      .limit(Number(limit))
-      .lean();
+    // ── Fetch items (Menus + Combos) ─────────────────
+    const [menus, combos] = await Promise.all([
+      MenuItem.find(matchQuery)
+        .select("_id name image_url item_type dietary_type tags rating ratingCount vendor_id choice_groups platform_category_id")
+        .sort({ ratingCount: -1, rating: -1 })
+        .limit(Number(limit))
+        .lean(),
+      ComboItem.find(matchQuery)
+        .select("_id name image_url dietary_type tags rating ratingCount vendor_id choice_groups platform_category_id price")
+        .sort({ ratingCount: -1, rating: -1 })
+        .limit(Number(limit))
+        .lean(),
+    ]);
 
-    if (!items.length) {
+    // Merge and sort combined results
+    const combined = [
+      ...menus,
+      ...combos.map(c => ({ ...c, item_type: "combo" }))
+    ].sort((a, b) => (b.ratingCount || 0) - (a.ratingCount || 0))
+     .slice(0, Number(limit));
+
+    if (!combined.length) {
       return res.status(200).json({
         success: true,
         count: 0,
@@ -296,18 +309,25 @@ export const autocompleteFoods = async (req, res) => {
     }
 
     // ── Bulk fetch support data ──────────────────────
-    const { vendorMap, priceMap, portionsMap, categoryMap } = await bulkFetchItemSupport(items);
+    const { vendorMap, priceMap, portionsMap, categoryMap } = await bulkFetchItemSupport(combined);
 
     // ── Shape response ───────────────────────────────
-    const suggestions = items.map((item) => {
+    const suggestions = combined.map((item) => {
       const shaped = shapeSearchResult(item, vendorMap, priceMap, categoryMap);
-      // Autocomplete includes all portions for cart use
-      shaped.portions = (portionsMap[item._id.toString()] || []).map((p) => ({
-        _id: p._id,
-        label: p.label,
-        price_naira: p.price / 100,
-        is_default: p.is_default,
-      }));
+      
+      if (item.item_type === "combo") {
+          shaped.price = item.price / 100;
+          shaped.portionLabel = "Combo";
+          shaped.portions = [];
+      } else {
+          // Autocomplete includes all portions for cart use
+          shaped.portions = (portionsMap[item._id.toString()] || []).map((p) => ({
+            _id: p._id,
+            label: p.label,
+            price_naira: p.price / 100,
+            is_default: p.is_default,
+          }));
+      }
       return shaped;
     });
 
@@ -500,33 +520,54 @@ export const searchFoods = async (req, res) => {
     // ── Execute queries ──────────────────────────────
     const projection = useTextScore ? { score: { $meta: "textScore" } } : {};
 
-    const [items, total] = await Promise.all([
+    const [menus, combos, menusTotal, combosTotal] = await Promise.all([
       MenuItem.find(itemQuery, projection)
-        .select(
-          "_id name image_url item_type dietary_type tags " +
-            "rating ratingCount vendor_id choice_groups " +
-            "platform_category_id prep_time_minutes"
-        )
+        .select("_id name image_url item_type dietary_type tags rating ratingCount vendor_id choice_groups platform_category_id prep_time_minutes")
         .sort(sortOption)
         .skip(skip)
         .limit(Number(limit))
         .lean(),
-
+      ComboItem.find(itemQuery, projection)
+        .select("_id name image_url dietary_type tags rating ratingCount vendor_id choice_groups platform_category_id price prep_time_minutes")
+        .sort(sortOption)
+        .skip(skip)
+        .limit(Number(limit))
+        .lean(),
       MenuItem.countDocuments(itemQuery),
+      ComboItem.countDocuments(itemQuery),
     ]);
 
+    const total = menusTotal + combosTotal;
+    // Merge and re-sort local page (imperfect pagination but consistent for UX)
+    const combinedResults = [
+        ...menus,
+        ...combos.map(c => ({ ...c, item_type: "combo" }))
+    ].sort((a, b) => {
+        if (useTextScore) return (b.score || 0) - (a.score || 0);
+        if (sort === "newest") return new Date(b.createdAt) - new Date(a.createdAt);
+        if (sort === "rating_desc") return (b.ratingCount || 0) - (a.ratingCount || 0);
+        return 0;
+    }).slice(0, Number(limit));
+
     // ── Bulk fetch support data ──────────────────────
-    const { vendorMap, priceMap, portionsMap, categoryMap } = await bulkFetchItemSupport(items);
+    const { vendorMap, priceMap, portionsMap, categoryMap } = await bulkFetchItemSupport(combinedResults);
 
     // ── Shape results ────────────────────────────────
-    const data = items.map((item) => {
+    const data = combinedResults.map((item) => {
       const shaped = shapeSearchResult(item, vendorMap, priceMap, categoryMap);
-      shaped.portions = (portionsMap[item._id.toString()] || []).map((p) => ({
-        _id: p._id,
-        label: p.label,
-        price_naira: p.price / 100,
-        is_default: p.is_default,
-      }));
+      
+      if (item.item_type === "combo") {
+          shaped.price = item.price / 100;
+          shaped.portionLabel = "Combo";
+          shaped.portions = [];
+      } else {
+          shaped.portions = (portionsMap[item._id.toString()] || []).map((p) => ({
+            _id: p._id,
+            label: p.label,
+            price_naira: p.price / 100, // standard price field
+            is_default: p.is_default,
+          }));
+      }
       return shaped;
     });
 
