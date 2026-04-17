@@ -452,6 +452,7 @@ export const searchFoods = async (req, res) => {
           $set: {
             lastSearchedAt: new Date(),
             state: (state || userState)?.toLowerCase() || undefined,
+            city: (city || userCity)?.toLowerCase() || undefined,
           },
         },
         { upsert: true }
