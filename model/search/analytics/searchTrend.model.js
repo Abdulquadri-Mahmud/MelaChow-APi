@@ -27,21 +27,18 @@ const searchTrendSchema = new mongoose.Schema(
       default: null,
     },
 
-    region: {
+    state: {
       type: String,
       trim: true,
       lowercase: true,
+      index: true,
     },
 
-    location: {
-      type: {
-        type: String,
-        enum: ["Point"],
-        default: "Point",
-      },
-      coordinates: {
-        type: [Number], // [longitude, latitude]
-      },
+    city: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      index: true,
     },
 
     lastSearchedAt: {
@@ -51,9 +48,6 @@ const searchTrendSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
-
-// For geospatial queries
-searchTrendSchema.index({ location: "2dsphere" });
 
 // Index for fast sorting by popularity
 searchTrendSchema.index({ count: -1 });
