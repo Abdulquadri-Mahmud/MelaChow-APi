@@ -16,6 +16,10 @@ import { getUserMetrics } from "../../controller/Admin/userMetrics.controller.js
 import { getCategoryMetrics } from "../../controller/Admin/categoryMetrics.controller.js";
 import { getLocationMetrics } from "../../controller/Admin/locationMetrics.controller.js";
 import { forceFailWithdrawal } from "../../controller/wallet/withdrawal.controller.js";
+import { 
+    getAdminWalletBreakdown, 
+    getPayoutHistory 
+} from "../../controller/finance/adminFinanceSummary.controller.js";
 import {
     approveVendor,
     getAllVendors,
@@ -91,5 +95,9 @@ router.get("/vendors/foods", adminAuth, getVendorFoods);
 
 // Force fail stuck withdrawal
 router.patch("/withdrawals/:withdrawalId/force-fail", adminAuth, forceFailWithdrawal);
+
+// Finance Summary Routes
+router.get("/finance/wallet-breakdown", adminAuth, getAdminWalletBreakdown);
+router.get("/finance/payout-history", adminAuth, getPayoutHistory);
 
 export default router;

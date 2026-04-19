@@ -49,6 +49,8 @@ import redisClient from './config/redis.js';
 import './config/queue.js';
 import './workers/index.js';
 import { initializeSocket } from './socket/socketServer.js';
+import { scheduledPayoutWorker, triggerScheduledPayouts } from "./jobs/scheduledPayout.job.js";
+import cron from "node-cron";
 
 // Environment loaded via ./config/env.js import above
 
@@ -425,6 +427,19 @@ const startServer = async () => {
       logger.info({ port: PORT, env: process.env.NODE_ENV || "development" }, '🚀 Server running');
       logger.info('🔌 Socket.IO ready for connections');
     });
+
+    // ── Scheduled Payout: Daily at 8:00 PM Nigeria time (WAT = UTC+1) ─────────
+    // Cron pattern "0 19 * * *" = 19:00 UTC = 20:00 WAT
+    cron.schedule(
+        "0 19 * * *",
+        async () => {
+            console.log("🕗 [CRON] 8 PM WAT payout sweep triggered...");
+            await triggerScheduledPayouts();
+        },
+        { timezone: "Africa/Lagos" }
+    );
+
+    console.log("✅ Scheduled payout cron registered (8 PM WAT daily)");
 
     // 5. Graceful shutdown
     // Render sends SIGTERM before stopping the instance
