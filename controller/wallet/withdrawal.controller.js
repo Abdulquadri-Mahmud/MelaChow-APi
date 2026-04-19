@@ -59,6 +59,23 @@ export const initiateWithdrawal = async (req, res) => {
       });
     }
 
+    // STEP 4B — 24-hour cooldown: one successful withdrawal per 24 hours
+    const lastCompleted = await Withdrawal.findOne({
+      vendorId: req.vendor._id,
+      status: "completed",
+    }).sort({ settledAt: -1 });
+
+    if (lastCompleted?.settledAt) {
+      const hoursSinceLast =
+        (Date.now() - new Date(lastCompleted.settledAt).getTime()) / (1000 * 60 * 60);
+      if (hoursSinceLast < 24) {
+        const hoursRemaining = Math.ceil(24 - hoursSinceLast);
+        return res.status(429).json({
+          message: `Withdrawal cooldown active. You can withdraw again in ${hoursRemaining} hour${hoursRemaining !== 1 ? "s" : ""}.`,
+        });
+      }
+    }
+
     // STEP 5 — Calculate Paystack transfer fee
     let transferFee = 50;
     if (amount <= 5000) transferFee = 10;

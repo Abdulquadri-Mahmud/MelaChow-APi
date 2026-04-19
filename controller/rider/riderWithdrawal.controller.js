@@ -241,6 +241,24 @@ export const initiateRiderWithdrawal = async (req, res) => {
             });
         }
 
+        // STEP 4B — 24-hour cooldown: one successful withdrawal per 24 hours
+        const lastCompleted = await RiderWithdrawal.findOne({
+            riderId,
+            status: "completed",
+        }).sort({ settledAt: -1 });
+
+        if (lastCompleted?.settledAt) {
+            const hoursSinceLast =
+                (Date.now() - new Date(lastCompleted.settledAt).getTime()) / (1000 * 60 * 60);
+            if (hoursSinceLast < 24) {
+                const hoursRemaining = Math.ceil(24 - hoursSinceLast);
+                return res.status(429).json({
+                    success: false,
+                    message: `Withdrawal cooldown active. You can withdraw again in ${hoursRemaining} hour${hoursRemaining !== 1 ? "s" : ""}.`,
+                });
+            }
+        }
+
         // STEP 5 — Calculate Paystack transfer fee (same tiers as vendor)
         let transferFee = 50;
         if (amount <= 5000) transferFee = 10;

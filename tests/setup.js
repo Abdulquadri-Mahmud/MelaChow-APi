@@ -6,6 +6,7 @@ let mongod;
 
 // Start in-memory MongoDB before all tests
 beforeAll(async () => {
+    if (process.env.SKIP_MONGO === 'true') return;
     mongod = await MongoMemoryServer.create();
     const uri = mongod.getUri();
     await mongoose.connect(uri);
@@ -13,6 +14,7 @@ beforeAll(async () => {
 
 // Clean all collections between tests
 afterEach(async () => {
+    if (process.env.SKIP_MONGO === 'true') return;
     const collections = mongoose.connection.collections;
     for (const key in collections) {
         await collections[key].deleteMany({});
@@ -21,6 +23,7 @@ afterEach(async () => {
 
 // Disconnect and stop MongoDB after all tests
 afterAll(async () => {
+    if (process.env.SKIP_MONGO === 'true') return;
     await mongoose.disconnect();
     if (mongod) await mongod.stop();
 });

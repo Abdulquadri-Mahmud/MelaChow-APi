@@ -4,7 +4,6 @@ import {
     resolveAccountName,
     saveBankAccount,
     getRiderBankAccount,
-    initiateRiderWithdrawal,
     getRiderWithdrawalHistory,
 } from "../controller/rider/riderWithdrawal.controller.js";
 import { getBankList } from "../controller/wallet/bankAccount.controller.js";
@@ -14,16 +13,16 @@ import { adminAuth } from "../middleware/adminAuth.js";
 
 const router = express.Router();
 
-// Vendor manages their riders
-router.post("/vendors/:vendorId/riders", authVendor, riderController.createRider);
-router.get("/vendors/:vendorId/riders", authVendor, riderController.getVendorRiders);
-router.get("/vendors/:vendorId/riders/available", authVendor, riderController.getAvailableRiders);
-router.get("/vendors/:vendorId/riders/:riderId", authVendor, riderController.getSingleVendorRider);
-router.patch("/vendors/:vendorId/riders/:riderId", authVendor, riderController.updateRider);
-router.delete("/vendors/:vendorId/riders/:riderId", authVendor, riderController.deactivateRider);
+// Vendor manages their riders (DISABLED - Admins now manage riders)
+// router.post("/vendors/:vendorId/riders", authVendor, riderController.createRider);
+// router.get("/vendors/:vendorId/riders", authVendor, riderController.getVendorRiders);
+// router.get("/vendors/:vendorId/riders/available", authVendor, riderController.getAvailableRiders);
+// router.get("/vendors/:vendorId/riders/:riderId", authVendor, riderController.getSingleVendorRider);
+// router.patch("/vendors/:vendorId/riders/:riderId", authVendor, riderController.updateRider);
+// router.delete("/vendors/:vendorId/riders/:riderId", authVendor, riderController.deactivateRider);
 
-// Vendor assigns a rider to an order
-router.post("/vendors/:vendorId/orders/:orderId/assign-rider", authVendor, riderController.assignRider);
+// Vendor assigns a rider to an order (DISABLED - Admins now handle assignments or automated)
+// router.post("/vendors/:vendorId/orders/:orderId/assign-rider", authVendor, riderController.assignRider);
 
 // ✅ FIX: This route was called by the dashboard (getActiveRiderOrder) but NEVER existed.
 // Without it, fetchActiveOrder() always got a 404 → activeOrder was always null
@@ -45,7 +44,6 @@ router.post("/riders/:riderId/payout/bank-account", requireRiderAuth, saveBankAc
 // Step 2b: Fetch saved bank account details
 router.get("/riders/:riderId/payout/bank-account", requireRiderAuth, getRiderBankAccount);
 // Step 3: Initiate withdrawal to bank account
-router.post("/riders/:riderId/payout/withdraw", requireRiderAuth, initiateRiderWithdrawal);
 // History: Fetch past withdrawals
 router.get("/riders/:riderId/payout/history", requireRiderAuth, getRiderWithdrawalHistory);
 // Bank list: rider-scoped, uses same stateless Paystack controller as vendor

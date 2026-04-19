@@ -8,6 +8,7 @@ import mongoose from "mongoose";
 import { releaseEscrowToVendor } from '../controller/order/createOrderV2.controller.js';
 import { escrowReleaseQueue } from '../config/queue.js';
 import logger from '../config/logger.js';
+import { createTransferRecipient } from "./paystackTransfer.service.js";
 
 /**
  * Create a new rider
@@ -26,12 +27,32 @@ export const createRider = async (riderData, vendorId = null) => {
         throw new Error("A rider with this phone number already exists");
     }
 
+    // Create Paystack recipient if bank details provided
+    let finalPayoutDetails = riderData.payoutDetails || { payoutEnabled: false };
+    
+    if (finalPayoutDetails.bankCode && finalPayoutDetails.accountNumber && finalPayoutDetails.accountName) {
+        try {
+            const recipientCode = await createTransferRecipient({
+                name: finalPayoutDetails.accountName,
+                accountNumber: finalPayoutDetails.accountNumber,
+                bankCode: finalPayoutDetails.bankCode
+            });
+            finalPayoutDetails.recipientCode = recipientCode;
+            finalPayoutDetails.payoutEnabled = true;
+            console.log(`✅ Paystack recipient created for new rider: ${recipientCode}`);
+        } catch (err) {
+            console.error("⚠️ Failed to create Paystack recipient during rider creation:", err.message);
+            // We don't block rider creation, but they won't be able to withdraw until they re-save bank details
+        }
+    }
+
     const rider = await Rider.create({
         ...riderData,
         vendorId: vendorId || null,
         managedBy: vendorId ? "vendor" : "admin",
         status: "offline",
-        isActive: true
+        isActive: true,
+        payoutDetails: finalPayoutDetails
     });
 
     // Auto-create wallet for rider
@@ -588,6 +609,37 @@ export const adminUpdateRider = async (riderId, updateData) => {
 
     if (updateData.password) {
         rider.password = updateData.password;
+    }
+
+    // Handle payoutDetails update and recipient regeneration
+    if (updateData.payoutDetails) {
+        const currentPayout = rider.payoutDetails || {};
+        const newPayout = updateData.payoutDetails;
+
+        // If bank info changed, regenerate recipient
+        const bankChanged = 
+            newPayout.accountNumber !== currentPayout.accountNumber || 
+            newPayout.bankCode !== currentPayout.bankCode;
+
+        if (bankChanged && newPayout.accountNumber && newPayout.bankCode && newPayout.accountName) {
+            try {
+                const recipientCode = await createTransferRecipient({
+                    name: newPayout.accountName,
+                    accountNumber: newPayout.accountNumber,
+                    bankCode: newPayout.bankCode
+                });
+                newPayout.recipientCode = recipientCode;
+                newPayout.payoutEnabled = true;
+                console.log(`✅ Paystack recipient regenerated for rider ${riderId}: ${recipientCode}`);
+            } catch (err) {
+                console.error("⚠️ Failed to regenerate Paystack recipient during admin rider update:", err.message);
+            }
+        }
+
+        rider.payoutDetails = {
+            ...currentPayout,
+            ...newPayout
+        };
     }
 
     await rider.save();
