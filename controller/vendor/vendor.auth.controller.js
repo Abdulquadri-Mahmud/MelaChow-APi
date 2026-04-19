@@ -13,6 +13,13 @@ import { createTransferRecipient } from '../../services/bank.service.js';
 export const registerVendor = async (req, res) => {
   try {
     const {
+      email,
+      name,
+      phone,
+      storeName,
+      storeDescription,
+      logo,
+      cuisineTypes,
       address,
       openingHours,
       payoutDetails,
