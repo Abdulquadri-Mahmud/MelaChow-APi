@@ -7,7 +7,8 @@ import {
     registerAdmin,
     resetPassword,
     logoutAdmin,
-    getRecentActivities
+    getRecentActivities,
+    getMe
 } from "../../controller/Admin/admin.controller.js";
 import { adminAuth } from "../../middleware/adminAuth.js";
 import { getOperationalVelocity } from "../../controller/Admin/dashboard.controller.js";
@@ -50,6 +51,7 @@ router.post("/reset-password", resetPassword);
 router.post("/logout", logoutAdmin);
 
 // Admin management
+router.get("/me", adminAuth, getMe);
 router.get("/get-all", adminAuth, getAllAdmins);
 router.delete("/delete/:id", adminAuth, deleteAdmin);
 router.get("/activities", adminAuth, getRecentActivities);

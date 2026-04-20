@@ -10,6 +10,24 @@ import { sendTokenCookie } from "../../utils/sendTokenCookie.js";
 import { generateAccessToken, generateRefreshToken } from "../../utils/generateTokens.js";
 import ActivityLog from "../../model/ActivityLog.js";
 
+// ==========================
+// GET CURRENT ADMIN PROFILE
+// ==========================
+export const getMe = async (req, res) => {
+  try {
+    const admin = await Admin.findById(req.admin._id);
+    if (!admin) return res.status(404).json({ success: false, message: "Admin not found" });
+
+    res.status(200).json({
+      success: true,
+      admin: admin.getPublicProfile(),
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Failed to fetch profile", error: err.message });
+  }
+};
+
+
 export const registerAdmin = async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
