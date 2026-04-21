@@ -25,7 +25,7 @@ export const getFoodsByLocation = async (req, res) => {
       });
     }
 
-    // ── STEP 2: Build vendor query ────────────────────
+    // ── STEP 2: Resolve Location Information ─────────────
     let vendorQuery = {
       active: true,
       suspended: false,
@@ -33,13 +33,31 @@ export const getFoodsByLocation = async (req, res) => {
     };
 
     if (cityId && stateId) {
+      // Direct ID-based lookup if provided
       vendorQuery.cityId = cityId;
       vendorQuery.stateId = stateId;
     } else {
+      // String-based lookup with name-to-ID resolution
       const cityRegex = new RegExp(`^\\s*${city.trim()}\\s*$`, "i");
       const stateRegex = new RegExp(`^\\s*${state.trim()}\\s*$`, "i");
-      vendorQuery["address.city"] = cityRegex;
-      vendorQuery["address.state"] = stateRegex;
+
+      // Attempt to resolve IDs for the provided names (robust fallback)
+      const StateModel = (await import("../../model/location/State.js")).default;
+      const CityModel = (await import("../../model/location/City.js")).default;
+
+      const stateDoc = await StateModel.findOne({ name: stateRegex, isActive: true });
+      const cityDoc = stateDoc
+        ? await CityModel.findOne({ name: cityRegex, stateId: stateDoc._id, isActive: true })
+        : null;
+
+      // Match EITHER legacy string address OR the new ID references
+      vendorQuery.$or = [
+        { "address.city": cityRegex, "address.state": stateRegex }
+      ];
+
+      if (stateDoc && cityDoc) {
+        vendorQuery.$or.push({ stateId: stateDoc._id, cityId: cityDoc._id });
+      }
     }
 
     // ── STEP 3: Find vendors in this location ─────────
