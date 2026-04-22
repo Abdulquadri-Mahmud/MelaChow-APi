@@ -169,13 +169,30 @@ export const getRecommendations = async (req, res) => {
         const promises = {};
 
         // STEP 3 — LOCATION VENDOR RESOLUTION
+        const StateModel = (await import("../../model/location/State.js")).default;
+        const CityModel = (await import("../../model/location/City.js")).default;
+
+        const stateDoc = stateRegex ? await StateModel.findOne({ name: stateRegex, isActive: true }) : null;
+        const cityDoc = (stateDoc && cityRegex)
+            ? await CityModel.findOne({ name: cityRegex, stateId: stateDoc._id, isActive: true })
+            : null;
+
         const vendorQuery = {
-            active:    true,
+            active: true,
             suspended: false,
             deletedAt: null,
+            $or: []
         };
-        if (cityRegex)  vendorQuery["address.city"]  = cityRegex;
-        if (stateRegex) vendorQuery["address.state"] = stateRegex;
+
+        if (cityRegex && stateRegex) {
+            vendorQuery.$or.push({ "address.city": cityRegex, "address.state": stateRegex });
+        }
+        if (stateDoc && cityDoc) {
+            vendorQuery.$or.push({ stateId: stateDoc._id, cityId: cityDoc._id });
+        }
+
+        // If no location parameters provided at all, remove $or to find global trending (if applicable)
+        if (vendorQuery.$or.length === 0) delete vendorQuery.$or;
 
         const vendors = await Vendor.find(vendorQuery)
             .select("_id")

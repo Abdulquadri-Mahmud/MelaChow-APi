@@ -53,26 +53,35 @@ const resolveLocationVendors = async (req, overrideCity, overrideState) => {
     return { vendorIds: null, userCity: null, userState: null };
   }
 
-  // Build vendor location query
-  // City is the PRIMARY filter — state is supplementary.
-  // This matches the getFoodsByLocation behaviour.
+  // Build vendor location query with name-to-ID resolution
+  const StateModel = (await import("../../model/location/State.js")).default;
+  const CityModel = (await import("../../model/location/City.js")).default;
+
+  const cityRegex = userCity ? new RegExp(`^\\s*${userCity.trim()}\\s*$`, "i") : null;
+  const stateRegex = userState ? new RegExp(`^\\s*${userState.trim()}\\s*$`, "i") : null;
+
+  const stateDoc = stateRegex ? await StateModel.findOne({ name: stateRegex, isActive: true }) : null;
+  const cityDoc = (stateDoc && cityRegex)
+    ? await CityModel.findOne({ name: cityRegex, stateId: stateDoc._id, isActive: true })
+    : null;
+
   const vendorLocationQuery = {
     active: true,
     suspended: false,
     deletedAt: null,
+    $or: []
   };
-  if (userCity) {
-    vendorLocationQuery["address.city"] = {
-      $regex: `^\\s*${userCity.trim()}\\s*$`,
-      $options: "i",
-    };
+
+  if (cityRegex && stateRegex) {
+    vendorLocationQuery.$or.push({ "address.city": cityRegex, "address.state": stateRegex });
   }
-  if (userState) {
-    vendorLocationQuery["address.state"] = {
-      $regex: userState.trim(),
-      $options: "i",
-    };
+
+  if (stateDoc && cityDoc) {
+    vendorLocationQuery.$or.push({ stateId: stateDoc._id, cityId: cityDoc._id });
   }
+
+  // Fallback to empty filter if no location matched via either method
+  if (vendorLocationQuery.$or.length === 0) delete vendorLocationQuery.$or;
 
   const vendors = await vendorModel.find(vendorLocationQuery).select("_id").lean();
 
