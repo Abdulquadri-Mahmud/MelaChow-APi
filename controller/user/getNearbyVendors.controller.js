@@ -60,6 +60,11 @@ export const getNearbyVendorsForUser = async (req, res) => {
             ]
         };
 
+        // Add Cuisine Filter if provided
+        if (req.query.cuisine) {
+            query.cuisineTypes = { $in: [new RegExp(`^\\s*${req.query.cuisine.trim()}\\s*$`, "i")] };
+        }
+
         // 4. Find Active Vendors in that location
         const vendors = await Vendor.find(query)
             .select("storeName storeSlug storeDescription logo address fullAddress rating ratingCount cuisineTypes openingHours deliveryRadiusKm acceptsDelivery platformDeliveryFeeOverride")
