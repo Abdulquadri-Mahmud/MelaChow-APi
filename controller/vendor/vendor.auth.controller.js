@@ -26,8 +26,8 @@ export const registerVendor = async (req, res) => {
     } = req.body;
 
     // Validate input
-    if (!email || !name || !storeName) {
-      return res.status(400).json({ message: 'Email, Name, and Store Name are required' });
+    if (!email || !name || !storeName || !cuisineTypes || cuisineTypes.length === 0) {
+      return res.status(400).json({ message: 'Email, Name, Store Name, and at least one Cuisine Type are required' });
     }
 
     // Check if vendor exists

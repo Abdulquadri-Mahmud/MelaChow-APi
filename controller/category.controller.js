@@ -232,3 +232,34 @@ export const getCategoryTree = async (req, res) => {
         });
     }
 };
+
+// GET ALL CATEGORIES FOR VENDOR SELECTION (Includes inactive, grouped by root)
+export const getPlatformCategories = async (req, res) => {
+    try {
+        const categories = await Category.find().lean();
+        
+        // Build tree: Match children to their parents
+        const rootCategories = categories.filter(c => !c.parent);
+        const childCategories = categories.filter(c => c.parent);
+        
+        const tree = rootCategories.map(root => ({
+            ...root,
+            children: childCategories.filter(child => {
+                const pId = child.parent?.toString();
+                const rId = root._id.toString();
+                return pId === rId;
+            })
+        }));
+
+        res.status(200).json({
+            success: true,
+            data: tree
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            message: "Error fetching platform categories",
+            error: error.message,
+        });
+    }
+};

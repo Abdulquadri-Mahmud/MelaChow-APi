@@ -42,6 +42,7 @@ const vendorSchema = new Schema(
     storeSlug: { type: String, unique: true, sparse: true }, // Auto-generated URL slug from storeName
     storeDescription: { type: String, default: "" }, // Short bio or about store
     logo: { type: String, default: "" }, // Store logo (Cloudinary or CDN URL)
+    coverImage: { type: String, default: "" }, // Store cover image (Cloudinary or CDN URL)
 
     // Address & geo-coordinates
     // Address info (legacy string fields - kept for backward compatibility)
@@ -67,7 +68,11 @@ const vendorSchema = new Schema(
     requestedCity: { type: String, default: "" }, // Vendor's requested city (if not in DB)
 
     // Food categories vendor serves
-    cuisineTypes: [{ type: String }], // Example: ["Swallow", "Rice", "Salads"]
+    cuisineTypes: { 
+      type: [{ type: String }], 
+      required: true,
+      default: []
+    }, // Example: ["Swallow", "Rice", "Salads"]
 
     // Working hours per day
     openingHours: {
@@ -275,6 +280,7 @@ vendorSchema.methods.getPublicProfile = function () {
     rating: this.rating,
     ratingCount: this.ratingCount,
     cuisineTypes: this.cuisineTypes,
+    coverImage: this.coverImage,
     acceptsDelivery: this.acceptsDelivery,
     flatRateDeliveryFee: this.flatRateDeliveryFee,
     deliveryRadiusKm: this.deliveryRadiusKm,
