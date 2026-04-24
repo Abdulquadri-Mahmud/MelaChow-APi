@@ -127,7 +127,8 @@ export const getFoodsByLocation = async (req, res) => {
       ComboItem.find({
           vendor_id:    { $in: vendorIds },
           is_available: true,
-          is_archived:  { $ne: true },
+          is_in_stock:  true,
+          is_archived:  false,
       }).lean(),
     ]);
 
@@ -290,10 +291,10 @@ export const getFoodsByLocation = async (req, res) => {
     });
 
   } catch (error) {
-    console.error("GetFoodsByLocation Error:", error);
+    console.error("GetFoodsByLocation Error:", error.message, error.stack);
     return res.status(500).json({
       success: false,
-      message: "Server Error",
+      message: error.message, // ← temporary, remove before prod
     });
   }
 };
