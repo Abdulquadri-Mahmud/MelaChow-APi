@@ -124,6 +124,14 @@ const vendorSchema = new Schema(
     isApproved: { type: Boolean, default: false, index: true }, // Admin approval
     suspended: { type: Boolean, default: false },
     active: { type: Boolean, default: true },
+    // Denormalized promo flag — flipped by admin when activating/deactivating
+    // a VendorDeliveryPromo. Used by frontend for badge display without
+    // an extra DB lookup per vendor card.
+    hasActiveDeliveryPromo: {
+      type:    Boolean,
+      default: false,
+      index:   true,
+    },
     suspensionReason: {
       type: String,
       default: "",

@@ -34,8 +34,13 @@ import {
     updateCommission,
     updateVendorDeliveryMode,
 } from "../../controller/Admin/vendors_management/vendor.controller.js";
+import vendorPromoRoutes from "./vendorPromo.routes.js";
+import platformPromoRoutes from "./platformPromo.routes.js";
 
 const router = express.Router();
+
+router.use("/promos", vendorPromoRoutes);
+router.use("/promos", platformPromoRoutes);
 
 // Category Management Routes
 router.get("/categories/metrics", adminAuth, getCategoryMetrics);

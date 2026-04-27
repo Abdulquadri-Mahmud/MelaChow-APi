@@ -19,6 +19,15 @@ import { emitNewOrderToRestaurant } from "../../socket/events/orderEvents.js";
 import { orderAutoCancelQueue } from '../../config/queue.js';
 import logger from '../../config/logger.js';
 
+import FreeDeliveryPromo from "../../model/promo/FreeDeliveryPromo.js";
+import FreeDeliveryClaim  from "../../model/promo/FreeDeliveryClaim.js";
+import VendorDeliveryPromo from "../../model/promo/VendorDeliveryPromo.js";
+
+// Max number of claims allowed from the same IP address.
+// Set to 3 to allow legitimate students sharing campus/hostel WiFi
+// while still soft-blocking obvious multi-account abuse.
+const PROMO_MAX_CLAIMS_PER_IP = 3;
+
 /**
  * ========================================
  * HELPER: Validate MenuItem Availability
@@ -248,6 +257,311 @@ const resolveVendorDeliveryFee = async (vendor) => {
 };
 
 /**
+ * SHA-256 hash of an IP address.
+ * Never store the raw IP — only the hash.
+ */
+const hashIp = (rawIp) => {
+  return crypto.createHash("sha256").update(rawIp || "unknown").digest("hex");
+};
+
+/**
+ * Extract the real client IP from the request.
+ * Handles proxies (Nginx, Render's edge layer) via x-forwarded-for.
+ * Returns "unknown" if no IP can be determined.
+ */
+const extractIp = (req) => {
+  const forwarded = req.headers["x-forwarded-for"];
+  if (forwarded) {
+    // x-forwarded-for can be comma-separated: "client, proxy1, proxy2"
+    // First entry is the original client IP
+    return forwarded.split(",")[0].trim();
+  }
+  return req.ip || req.connection?.remoteAddress || "unknown";
+};
+
+/**
+ * Soft eligibility check for the first-order free delivery promo.
+ *
+ * Does NOT claim a slot. Slot is claimed atomically inside
+ * claimFreeDeliverySlotInSession at payment verification time.
+ *
+ * Returns { eligible: false } on any error — never blocks order creation.
+ *
+ * Gates (fail-fast, in order):
+ *   1. Promo exists, isActive, usedSlots < totalSlots
+ *   2. originalDeliveryFee > 0 (city fee must be non-zero; if already free, no slot consumed)
+ *   3. userId not in FreeDeliveryClaim (hard unique constraint)
+ *   4. User has no previous paid order (first-order verification)
+ *   5. IP claim count ≤ PROMO_MAX_CLAIMS_PER_IP (soft fraud signal)
+ */
+const checkFreeDeliveryEligibility = async (
+  userId,
+  rawIp,
+  originalDeliveryFee,
+  session
+) => {
+  try {
+    // Gate 2: Only apply promo if there is actually a fee to waive.
+    // If the city fee is already ₦0, do nothing — no slot consumed.
+    if (!originalDeliveryFee || originalDeliveryFee <= 0) {
+      return { eligible: false, reason: "city_fee_already_zero" };
+    }
+
+    // Gate 1: Promo must be active with slots remaining
+    const promo = await FreeDeliveryPromo.findOne({
+      isActive: true,
+      $expr: { $lt: ["$usedSlots", "$totalSlots"] },
+    })
+      .session(session)
+      .lean();
+
+    if (!promo) {
+      return { eligible: false, reason: "no_active_promo" };
+    }
+
+    // Gate 3: userId must not have a prior claim
+    const userClaim = await FreeDeliveryClaim.findOne({ userId }).lean();
+    if (userClaim) {
+      return { eligible: false, reason: "user_already_claimed" };
+    }
+
+    // Gate 4: User must not have any previous paid order
+    const previousPaidOrder = await Order.findOne({
+      userId,
+      paymentStatus: "paid",
+    })
+      .session(session)
+      .lean();
+
+    if (previousPaidOrder) {
+      return { eligible: false, reason: "not_first_order" };
+    }
+
+    // Gate 5: IP soft fraud check — allow up to PROMO_MAX_CLAIMS_PER_IP per IP
+    const hashedIp = hashIp(rawIp);
+    const ipClaimCount = await FreeDeliveryClaim.countDocuments({
+      hashedIp,
+    });
+
+    if (ipClaimCount >= PROMO_MAX_CLAIMS_PER_IP) {
+      logger.warn(
+        { hashedIp, ipClaimCount, userId },
+        "⚠️ Free delivery promo: IP claim threshold exceeded — soft block applied"
+      );
+      return { eligible: false, reason: "ip_threshold_exceeded" };
+    }
+
+    if (ipClaimCount > 0) {
+      // Same IP has been used before but under threshold — log for ops visibility
+      logger.warn(
+        { hashedIp, ipClaimCount, userId },
+        `⚠️ Free delivery promo: IP has ${ipClaimCount} prior claim(s) — allowing (under threshold)`
+      );
+    }
+
+    return {
+      eligible: true,
+      promoId:  promo._id,
+      hashedIp,
+    };
+  } catch (err) {
+    // Never block order creation due to promo check failure
+    logger.warn(
+      { error: err.message },
+      "⚠️ Free delivery eligibility check failed — skipping promo"
+    );
+    return { eligible: false, reason: "check_error" };
+  }
+};
+
+/**
+ * Atomically claim a free delivery slot after payment is confirmed.
+ * Must be called within an active Mongoose session/transaction.
+ * Idempotent — returns immediately if order already marked claimed.
+ *
+ * Non-fatal contract: this function MUST NOT throw uncaught errors.
+ * Payment confirmation must never be blocked by promo logic.
+ */
+const claimFreeDeliverySlotInSession = async (order, session) => {
+  if (!order.freeDeliveryPromo?.eligible) return;
+  if (order.freeDeliveryPromo?.claimed) return; // idempotency — already done
+
+  const { promoId, hashedIp, originalDeliveryFee } = order.freeDeliveryPromo;
+
+  // Atomic slot increment.
+  // Condition prevents going over totalSlots.
+  // If null is returned (race exhausted all slots between eligibility
+  // check and now), we still honor the ₦0 delivery the customer
+  // already paid — and log the overflow for admin review.
+  const updatedPromo = await FreeDeliveryPromo.findOneAndUpdate(
+    {
+      _id:      promoId,
+      isActive: true,
+      $expr:    { $lt: ["$usedSlots", "$totalSlots"] },
+    },
+    { $inc: { usedSlots: 1 } },
+    { new: true, session }
+  );
+
+  if (!updatedPromo) {
+    logger.warn(
+      { orderId: order.orderId },
+      "⚠️ Promo overflow — all 100 slots exhausted in race condition; ₦0 delivery honored for this order, slot not counted"
+    );
+    // Still record the claim for audit purposes, without having incremented usedSlots
+  }
+
+  // Create the claim record.
+  // On duplicate key (userId unique violation), this means the same user
+  // somehow triggered two concurrent payments. Log and continue — non-fatal.
+  try {
+    await FreeDeliveryClaim.create(
+      [
+        {
+          userId:            order.userId,
+          orderId:           order._id,
+          hashedIp:          hashedIp || "unknown",
+          deliveryFeeWaived: originalDeliveryFee,
+          promoId:           promoId || null,
+        },
+      ],
+      { session }
+    );
+    logger.info(
+      { orderId: order.orderId, feeWaived: originalDeliveryFee },
+      "✅ Free delivery claim recorded"
+    );
+  } catch (dupErr) {
+    if (dupErr.code === 11000) {
+      logger.warn(
+        { orderId: order.orderId },
+        "⚠️ Duplicate free delivery claim prevented (userId unique violation) — ₦0 delivery honored"
+      );
+      // Non-fatal: customer paid ₦0 already; honor it
+    } else {
+      throw dupErr; // Unexpected error — re-throw for outer catch
+    }
+  }
+
+  // Mark order as claimed within the same transaction
+  await Order.findByIdAndUpdate(
+    order._id,
+    { "freeDeliveryPromo.claimed": true },
+    { session }
+  );
+};
+
+/**
+ * Check if the vendor in this order has an active sponsored delivery promo.
+ *
+ * Conditions for promo to apply:
+ *   1. Vendor has an active promo (isActive: true)
+ *   2. Current time is within [startsAt, endsAt]
+ *   3. usedOrders < maxOrders (if maxOrders is set)
+ *   4. originalDeliveryFee > 0 (city fee must be non-zero; if already ₦0, nothing to waive)
+ *
+ * Returns { applicable: false } on any error — never blocks order creation.
+ */
+const checkVendorDeliveryPromo = async (vendorId, originalDeliveryFee, session) => {
+  try {
+    // Gate: only apply if there is a fee to waive
+    if (!originalDeliveryFee || originalDeliveryFee <= 0) {
+      return { applicable: false, reason: "city_fee_already_zero" };
+    }
+
+    const now = new Date();
+
+    const promo = await VendorDeliveryPromo.findOne({
+      vendorId,
+      isActive: true,
+      startsAt: { $lte: now },
+      endsAt:   { $gte: now },
+    })
+      .session(session)
+      .lean();
+
+    if (!promo) {
+      return { applicable: false, reason: "no_active_promo" };
+    }
+
+    // Check order cap if set
+    if (promo.maxOrders != null && promo.usedOrders >= promo.maxOrders) {
+      // Promo is exhausted — auto-deactivate asynchronously (non-blocking)
+      VendorDeliveryPromo.findByIdAndUpdate(promo._id, { isActive: false })
+        .then(() =>
+          Vendor.findByIdAndUpdate(vendorId, { hasActiveDeliveryPromo: false })
+        )
+        .catch(e =>
+          logger.warn({ error: e.message }, "⚠️ Failed to auto-deactivate exhausted promo")
+        );
+
+      return { applicable: false, reason: "promo_exhausted" };
+    }
+
+    return {
+      applicable: true,
+      promoId:    promo._id,
+    };
+  } catch (err) {
+    logger.warn(
+      { error: err.message, vendorId },
+      "⚠️ Vendor promo check failed — skipping vendor promo"
+    );
+    return { applicable: false, reason: "check_error" };
+  }
+};
+
+/**
+ * Atomically increment usedOrders on a VendorDeliveryPromo after
+ * payment is confirmed.
+ *
+ * Must be called within an active Mongoose session.
+ * Non-fatal — never blocks payment confirmation.
+ * Also auto-deactivates the promo if this increment hits the maxOrders cap.
+ */
+const recordVendorPromoUsage = async (order, session) => {
+  if (!order.vendorDeliveryPromo?.applied) return;
+
+  const { promoId, vendorId } = order.vendorDeliveryPromo;
+  if (!promoId) return;
+
+  const updatedPromo = await VendorDeliveryPromo.findByIdAndUpdate(
+    promoId,
+    { $inc: { usedOrders: 1 } },
+    { new: true, session }
+  );
+
+  if (!updatedPromo) {
+    logger.warn({ promoId, orderId: order.orderId }, "⚠️ Vendor promo not found during usage recording");
+    return;
+  }
+
+  logger.info(
+    { promoId, orderId: order.orderId, usedOrders: updatedPromo.usedOrders },
+    "✅ Vendor promo usage recorded"
+  );
+
+  // Auto-deactivate if cap reached — outside session (non-blocking)
+  if (
+    updatedPromo.maxOrders != null &&
+    updatedPromo.usedOrders >= updatedPromo.maxOrders
+  ) {
+    VendorDeliveryPromo.findByIdAndUpdate(promoId, { isActive: false })
+      .then(() =>
+        Vendor.findByIdAndUpdate(vendorId, { hasActiveDeliveryPromo: false })
+      )
+      .catch(e =>
+        logger.warn({ error: e.message }, "⚠️ Auto-deactivation failed after cap reached")
+      );
+
+    logger.info(
+      { promoId, vendorId },
+      "🏁 Vendor promo exhausted and auto-deactivated"
+    );
+  }
+};
+
+/**
  * ========================================
  * HELPER: Generate Order ID
  * ========================================
@@ -275,6 +589,7 @@ export const createOrderV2 = async ({
     paymentStatus = "pending",
     orderId = null,
     idempotencyKey = null, // ← ADD THIS
+    clientIp = null,
 }) => {
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -602,6 +917,68 @@ export const createOrderV2 = async ({
           totalDeliveryFee += resolvedFee;
         }
 
+        /* ========================================
+         * 5.5️⃣ DELIVERY PROMO RESOLUTION
+         *
+         * Priority order:
+         *   1. Vendor-sponsored promo (checked first — vendor paid for this)
+         *   2. Platform first-order promo (only if vendor promo does not apply)
+         *
+         * If vendor promo applies, platform promo is skipped entirely —
+         * do not waste a platform slot on an already-free delivery.
+         *
+         * originalTotalDeliveryFee is captured BEFORE any override.
+         * ======================================== */
+        const originalTotalDeliveryFee = totalDeliveryFee;
+        let promoEligibilityResult    = { eligible:    false };
+        let vendorPromoResult          = { applicable:  false };
+
+        // MVP enforces single-vendor orders (uniqueVendorIds.length === 1).
+        // The vendor promo check targets that single vendor.
+        const singleVendorId = uniqueVendorIds[0];
+
+        // PRIORITY 1: Vendor-sponsored promo
+        if (singleVendorId) {
+          vendorPromoResult = await checkVendorDeliveryPromo(
+            singleVendorId,
+            originalTotalDeliveryFee,
+            session
+          );
+
+          if (vendorPromoResult.applicable) {
+            totalDeliveryFee = 0;
+            for (const vid of Object.keys(deliveryFeeMap)) {
+              deliveryFeeMap[vid] = 0;
+            }
+            logger.info(
+              { vendorId: singleVendorId, originalFee: originalTotalDeliveryFee },
+              "🏪 Vendor-sponsored free delivery applied"
+            );
+          }
+        }
+
+        // PRIORITY 2: Platform first-order promo
+        // Only run if vendor promo did NOT already zero the fee
+        if (!vendorPromoResult.applicable) {
+          promoEligibilityResult = await checkFreeDeliveryEligibility(
+            userId,
+            clientIp,
+            originalTotalDeliveryFee,
+            session
+          );
+
+          if (promoEligibilityResult.eligible) {
+            totalDeliveryFee = 0;
+            for (const vid of Object.keys(deliveryFeeMap)) {
+              deliveryFeeMap[vid] = 0;
+            }
+            logger.info(
+              { userId, originalFee: originalTotalDeliveryFee },
+              "🎁 Platform first-order free delivery applied"
+            );
+          }
+        }
+
         // --- 6️⃣ DISCOUNT LOGIC ---
         let finalTotal = Number((subtotal + totalDeliveryFee).toFixed(2));
         let appliedDiscount = null;
@@ -718,7 +1095,24 @@ export const createOrderV2 = async ({
                         appliedDiscount, // Persist discount snapshot
                         paymentReference: finalPaymentRef,
                         paymentStatus: finalPaymentStatus, // "paid" if wallet used
-                        orderStatus: "pending"
+                        orderStatus: "pending",
+                        freeDeliveryPromo: promoEligibilityResult.eligible
+                            ? {
+                                eligible:            true,
+                                claimed:             false,
+                                promoId:             promoEligibilityResult.promoId,
+                                hashedIp:            promoEligibilityResult.hashedIp,
+                                originalDeliveryFee: originalTotalDeliveryFee,
+                              }
+                            : { eligible: false },
+                        vendorDeliveryPromo: vendorPromoResult.applicable
+                            ? {
+                                applied:             true,
+                                promoId:             vendorPromoResult.promoId,
+                                vendorId:            singleVendorId,
+                                originalDeliveryFee: originalTotalDeliveryFee,
+                              }
+                            : { applied: false },
                     }
                 ],
                 { session }
@@ -746,6 +1140,16 @@ export const createOrderV2 = async ({
         let vendorOrderMapping = {};
         if (useWallet) {
             vendorOrderMapping = await createVendorOrdersAndUpdateWallets(order, session);
+
+            // 🎁 Claim promo slot for wallet-paid orders (within same transaction)
+            if (order.freeDeliveryPromo?.eligible) {
+                await claimFreeDeliverySlotInSession(order, session);
+            }
+
+            // 🏪 Record vendor promo usage for wallet-paid orders
+            if (order.vendorDeliveryPromo?.applied) {
+                await recordVendorPromoUsage(order, session);
+            }
         }
 
         await session.commitTransaction();
@@ -1148,6 +1552,33 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
         // 4. Create VendorOrders and update wallets
         const vendorOrderMapping = await createVendorOrdersAndUpdateWallets(order, session);
 
+        // 🎁 Claim free delivery slot (Paystack-paid orders)
+        // Non-fatal — payment confirmation proceeds regardless of promo outcome
+        if (order.freeDeliveryPromo?.eligible && !order.freeDeliveryPromo?.claimed) {
+            try {
+                await claimFreeDeliverySlotInSession(order, session);
+            } catch (promoErr) {
+                logger.error(
+                    { orderId: order.orderId, error: promoErr.message },
+                    "❌ Free delivery claim failed post-payment — manual review required"
+                );
+                // Non-fatal: do not abort the transaction or block payment confirmation
+            }
+        }
+
+        // 🏪 Record vendor promo usage (Paystack-paid orders)
+        if (order.vendorDeliveryPromo?.applied) {
+            try {
+                await recordVendorPromoUsage(order, session);
+            } catch (promoErr) {
+                logger.error(
+                    { orderId: order.orderId, error: promoErr.message },
+                    "❌ Vendor promo usage recording failed — manual review required"
+                );
+                // Non-fatal: do not abort payment confirmation
+            }
+        }
+
         await session.commitTransaction();
         session.endSession();
 
@@ -1237,6 +1668,7 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
 export const createOrderController = async (req, res) => {
     try {
         const { items, vendorDeliveryFees, deliveryAddress, phone, discountCode, useWallet, idempotencyKey } = req.body;
+        const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip || "unknown";
         const userId = req.userId; // From auth middleware
 
         const order = await createOrderV2({
@@ -1249,6 +1681,7 @@ export const createOrderController = async (req, res) => {
             useWallet, // Pass wallet flag
             paymentStatus: "pending", // Will be updated if wallet used
             idempotencyKey: idempotencyKey || null, // ← PASS THROUGH
+            clientIp: clientIp,
         });
 
         // If paid via wallet, it's already fulfilled atomically in createOrderV2

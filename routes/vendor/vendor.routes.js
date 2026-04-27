@@ -19,8 +19,12 @@ import {
 } from "../../controller/order/orderController.js";
 import { getVendorReviews } from "../../controller/user/user.reviews.controller.js";
 import vendorAuth from "../../middleware/vendor.middleware.js";
+import { getVendorOwnPromoStatus } from "../../controller/admin/vendorPromo.controller.js";
 
 const router = express.Router();
+
+// Vendor reads their own promo status (read-only)
+router.get("/promo/delivery-status", vendorAuth, getVendorOwnPromoStatus);
 
 router.post("/create", createVendor);          // Create vendor
 
