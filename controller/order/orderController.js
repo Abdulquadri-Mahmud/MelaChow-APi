@@ -674,6 +674,7 @@ export const createOrder = async ({
 export const initializePayment = async (req, res) => {
   try {
     const { items, deliveryAddress, phone, email, vendorDeliveryFees, idempotencyKey } = req.body;
+    const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip || "unknown";
     const userId = req.userId;
 
     // Validation
@@ -699,6 +700,7 @@ export const initializePayment = async (req, res) => {
       paymentStatus: "pending",
       orderStatus: "pending",
       idempotencyKey: idempotencyKey || null, // ← PASS THROUGH
+      clientIp: clientIp,
     });
 
     console.log(`✅ Order created: ${order.orderId} (pending payment)`);

@@ -167,6 +167,7 @@ export const getFullVendorMenu = async (req, res) => {
             deliveryFee:           resolvedDeliveryFee,  // ← resolved, not raw field
             estimatedDeliveryTime: vendor.estimatedDeliveryTime ?? 30,
             rating:                vendor.rating ?? null,
+            ratingCount:           vendor.ratingCount ?? 0,
             storeSlug:             vendor.storeSlug,
         };
 
@@ -370,7 +371,7 @@ export const getMenuItemDetails = async (req, res) => {
         let vendorJson = null;
         if (!isVendorRequest) {
             const vendor = await Vendor.findById(item.vendor_id)
-                .select("storeName logo address openingHours rating storeSlug isOpen estimatedDeliveryTime platformDeliveryFeeOverride")
+                .select("storeName logo address openingHours rating ratingCount storeSlug isOpen estimatedDeliveryTime platformDeliveryFeeOverride")
                 .lean();
             if (vendor) {
                 const deliveryFee = await resolveStorefrontDeliveryFee(vendor);
@@ -382,6 +383,7 @@ export const getMenuItemDetails = async (req, res) => {
                     state: vendor.address?.state,
                     openingHours: vendor.openingHours,
                     rating: vendor.rating ?? null,
+                    ratingCount: vendor.ratingCount ?? 0,
                     storeSlug: vendor.storeSlug,
                     isOpen: vendor.isOpen ?? true,
                     estimatedDeliveryTime: vendor.estimatedDeliveryTime ?? 30,
@@ -417,7 +419,7 @@ export const getComboDetails = async (req, res) => {
 
         // Fetch vendor info
         const vendor = await Vendor.findById(combo.vendor_id)
-            .select("storeName logo address openingHours rating storeSlug isOpen estimatedDeliveryTime platformDeliveryFeeOverride")
+            .select("storeName logo address openingHours rating ratingCount storeSlug isOpen estimatedDeliveryTime platformDeliveryFeeOverride")
             .lean();
         
         let vendorJson = null;
@@ -432,6 +434,7 @@ export const getComboDetails = async (req, res) => {
                 state: vendor.address?.state,
                 openingHours: vendor.openingHours,
                 rating: vendor.rating ?? null,
+                ratingCount: vendor.ratingCount ?? 0,
                 storeSlug: vendor.storeSlug,
                 isOpen: vendor.isOpen ?? true,
                 estimatedDeliveryTime: vendor.estimatedDeliveryTime ?? 30,
@@ -586,7 +589,7 @@ export const getPublicFoodDetail = async (req, res) => {
         // Fetch vendor to attach delivery fee and store info
         const vendor = await Vendor.findById(item.vendor_id)
             .select(
-                "storeName logo address openingHours rating " +
+                "storeName logo address openingHours rating ratingCount " +
                 "storeSlug platformDeliveryFeeOverride isOpen estimatedDeliveryTime"
             )
             .lean();
@@ -614,6 +617,7 @@ export const getPublicFoodDetail = async (req, res) => {
                           state:                 vendor.address?.state,
                           openingHours:          vendor.openingHours,
                           rating:                vendor.rating ?? null,
+                          ratingCount:           vendor.ratingCount ?? 0,
                           storeSlug:             vendor.storeSlug,
                           isOpen:                vendor.isOpen ?? true,
                           estimatedDeliveryTime: vendor.estimatedDeliveryTime ?? 30,

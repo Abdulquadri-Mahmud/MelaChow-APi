@@ -203,6 +203,27 @@ const orderSchema = new mongoose.Schema(
       _id: false // No ID needed for subdocument
     },
 
+    // 🎁 Free Delivery Promo — first-order subsidy tracking
+    freeDeliveryPromo: {
+      eligible:            { type: Boolean, default: false },
+      claimed:             { type: Boolean, default: false },
+      promoId:             { type: mongoose.Schema.Types.ObjectId, ref: "FreeDeliveryPromo" },
+      // SHA-256 of IP — select: false so it never appears in API responses
+      hashedIp:            { type: String, select: false },
+      // The delivery fee that was waived (what platform is subsidising, in ₦)
+      originalDeliveryFee: { type: Number, default: 0 },
+      _id: false,
+    },
+
+    // 🏪 Vendor-Sponsored Free Delivery Promo
+    vendorDeliveryPromo: {
+      applied:             { type: Boolean, default: false },
+      promoId:             { type: mongoose.Schema.Types.ObjectId, ref: "VendorDeliveryPromo" },
+      vendorId:            { type: mongoose.Schema.Types.ObjectId, ref: "Vendor" },
+      originalDeliveryFee: { type: Number, default: 0 },
+      _id: false,
+    },
+
     total: { type: Number, required: true },
 
     orderId: {
