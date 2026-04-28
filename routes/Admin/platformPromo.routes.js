@@ -4,6 +4,7 @@ import {
   listPlatformDeliveryPromos,
   createPlatformDeliveryPromo,
   deactivatePlatformDeliveryPromo,
+  updatePlatformDeliveryPromo,
   getPlatformPromoStats,
 } from "../../controller/Admin/platformPromo.controller.js";
 
@@ -13,5 +14,6 @@ router.get("/platform-delivery", adminAuth, listPlatformDeliveryPromos);
 router.post("/platform-delivery", adminAuth, createPlatformDeliveryPromo);
 router.patch("/platform-delivery/:promoId/deactivate", adminAuth, deactivatePlatformDeliveryPromo);
 router.get("/platform-delivery/:promoId/stats", adminAuth, getPlatformPromoStats);
+router.patch("/platform-delivery/:promoId", adminAuth, updatePlatformDeliveryPromo);
 
 export default router;

@@ -62,25 +62,27 @@ export const getNearbyVendorsForUser = async (req, res) => {
 
         // 4. Find Active Vendors in that location
         const vendors = await Vendor.find(query)
-            .select("storeName storeSlug storeDescription logo address fullAddress rating ratingCount cuisineTypes openingHours deliveryRadiusKm acceptsDelivery platformDeliveryFeeOverride")
+            .select("storeName storeSlug storeDescription logo address fullAddress rating ratingCount cuisineTypes openingHours deliveryRadiusKm acceptsDelivery platformDeliveryFeeOverride hasActiveDeliveryPromo")
             .sort({ rating: -1, createdAt: -1 })
             .lean();
 
         // 4.5 Resolve precise delivery fee for each vendor
         const cityPlatformFee = cityDoc?.platformDeliveryFee || 0;
         const vendorsWithFee = vendors.map(v => {
-            // All deliveries are platform-managed. Resolution order:
-            // 1. Per-vendor admin override, 2. City-level platform fee
+            // Vendor-sponsored promo overrides all fee resolution.
+            // hasActiveDeliveryPromo is kept in sync atomically by the promo
+            // create/deactivate controllers — trust it without a DB re-query.
+            if (v.hasActiveDeliveryPromo === true) {
+                return { ...v, deliveryFee: 0 };
+            }
+
             let deliveryFee = 0;
             if (v.platformDeliveryFeeOverride != null && v.platformDeliveryFeeOverride > 0) {
                 deliveryFee = v.platformDeliveryFeeOverride;
             } else {
                 deliveryFee = cityPlatformFee;
             }
-            return {
-                ...v,
-                deliveryFee
-            };
+            return { ...v, deliveryFee };
         });
 
         // 5. Response

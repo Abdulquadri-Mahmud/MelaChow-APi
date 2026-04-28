@@ -115,7 +115,7 @@ const bulkFetchItemSupport = async (items) => {
       .find(
         { _id: { $in: vendorIds } },
         "storeName logo storeSlug address rating openingHours " +
-          "platformDeliveryFeeOverride"
+          "platformDeliveryFeeOverride hasActiveDeliveryPromo"
       )
       .lean(),
 
@@ -140,6 +140,12 @@ const bulkFetchItemSupport = async (items) => {
     // Build vendorMap with resolved fees
     const vendorMap = {};
     vendors.forEach((v) => {
+      // Vendor-sponsored promo overrides all fee resolution
+      if (v.hasActiveDeliveryPromo === true) {
+        vendorMap[v._id.toString()] = { ...v, resolvedDeliveryFee: 0 };
+        return;
+      }
+
       let resolvedFee = 0;
       if (v.platformDeliveryFeeOverride != null && v.platformDeliveryFeeOverride > 0) {
         resolvedFee = v.platformDeliveryFeeOverride;
@@ -148,11 +154,8 @@ const bulkFetchItemSupport = async (items) => {
         resolvedFee = cityFeeMap[cityName] || 0;
       }
 
-    vendorMap[v._id.toString()] = {
-      ...v,
-      resolvedDeliveryFee: resolvedFee,
-    };
-  });
+      vendorMap[v._id.toString()] = { ...v, resolvedDeliveryFee: resolvedFee };
+    });
 
   // Build priceMap (cheapest) + portionsMap (all)
   const priceMap = {};
