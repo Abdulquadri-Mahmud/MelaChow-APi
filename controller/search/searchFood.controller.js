@@ -198,6 +198,8 @@ const shapeSearchResult = (item, vendorMap, priceMap, categoryMap) => {
     deliveryFee: vendor.resolvedDeliveryFee || 0,
     item_type: item.item_type,
     dietary_type: item.dietary_type,
+    is_available: item.is_available ?? true,
+    is_in_stock: item.is_in_stock ?? true,
     rating: item.rating || 0,
     ratingCount: item.ratingCount || 0,
     tags: item.tags || [],
@@ -293,12 +295,12 @@ export const autocompleteFoods = async (req, res) => {
     // ── Fetch items (Menus + Combos) ─────────────────
     const [menus, combos] = await Promise.all([
       MenuItem.find(matchQuery)
-        .select("_id name image_url item_type dietary_type tags rating ratingCount vendor_id choice_groups platform_category_id")
+        .select("_id name image_url item_type dietary_type is_available is_in_stock tags rating ratingCount vendor_id choice_groups platform_category_id")
         .sort({ ratingCount: -1, rating: -1 })
         .limit(Number(limit))
         .lean(),
       ComboItem.find(matchQuery)
-        .select("_id name image_url dietary_type tags rating ratingCount vendor_id choice_groups platform_category_id price")
+        .select("_id name image_url is_available is_in_stock dietary_type tags rating ratingCount vendor_id choice_groups platform_category_id price")
         .sort({ ratingCount: -1, rating: -1 })
         .limit(Number(limit))
         .lean(),
@@ -535,13 +537,13 @@ export const searchFoods = async (req, res) => {
 
     const [menus, combos, menusTotal, combosTotal] = await Promise.all([
       MenuItem.find(itemQuery, projection)
-        .select("_id name image_url item_type dietary_type tags rating ratingCount vendor_id choice_groups platform_category_id prep_time_minutes")
+        .select("_id name image_url item_type is_available is_in_stock dietary_type tags rating ratingCount vendor_id choice_groups platform_category_id prep_time_minutes")
         .sort(sortOption)
         .skip(skip)
         .limit(Number(limit))
         .lean(),
       ComboItem.find(itemQuery, projection)
-        .select("_id name image_url dietary_type tags rating ratingCount vendor_id choice_groups platform_category_id price prep_time_minutes")
+        .select("_id name image_url is_available is_in_stock dietary_type tags rating ratingCount vendor_id choice_groups platform_category_id price prep_time_minutes")
         .sort(sortOption)
         .skip(skip)
         .limit(Number(limit))
