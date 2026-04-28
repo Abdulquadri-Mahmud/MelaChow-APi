@@ -5,7 +5,7 @@ import {
   createVendorDeliveryPromo,
   deactivateVendorDeliveryPromo,
   getVendorDeliveryPromo,
-} from "../../controller/admin/vendorPromo.controller.js";
+} from "../../controller/Admin/vendorPromo.controller.js";
 
 const router = express.Router();
 

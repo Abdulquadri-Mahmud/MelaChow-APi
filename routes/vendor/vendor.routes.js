@@ -19,7 +19,7 @@ import {
 } from "../../controller/order/orderController.js";
 import { getVendorReviews } from "../../controller/user/user.reviews.controller.js";
 import vendorAuth from "../../middleware/vendor.middleware.js";
-import { getVendorOwnPromoStatus } from "../../controller/admin/vendorPromo.controller.js";
+import { getVendorOwnPromoStatus } from "../../controller/Admin/vendorPromo.controller.js";
 
 const router = express.Router();
 
