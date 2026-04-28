@@ -197,3 +197,61 @@ export const updatePlatformDeliveryPromo = async (req, res) => {
     return res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
+
+/**
+ * PATCH /api/admin/promos/platform-delivery/:promoId/reactivate
+ * Reactivate a previously deactivated platform delivery promo.
+ * Business rules:
+ *   - Only one active promo may exist at a time — reject if another is active
+ *   - Resets usedSlots only if admin explicitly passes resetSlots: true in body
+ *   - Does NOT reset usedSlots by default (existing claims remain)
+ */
+export const reactivatePlatformDeliveryPromo = async (req, res) => {
+  try {
+    const { promoId } = req.params;
+    const { resetSlots = false } = req.body;
+
+    const promo = await FreeDeliveryPromo.findById(promoId);
+    if (!promo) {
+      return res.status(404).json({ success: false, message: "Promo not found" });
+    }
+
+    if (promo.isActive) {
+      return res.status(400).json({
+        success: false,
+        message: "Promo is already active",
+      });
+    }
+
+    // Enforce one active promo at a time
+    const existingActive = await FreeDeliveryPromo.findOne({
+      isActive: true,
+      _id: { $ne: promoId },
+    });
+
+    if (existingActive) {
+      return res.status(400).json({
+        success: false,
+        message: "Another platform promo is already active. Deactivate it first.",
+        existingPromo: { _id: existingActive._id, name: existingActive.name },
+      });
+    }
+
+    promo.isActive = true;
+    if (resetSlots) {
+      promo.usedSlots = 0;
+    }
+
+    await promo.save();
+
+    logger.info(
+      { promoId: promo._id, resetSlots },
+      "✅ Platform delivery promo reactivated"
+    );
+
+    return res.status(200).json({ success: true, promo });
+  } catch (error) {
+    logger.error({ error: error.message }, "Failed to reactivate platform delivery promo");
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};
