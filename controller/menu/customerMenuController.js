@@ -170,6 +170,7 @@ export const getFullVendorMenu = async (req, res) => {
             rating:                vendor.rating ?? null,
             ratingCount:           vendor.ratingCount ?? 0,
             storeSlug:             vendor.storeSlug,
+            hasActiveDeliveryPromo: vendor.hasActiveDeliveryPromo === true,
         };
 
         // Step 2 — Fetch Combos, Sections, and Items in parallel
@@ -388,7 +389,8 @@ export const getMenuItemDetails = async (req, res) => {
                     storeSlug: vendor.storeSlug,
                     isOpen: vendor.isOpen ?? true,
                     estimatedDeliveryTime: vendor.estimatedDeliveryTime ?? 30,
-                    deliveryFee
+                    deliveryFee,
+                    hasActiveDeliveryPromo: vendor.hasActiveDeliveryPromo === true,
                 };
             }
         }
@@ -439,7 +441,8 @@ export const getComboDetails = async (req, res) => {
                 storeSlug: vendor.storeSlug,
                 isOpen: vendor.isOpen ?? true,
                 estimatedDeliveryTime: vendor.estimatedDeliveryTime ?? 30,
-                deliveryFee
+                deliveryFee,
+                hasActiveDeliveryPromo: vendor.hasActiveDeliveryPromo === true,
             };
         }
 
@@ -622,6 +625,7 @@ export const getPublicFoodDetail = async (req, res) => {
                           storeSlug:             vendor.storeSlug,
                           isOpen:                vendor.isOpen ?? true,
                           estimatedDeliveryTime: vendor.estimatedDeliveryTime ?? 30,
+                          hasActiveDeliveryPromo: vendor.hasActiveDeliveryPromo === true,
                       }
                     : null,
             },
