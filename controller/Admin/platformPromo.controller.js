@@ -111,3 +111,89 @@ export const getPlatformPromoStats = async (req, res) => {
     res.status(500).json({ success: false, message: "Internal server error" });
   }
 };
+
+/**
+ * PATCH /api/admin/promos/platform-delivery/:promoId
+ * Update fields on an existing platform delivery promo.
+ * Allowed fields: totalSlots, startsAt, endsAt, name.
+ *
+ * Business rules enforced here:
+ *   - totalSlots may not be reduced below usedSlots (cannot revoke already-claimed slots)
+ *   - endsAt, if provided, must be in the future
+ *   - Cannot update a deactivated (isActive: false) promo — reactivate it first
+ */
+export const updatePlatformDeliveryPromo = async (req, res) => {
+  try {
+    const { promoId } = req.params;
+    const { totalSlots, startsAt, endsAt, name } = req.body;
+
+    const promo = await FreeDeliveryPromo.findById(promoId);
+    if (!promo) {
+      return res.status(404).json({ success: false, message: "Promo not found" });
+    }
+
+    if (!promo.isActive) {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot update a deactivated promo. Reactivate it first.",
+      });
+    }
+
+    // Validate totalSlots — cannot go below what has already been claimed
+    if (totalSlots !== undefined) {
+      const newSlots = Number(totalSlots);
+      if (isNaN(newSlots) || newSlots < 1) {
+        return res.status(400).json({
+          success: false,
+          message: "totalSlots must be a positive number",
+        });
+      }
+      if (newSlots < promo.usedSlots) {
+        return res.status(400).json({
+          success: false,
+          message: `Cannot reduce totalSlots to ${newSlots} — ${promo.usedSlots} slots have already been claimed`,
+        });
+      }
+      promo.totalSlots = newSlots;
+    }
+
+    // Validate endsAt — must be in the future if provided
+    if (endsAt !== undefined) {
+      const newEndsAt = new Date(endsAt);
+      if (isNaN(newEndsAt.getTime())) {
+        return res.status(400).json({ success: false, message: "Invalid endsAt date" });
+      }
+      if (newEndsAt <= new Date()) {
+        return res.status(400).json({
+          success: false,
+          message: "endsAt must be a future date",
+        });
+      }
+      promo.endsAt = newEndsAt;
+    }
+
+    if (startsAt !== undefined) {
+      const newStartsAt = new Date(startsAt);
+      if (isNaN(newStartsAt.getTime())) {
+        return res.status(400).json({ success: false, message: "Invalid startsAt date" });
+      }
+      promo.startsAt = newStartsAt;
+    }
+
+    if (name !== undefined && name.trim()) {
+      promo.name = name.trim();
+    }
+
+    await promo.save();
+
+    logger.info(
+      { promoId: promo._id, totalSlots: promo.totalSlots, endsAt: promo.endsAt },
+      "✅ Platform delivery promo updated"
+    );
+
+    return res.status(200).json({ success: true, promo });
+  } catch (error) {
+    logger.error({ error: error.message }, "Failed to update platform delivery promo");
+    return res.status(500).json({ success: false, message: "Internal server error" });
+  }
+};

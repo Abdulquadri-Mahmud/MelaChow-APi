@@ -108,23 +108,24 @@ async function buildFullItem(item, { vendorView = false } = {}) {
  * Returns fee in NAIRA.
  */
 async function resolveStorefrontDeliveryFee(vendor) {
-    // Case 1: admin override for this specific vendor
+    // Vendor-sponsored promo makes delivery free for ALL customers.
+    // Trust the denormalized flag — no extra DB query needed.
+    if (vendor.hasActiveDeliveryPromo === true) {
+        return 0;
+    }
+
     if (
         vendor.platformDeliveryFeeOverride != null &&
         vendor.platformDeliveryFeeOverride > 0
     ) {
         return vendor.platformDeliveryFeeOverride;
     }
-
-    // Case 2: fall back to city-level platform fee
     try {
         const cityName = vendor.address?.city;
         if (!cityName) return 0;
-
         const city = await City.findOne({
             name: { $regex: new RegExp(`^${cityName}$`, "i") }
         }).lean();
-
         return city?.platformDeliveryFee ?? 0;
     } catch {
         return 0;
@@ -371,7 +372,7 @@ export const getMenuItemDetails = async (req, res) => {
         let vendorJson = null;
         if (!isVendorRequest) {
             const vendor = await Vendor.findById(item.vendor_id)
-                .select("storeName logo address openingHours rating ratingCount storeSlug isOpen estimatedDeliveryTime platformDeliveryFeeOverride")
+                .select("storeName logo address openingHours rating ratingCount storeSlug isOpen estimatedDeliveryTime platformDeliveryFeeOverride hasActiveDeliveryPromo")
                 .lean();
             if (vendor) {
                 const deliveryFee = await resolveStorefrontDeliveryFee(vendor);
@@ -419,7 +420,7 @@ export const getComboDetails = async (req, res) => {
 
         // Fetch vendor info
         const vendor = await Vendor.findById(combo.vendor_id)
-            .select("storeName logo address openingHours rating ratingCount storeSlug isOpen estimatedDeliveryTime platformDeliveryFeeOverride")
+            .select("storeName logo address openingHours rating ratingCount storeSlug isOpen estimatedDeliveryTime platformDeliveryFeeOverride hasActiveDeliveryPromo")
             .lean();
         
         let vendorJson = null;
