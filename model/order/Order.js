@@ -193,6 +193,13 @@ const orderSchema = new mongoose.Schema(
       required: true, // sum of vendorDeliveryFees
     },
 
+    // 💳 Service Fee Snapshot
+    // Collected by platform. SNAPSHOT at order time.
+    serviceFee: {
+        type: Number,
+        default: 0,
+    },
+
     // 🏷️ Discount Snapshot (Added for Discount System)
     appliedDiscount: {
       code: String,

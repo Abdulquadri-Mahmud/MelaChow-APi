@@ -11,6 +11,7 @@ import Food from "../../model/vendor/food.model.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 import Admin from "../../model/Admin/admin.model.js";
 import { createOrderV2, updateOrderAfterPayment, releaseEscrowToVendor } from "./createOrderV2.controller.js";
+import { getPlatformConfig } from "../../services/platformConfig.service.js";
 import PaymentLock from "../../model/order/PaymentLock.js";
 import { refundOrderToWallet } from "../../services/refund.service.js";
 import logger from "../../config/logger.js";
@@ -245,6 +246,7 @@ export const completeOrderFulfillment = async (orderId) => {
   session.startTransaction();
 
   try {
+    const platformConfig = await getPlatformConfig();
     const order = await Order.findById(orderId).session(session);
     if (!order) throw new Error("Order not found");
 
@@ -265,7 +267,9 @@ export const completeOrderFulfillment = async (orderId) => {
     /* -------------------------------
      * 1️⃣ ADMIN WALLET
      * ------------------------------- */
-    const PLATFORM_PERCENT = 0; // Commission disabled — revenue from delivery spread only
+    const PLATFORM_PERCENT = platformConfig.commissionEnabled
+        ? platformConfig.commissionRate / 100
+        : 0;
 
     let adminWallet = await Wallet.findOne({
       ownerModel: "Admin",
@@ -436,6 +440,19 @@ export const completeOrderFulfillment = async (orderId) => {
     }
 
     if (adminWallet) {
+      // ── Service fee: credit to admin wallet ────────────────────────────────
+      const orderServiceFee = Number(order.serviceFee || 0);
+      if (orderServiceFee > 0) {
+          adminWallet.balance = Number((adminWallet.balance + orderServiceFee).toFixed(2));
+          adminWallet.transactions.push({
+              type: "credit",
+              amount: orderServiceFee,
+              description: `Service fee collected for Order ${order.orderId}`,
+              orderId: order._id,
+              transactionType: 'service_fee',
+          });
+          console.log(`💳 Service fee ₦${orderServiceFee} credited to admin wallet for Order ${order.orderId}`);
+      }
       await adminWallet.save({ session });
     }
 

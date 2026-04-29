@@ -1,5 +1,6 @@
 import Discount from "../model/discount/Discount.js";
 import User from "../model/user.model.js";
+import { getPlatformConfig } from "./platformConfig.service.js";
 
 /**
  * 🛡️ Service to handle all Discount Logic
@@ -87,10 +88,11 @@ class DiscountService {
      * Is idempotent and safe.
      * @param {Object} cart - { subtotal, deliveryFee, items: [{foodId, price, quantity}] }
      * @param {Object} discount - Validated discount object
-     * @returns {Object} - { total, discountAmount, finalSubtotal, finalDeliveryFee }
+     * @returns {Object} - { total, discountAmount, finalSubtotal, finalDeliveryFee, serviceFee }
      */
-    calculateFinalPrice(cart, discount) {
+    async calculateFinalPrice(cart, discount) {
         let { subtotal, deliveryFee, items } = cart;
+        const platformConfig = await getPlatformConfig();
         let discountAmount = 0;
 
         // Safety check
@@ -185,11 +187,26 @@ class DiscountService {
             finalSubtotal = Math.max(0, subtotal - discountAmount);
         }
 
-        const total = finalSubtotal + finalDeliveryFee;
+        // Service Fee logic
+        // Skip if delivery promo is active (scope === "DELIVERY_FEE")
+        let serviceFee = 0;
+        if (platformConfig.serviceFeeEnabled && discount?.scope !== "DELIVERY_FEE") {
+            if (platformConfig.serviceFeeType === 'fixed') {
+                serviceFee = platformConfig.serviceFeeValue;
+            } else {
+                serviceFee = Number((subtotal * platformConfig.serviceFeeValue / 100).toFixed(2));
+                if (platformConfig.serviceFeeCap && serviceFee > platformConfig.serviceFeeCap) {
+                    serviceFee = platformConfig.serviceFeeCap;
+                }
+            }
+        }
+
+        const total = Number((finalSubtotal + finalDeliveryFee + serviceFee).toFixed(2));
 
         return {
             subtotal, // Original subtotal
             deliveryFee, // Original delivery fee
+            serviceFee,
             discountAmount,
             finalSubtotal,
             finalDeliveryFee,

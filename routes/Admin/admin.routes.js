@@ -17,10 +17,11 @@ import { getUserMetrics } from "../../controller/Admin/userMetrics.controller.js
 import { getCategoryMetrics } from "../../controller/Admin/categoryMetrics.controller.js";
 import { getLocationMetrics } from "../../controller/Admin/locationMetrics.controller.js";
 import { forceFailWithdrawal } from "../../controller/wallet/withdrawal.controller.js";
-import { 
-    getAdminWalletBreakdown, 
-    getPayoutHistory 
-} from "../../controller/finance/adminFinanceSummary.controller.js";
+import { getPayoutHistory, getAdminWalletBreakdown } from "../../controller/finance/adminFinanceSummary.controller.js";
+import {
+    getAdminPlatformConfig,
+    updateAdminPlatformConfig
+} from "../../controller/Admin/platform/platformConfig.controller.js";
 import {
     approveVendor,
     getAllVendors,
@@ -106,5 +107,9 @@ router.patch("/withdrawals/:withdrawalId/force-fail", adminAuth, forceFailWithdr
 // Finance Summary Routes
 router.get("/finance/wallet-breakdown", adminAuth, getAdminWalletBreakdown);
 router.get("/finance/payout-history", adminAuth, getPayoutHistory);
+
+// Platform Configuration
+router.get("/platform-config", adminAuth, getAdminPlatformConfig);
+router.put("/platform-config", adminAuth, updateAdminPlatformConfig);
 
 export default router;

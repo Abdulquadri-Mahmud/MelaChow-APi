@@ -16,8 +16,8 @@ import Admin from "../../model/Admin/admin.model.js";
 import discountService from "../../services/discount.service.js";
 import Discount from "../../model/discount/Discount.js";
 import { emitNewOrderToRestaurant } from "../../socket/events/orderEvents.js";
-import { orderAutoCancelQueue } from '../../config/queue.js';
 import logger from '../../config/logger.js';
+import { getPlatformConfig, calculateServiceFee } from '../../services/platformConfig.service.js';
 
 import FreeDeliveryPromo from "../../model/promo/FreeDeliveryPromo.js";
 import FreeDeliveryClaim  from "../../model/promo/FreeDeliveryClaim.js";
@@ -979,8 +979,29 @@ export const createOrderV2 = async ({
           }
         }
 
-        // --- 6️⃣ DISCOUNT LOGIC ---
-        let finalTotal = Number((subtotal + totalDeliveryFee).toFixed(2));
+        // ── SECTION 6: SERVICE FEE ─────────────────────────────────────────
+        // Fetch config once per order (single indexed document lookup).
+        // Service fee is SKIPPED if any delivery promo is active.
+        // Business rule: don't layer a fee on top of a promo — bad UX.
+        const platformConfig = await getPlatformConfig();
+
+        const anyPromoActive = vendorPromoResult.applicable || promoEligibilityResult.eligible;
+
+        const serviceFee = calculateServiceFee(
+            platformConfig,
+            subtotal,       // fee is on food subtotal, not including delivery
+            anyPromoActive
+        );
+
+        if (serviceFee > 0) {
+            logger.info(
+                { userId, serviceFee, type: platformConfig.serviceFeeType },
+                "💳 Service fee applied to order"
+            );
+        }
+
+        // --- 7️⃣ DISCOUNT LOGIC ---
+        let finalTotal = Number((subtotal + totalDeliveryFee + serviceFee).toFixed(2));
         let appliedDiscount = null;
 
         if (discountCode) {
@@ -1001,7 +1022,7 @@ export const createOrderV2 = async ({
             }
 
             // Calculate
-            const calculation = discountService.calculateFinalPrice(
+            const calculation = await discountService.calculateFinalPrice(
                 { subtotal, deliveryFee: totalDeliveryFee, items: normalizedItems },
                 validation.discount
             );
@@ -1091,6 +1112,7 @@ export const createOrderV2 = async ({
                         phone,
                         subtotal: Number(subtotal.toFixed(2)),
                         deliveryFee: Number(totalDeliveryFee.toFixed(2)),
+                        serviceFee: serviceFee,
                         total,
                         appliedDiscount, // Persist discount snapshot
                         paymentReference: finalPaymentRef,
@@ -1227,7 +1249,13 @@ export const createOrderV2 = async ({
  * Called AFTER payment verification
  */
 export const createVendorOrdersAndUpdateWallets = async (order, session) => {
-    const PLATFORM_COMMISSION = 0; // Commission disabled — revenue from delivery spread only
+    // ── Fetch platform config for commission rate ───────────────────────────
+    // Commission is 0 at launch (vendor trust phase). Admin enables it from
+    // dashboard when ready. Reading from DB means no redeploy needed.
+    const platformConfig = await getPlatformConfig();
+    const PLATFORM_COMMISSION = platformConfig.commissionEnabled
+        ? platformConfig.commissionRate / 100
+        : 0;
 
     // Group items by vendor
     const vendorItemsMap = {};
@@ -1386,6 +1414,22 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
                 });
             }
         }
+    }
+
+    // ── Service fee: credit to admin wallet ────────────────────────────────
+    // The service fee was already collected from the customer in the order total.
+    // Record it as a distinct revenue line in the admin wallet for clean reporting.
+    const orderServiceFee = Number(order.serviceFee || 0);
+    if (adminWallet && orderServiceFee > 0) {
+        adminWallet.balance = Number((adminWallet.balance + orderServiceFee).toFixed(2));
+        adminWallet.transactions.push({
+            type: "credit",
+            amount: orderServiceFee,
+            description: `Service fee collected for Order ${order.orderId}`,
+            orderId: order._id,
+            transactionType: 'service_fee',
+        });
+        console.log(`💳 Service fee ₦${orderServiceFee} credited to admin wallet for Order ${order.orderId}`);
     }
 
     if (adminWallet) await adminWallet.save({ session });
