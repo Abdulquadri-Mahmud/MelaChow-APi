@@ -9,6 +9,7 @@ import { releaseEscrowToVendor } from '../controller/order/createOrderV2.control
 import { escrowReleaseQueue } from '../config/queue.js';
 import logger from '../config/logger.js';
 import { createTransferRecipient } from "./paystackTransfer.service.js";
+import { getPlatformConfig } from './platformConfig.service.js';
 
 /**
  * Create a new rider
@@ -324,8 +325,10 @@ export const markDelivered = async (orderId, riderId) => {
 
         if (deliveryFee > 0) {
             // All deliveries are platform-managed — always use the spread model.
-            // Rider receives fixed ₦600; platform retains the spread.
-            const RIDER_FIXED_PAYOUT = 600;
+            // Rider receives fixed payout; platform retains the spread.
+            const platformConfig = await getPlatformConfig();
+            const RIDER_FIXED_PAYOUT = platformConfig.riderFixedPayout;
+
             const riderPayout = Math.min(RIDER_FIXED_PAYOUT, deliveryFee);
             const platformSpread = Number((deliveryFee - riderPayout).toFixed(2));
 
@@ -411,8 +414,9 @@ export const markDelivered = async (orderId, riderId) => {
                 // Record spread — informational, amount: 0 to avoid ledger inflation
                 adminWallet.transactions.push({
                     type: "debit",
-                    amount: 0,
-                    description: `Delivery spread retained ₦${platformSpread} for Order ${readableOrderId} — reporting only`,
+                    amount: 0,             // Balance-neutral — real flow already in delivery_fee credit + rider_payout debit
+                    reportingAmount: platformSpread,   // ← Actual spread value for finance reporting
+                    description: `Delivery spread retained for Order ${readableOrderId} — reporting only`,
                     transactionType: 'delivery_spread',
                 });
 

@@ -32,7 +32,7 @@ export const verifyDiscount = async (req, res) => {
         }
 
         // 2. Calculate Preview
-        const calculation = discountService.calculateFinalPrice(
+        const calculation = await discountService.calculateFinalPrice(
             { subtotal: Number(subtotal), deliveryFee: Number(deliveryFee), items: items || [] },
             validation.discount
         );

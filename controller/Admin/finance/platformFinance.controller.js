@@ -3,6 +3,7 @@ import Order from "../../../model/order/Order.js";
 import VendorOrder from "../../../model/vendor/VendorOrder.js";
 import Vendor from "../../../model/vendor/vendor.model.js";
 import Refund from "../../../model/refund.model.js";
+import { getPlatformConfig } from "../../../services/platformConfig.service.js";
 import mongoose from "mongoose";
 
 /**
@@ -12,6 +13,7 @@ import mongoose from "mongoose";
 export const getRevenueSummary = async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
+        const platformConfig = await getPlatformConfig();
 
         const dateFilter = {};
         if (startDate || endDate) {
@@ -71,28 +73,32 @@ export const getRevenueSummary = async (req, res) => {
                 $group: {
                     _id: null,
                     totalOrderRevenue: { $sum: "$total" },
-                    totalDeliveryFeesCollected: { $sum: "$deliveryFee" }
+                    totalDeliveryFeesCollected: { $sum: "$deliveryFee" },
+                    totalServiceFeesCollected: { $sum: "$serviceFee" }
                 }
             }
         ]);
 
         // 4. Platform Delivery Spread Revenue
-        // Revenue comes from the spread between customer delivery fee (₦1,000)
-        // and rider fixed payout (₦600). The ₦400 spread is recorded as
-        // 'delivery_spread' transactions in the admin wallet.
-        // delivery_spread entries use amount: 0 (informational) so we extract
-        // the actual spread from the description field.
         let totalPlatformDeliveryRevenue = 0;
+        let totalServiceFeeRevenue = 0;
+
         if (adminWallet && adminWallet.transactions) {
             adminWallet.transactions.forEach(tx => {
-                if (tx.transactionType !== 'delivery_spread') return;
                 const txDate = new Date(tx.date);
                 const inRange = (!startDate || txDate >= new Date(startDate)) &&
                     (!endDate || txDate <= new Date(endDate));
                 if (!inRange) return;
-                // Extract spread amount from description: "Delivery spread retained ₦400 for Order..."
-                const match = tx.description?.match(/retained\s+₦?([\d.]+)/);
-                if (match) totalPlatformDeliveryRevenue += Number(match[1]) || 0;
+
+                // Spread: use reportingAmount field (eliminates regex fragility)
+                if (tx.transactionType === 'delivery_spread') {
+                    totalPlatformDeliveryRevenue += Number(tx.reportingAmount || 0);
+                }
+
+                // Service fee: real credit transactions — use amount directly
+                if (tx.transactionType === 'service_fee' && tx.type === 'credit') {
+                    totalServiceFeeRevenue += Number(tx.amount || 0);
+                }
             });
         }
         const platformDeliveryStats = [{ totalPlatformDeliveryRevenue }];
@@ -133,6 +139,8 @@ export const getRevenueSummary = async (req, res) => {
         const availableBalance = Math.max(0, currentPlatformBalance - totalEscrowHeld);
         const totalDeliverySpreadEarned = totalPlatformDeliveryRevenue; // alias for clarity in response
 
+        const deliveryFeeExample = 1000; // Reference for reporting
+
         res.status(200).json({
             success: true,
             data: {
@@ -140,21 +148,28 @@ export const getRevenueSummary = async (req, res) => {
                 totalEscrowHeld,
                 availableBalance,
                 // Revenue breakdown — admin sees exactly where money comes from
-                totalCommissionEarned: commEarned,         // ₦0 currently (commission disabled)
-                totalDeliverySpreadEarned,                  // ₦400 per platform-managed delivery
-                combinedPlatformRevenue: commEarned + delivRevenue,
+                totalCommissionEarned: commEarned,
+                totalDeliverySpreadEarned,
+                totalServiceFeeRevenue,
+                combinedPlatformRevenue: commEarned + delivRevenue + totalServiceFeeRevenue,
                 // Order volume stats
                 totalOrderRevenue: orderStats[0]?.totalOrderRevenue || 0,
                 totalDeliveryFeesCollected: orderStats[0]?.totalDeliveryFeesCollected || 0,
+                totalServiceFeesCollected: orderStats[0]?.totalServiceFeesCollected || 0,
                 // Wallet transaction totals (excludes zero-amount spread entries)
                 totalCredits,
                 totalDebits,
                 period: { startDate, endDate },
                 // Explanation for admin dashboard tooltip
                 revenueModel: {
-                    commissionRate: '0% (disabled)',
-                    spreadPerOrder: '₦400 (platform-managed delivery only)',
-                    riderPayout: '₦600 fixed per platform delivery'
+                    commissionRate: platformConfig.commissionEnabled
+                        ? `${platformConfig.commissionRate}% (enabled)`
+                        : '0% (disabled)',
+                    spreadPerOrder: `₦${deliveryFeeExample - platformConfig.riderFixedPayout} (approx — varies by city fee)`,
+                    riderPayout: `₦${platformConfig.riderFixedPayout} fixed per platform delivery`,
+                    serviceFee: platformConfig.serviceFeeEnabled
+                        ? `${platformConfig.serviceFeeType === 'fixed' ? '₦' + platformConfig.serviceFeeValue : platformConfig.serviceFeeValue + '%'} (max ₦${platformConfig.serviceFeeCap})`
+                        : 'Disabled',
                 }
             }
         });
@@ -171,6 +186,7 @@ export const getRevenueSummary = async (req, res) => {
 export const getRevenueChart = async (req, res) => {
     try {
         const { period = "7days" } = req.query;
+        const platformConfig = await getPlatformConfig();
 
         let dateFormat = "%Y-%m-%d";
         let daysToLookBack = 7;
@@ -221,8 +237,14 @@ export const getRevenueChart = async (req, res) => {
                 $project: {
                     createdAt: 1,
                     commission: 1,
-                    // All deliveries are platform-managed — spread applies to every order
-                    platformDeliveryShare: 400,
+                    // Dynamic spread based on historical data where available, fallback to config
+                    platformDeliveryShare: { 
+                        $subtract: [
+                            "$parentOrder.deliveryFee", 
+                            { $ifNull: ["$parentOrder.riderEarnings", platformConfig.riderFixedPayout] }
+                        ] 
+                    },
+                    serviceFee: { $ifNull: ["$parentOrder.serviceFee", 0] },
                     userOrderId: 1,
                     parentOrderTotal: "$parentOrder.total",
                     label: { $dateToString: { format: dateFormat, date: "$createdAt" } }
@@ -233,6 +255,7 @@ export const getRevenueChart = async (req, res) => {
                     _id: "$label",
                     commission: { $sum: "$commission" },
                     deliveryRevenue: { $sum: "$platformDeliveryShare" },
+                    serviceFeeRevenue: { $sum: "$serviceFee" },
                     globalGMV: { $sum: "$parentOrderTotal" },
                     orderCount: { $addToSet: "$userOrderId" }
                 }
@@ -242,8 +265,9 @@ export const getRevenueChart = async (req, res) => {
                     label: "$_id",
                     commission: 1,
                     deliveryRevenue: 1,
+                    serviceFeeRevenue: 1,
                     globalGMV: 1,
-                    totalRevenue: { $add: ["$commission", "$deliveryRevenue"] },
+                    totalRevenue: { $add: ["$commission", "$deliveryRevenue", "$serviceFeeRevenue"] },
                     orderCount: { $size: "$orderCount" }
                 }
             },

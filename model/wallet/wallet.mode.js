@@ -47,6 +47,7 @@ const walletSchema = new mongoose.Schema(
                 'delivery_fee',     // Delivery fee held in admin wallet
                 'rider_payout',     // Rider delivery earnings paid out
                 'delivery_spread',  // Platform spread retained from delivery fee after rider payout
+                'service_fee',      // NEW: customer service fee collected by platform
                 'refund',           // Customer refund debited from admin
                 'order_payment',    // Customer wallet debit for order
                 'top_up',           // Customer wallet top-up via Paystack
@@ -57,6 +58,13 @@ const walletSchema = new mongoose.Schema(
             default: null,         // null for legacy transactions — do not require
         },
         description: String,
+        // Used for informational transactions where amount: 0 keeps balance neutral
+        // but we still need to record the actual monetary value for reporting.
+        // Currently used by delivery_spread entries.
+        reportingAmount: {
+            type: Number,
+            default: null,
+        },
         orderId: {
           type: mongoose.Schema.Types.ObjectId,
           ref: "Order",

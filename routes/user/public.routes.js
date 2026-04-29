@@ -17,8 +17,32 @@ import {
     getProfile, updateProfile,
     addAddress, getUserAddresses, updateAddress, deleteAddress
 } from "../../controller/user/user.controller.js";
+import { getPlatformConfig } from "../../services/platformConfig.service.js";
 
 const router = express.Router();
+
+/**
+ * @description Get sanitized platform configuration for frontend (public-ish)
+ * @route GET /api/user/platform-config
+ * @access Public/Private
+ */
+router.get("/platform-config", async (req, res) => {
+    try {
+        const config = await getPlatformConfig();
+        // Only expose customer-relevant fields
+        res.status(200).json({
+            success: true,
+            data: {
+                serviceFeeEnabled: config.serviceFeeEnabled,
+                serviceFeeType: config.serviceFeeType,
+                serviceFeeValue: config.serviceFeeValue,
+                serviceFeeCap: config.serviceFeeCap
+            }
+        });
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+});
 
 /**
  * @description Get foods filtered by city and state
