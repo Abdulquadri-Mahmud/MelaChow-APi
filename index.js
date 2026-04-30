@@ -45,6 +45,7 @@ import comboRoutes from "./routes/menu/comboRoutes.js";
 import socketHealthRoutes from './routes/socket.routes.js';
 import riderNotificationRoutes from './routes/riderNotification.routes.js';
 import publicPromoRoutes from "./routes/promo/publicPromo.routes.js";
+import platformConfigPublicRoutes from "./routes/public/platformConfig.public.routes.js";
 import http from 'http';
 import redisClient from './config/redis.js';
 import './config/queue.js';
@@ -287,6 +288,7 @@ app.use('/api/locations', publicLocationRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/socket', socketHealthRoutes);
 app.use("/api/promos", publicPromoRoutes);
+app.use("/api/public", platformConfigPublicRoutes);
 
 // Vendors routes
 app.use("/api/vendors", vendorRoutes);
