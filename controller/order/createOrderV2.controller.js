@@ -27,7 +27,7 @@ import VendorDeliveryClaim from "../../model/promo/VendorDeliveryClaim.js";
 // Max number of claims allowed from the same IP address.
 // Set to 3 to allow legitimate students sharing campus/hostel WiFi
 // while still soft-blocking obvious multi-account abuse.
-const PROMO_MAX_CLAIMS_PER_IP = 3;
+const PROMO_MAX_CLAIMS_PER_IP = 5;
 
 /**
  * ========================================
@@ -339,18 +339,23 @@ const checkFreeDeliveryEligibility = async (
     }
 
     // Gate 3: userId must not have a prior successful claim.
-    // Older code claimed slots before Paystack payment. If that happened and
-    // the related order was never paid, do not block the user's real first order.
+    // We check for any existing claim record for this user.
     const userClaim = await FreeDeliveryClaim.findOne({ userId }).session(session).lean();
     if (userClaim) {
+      // If a claim exists, check the status of the associated order.
       const claimedOrder = userClaim.orderId
-        ? await Order.findById(userClaim.orderId).select("paymentStatus").session(session).lean()
+        ? await Order.findById(userClaim.orderId).select("paymentStatus orderStatus").session(session).lean()
         : null;
 
-      if (!claimedOrder || claimedOrder.paymentStatus === "paid") {
+      // If the order was paid, or is still pending (not failed/cancelled),
+      // the user cannot claim another slot. This prevents "promo stealing"
+      // by opening multiple checkout tabs.
+      if (claimedOrder && !["failed", "refunded"].includes(claimedOrder.paymentStatus) && claimedOrder.orderStatus !== "cancelled") {
         return { eligible: false, reason: "user_already_claimed" };
       }
 
+      // If the order was never created (orphaned claim) or reached a terminal failure state,
+      // we clean up the stale claim to allow the user to try again on a new order.
       await FreeDeliveryClaim.deleteOne({ _id: userClaim._id }).session(session);
       if (userClaim.promoId) {
         await FreeDeliveryPromo.updateOne(
@@ -359,9 +364,9 @@ const checkFreeDeliveryEligibility = async (
           { session }
         );
       }
-      logger.warn(
-        { userId, staleOrderId: userClaim.orderId },
-        "Cleaned stale unpaid platform promo claim"
+      logger.info(
+        { userId, staleOrderId: userClaim.orderId, status: claimedOrder?.paymentStatus },
+        "Reclaimed free delivery slot from failed/cancelled prior attempt"
       );
     }
 
@@ -524,10 +529,13 @@ const checkVendorDeliveryPromo = async (vendorId, userId, originalDeliveryFee, s
         ? await Order.findById(existingClaim.orderId).select("paymentStatus").session(session).lean()
         : null;
 
-      if (!claimedOrder || claimedOrder.paymentStatus === "paid") {
+      // If the order was paid, or is still pending (not failed/cancelled),
+      // the user cannot claim another slot for this vendor promo.
+      if (claimedOrder && !["failed", "refunded"].includes(claimedOrder.paymentStatus) && claimedOrder.orderStatus !== "cancelled") {
         return { applicable: false, reason: "user_already_claimed_vendor_promo" };
       }
 
+      // If orphaned or failed, reclaim the slot
       await VendorDeliveryClaim.deleteOne({ _id: existingClaim._id }).session(session);
       if (existingClaim.promoId) {
         await VendorDeliveryPromo.updateOne(
@@ -536,9 +544,9 @@ const checkVendorDeliveryPromo = async (vendorId, userId, originalDeliveryFee, s
           { session }
         );
       }
-      logger.warn(
+      logger.info(
         { userId, vendorId, staleOrderId: existingClaim.orderId },
-        "Cleaned stale unpaid vendor promo claim"
+        "Reclaimed vendor delivery slot from failed/cancelled prior attempt"
       );
     }
 
@@ -1308,7 +1316,10 @@ export const createOrderV2 = async ({
                                 hashedIp:            promoEligibilityResult.hashedIp,
                                 originalDeliveryFee: originalTotalDeliveryFee,
                               }
-                            : { eligible: false },
+                            : { 
+                                eligible: false,
+                                reason: promoEligibilityResult.reason 
+                              },
                         vendorDeliveryPromo: vendorPromoResult.applicable
                             ? {
                                 applied:             true,
@@ -1317,7 +1328,10 @@ export const createOrderV2 = async ({
                                 vendorId:            singleVendorId,
                                 originalDeliveryFee: originalTotalDeliveryFee,
                               }
-                            : { applied: false },
+                            : { 
+                                applied: false,
+                                reason: vendorPromoResult.reason
+                              },
                     }
                 ],
                 { session }
