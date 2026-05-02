@@ -1,12 +1,21 @@
 import express from "express";
-import { createDiscount, getDiscounts } from "../../controller/discount/discount.controller.js";
+import {
+  activateDiscount,
+  createDiscount,
+  deactivateDiscount,
+  deleteDiscount,
+  getDiscounts,
+  updateDiscount,
+} from "../../controller/discount/discount.controller.js";
 import { adminAuth } from "../../middleware/adminAuth.js";
-// Note: I'm assuming adminAuth exists based on file naming in middleware list earlier ("adminAuth.js").
-// Let me verify the middleware name.
 
 const router = express.Router();
 
-router.post("/", adminAuth, createDiscount);
 router.get("/", adminAuth, getDiscounts);
+router.post("/", adminAuth, createDiscount);
+router.patch("/:id", adminAuth, updateDiscount);
+router.patch("/:id/activate", adminAuth, activateDiscount);
+router.patch("/:id/deactivate", adminAuth, deactivateDiscount);
+router.delete("/:id", adminAuth, deleteDiscount);
 
 export default router;
