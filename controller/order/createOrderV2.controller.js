@@ -338,25 +338,38 @@ const checkFreeDeliveryEligibility = async (
       return { eligible: false, reason: "no_active_promo" };
     }
 
-    // Gate 3: userId must not have a prior claim
+    // Gate 3: userId must not have a prior successful claim.
+    // Older code claimed slots before Paystack payment. If that happened and
+    // the related order was never paid, do not block the user's real first order.
     const userClaim = await FreeDeliveryClaim.findOne({ userId }).session(session).lean();
     if (userClaim) {
-      return { eligible: false, reason: "user_already_claimed" };
+      const claimedOrder = userClaim.orderId
+        ? await Order.findById(userClaim.orderId).select("paymentStatus").session(session).lean()
+        : null;
+
+      if (!claimedOrder || claimedOrder.paymentStatus === "paid") {
+        return { eligible: false, reason: "user_already_claimed" };
+      }
+
+      await FreeDeliveryClaim.deleteOne({ _id: userClaim._id }).session(session);
+      if (userClaim.promoId) {
+        await FreeDeliveryPromo.updateOne(
+          { _id: userClaim.promoId, usedSlots: { $gt: 0 } },
+          { $inc: { usedSlots: -1 } },
+          { session }
+        );
+      }
+      logger.warn(
+        { userId, staleOrderId: userClaim.orderId },
+        "Cleaned stale unpaid platform promo claim"
+      );
     }
 
-    // Gate 4: User must not have any previous paid order or a pending
-    // platform promo order. This prevents creating multiple unpaid orders
-    // that all carry free delivery before payment confirmation.
+    // Gate 4: User must not have any previous paid order.
+    // Pending orders are ignored because Paystack payment may be abandoned or retried.
     const previousPaidOrder = await Order.findOne({
       userId,
-      $or: [
-        { paymentStatus: "paid" },
-        {
-          "freeDeliveryPromo.eligible": true,
-          paymentStatus: { $nin: ["failed", "refunded"] },
-          orderStatus: { $ne: "cancelled" },
-        },
-      ],
+      paymentStatus: "paid",
     })
       .session(session)
       .lean();
@@ -507,7 +520,26 @@ const checkVendorDeliveryPromo = async (vendorId, userId, originalDeliveryFee, s
       .lean();
 
     if (existingClaim) {
-      return { applicable: false, reason: "user_already_claimed_vendor_promo" };
+      const claimedOrder = existingClaim.orderId
+        ? await Order.findById(existingClaim.orderId).select("paymentStatus").session(session).lean()
+        : null;
+
+      if (!claimedOrder || claimedOrder.paymentStatus === "paid") {
+        return { applicable: false, reason: "user_already_claimed_vendor_promo" };
+      }
+
+      await VendorDeliveryClaim.deleteOne({ _id: existingClaim._id }).session(session);
+      if (existingClaim.promoId) {
+        await VendorDeliveryPromo.updateOne(
+          { _id: existingClaim.promoId, usedOrders: { $gt: 0 } },
+          { $inc: { usedOrders: -1 } },
+          { session }
+        );
+      }
+      logger.warn(
+        { userId, vendorId, staleOrderId: existingClaim.orderId },
+        "Cleaned stale unpaid vendor promo claim"
+      );
     }
 
     const existingPromoOrder = await Order.findOne({
@@ -520,8 +552,8 @@ const checkVendorDeliveryPromo = async (vendorId, userId, originalDeliveryFee, s
       .session(session)
       .lean();
 
-    if (existingPromoOrder) {
-      return { applicable: false, reason: "user_has_pending_vendor_promo_order" };
+    if (existingPromoOrder?.paymentStatus === "paid") {
+      return { applicable: false, reason: "user_already_used_vendor_promo" };
     }
 
     // Check order cap if set
@@ -1323,14 +1355,6 @@ export const createOrderV2 = async ({
             if (order.vendorDeliveryPromo?.applied) {
                 await recordVendorPromoUsage(order, session);
             }
-        }
-
-        if (!useWallet && order.freeDeliveryPromo?.eligible) {
-            await claimFreeDeliverySlotInSession(order, session);
-        }
-
-        if (!useWallet && order.vendorDeliveryPromo?.applied) {
-            await recordVendorPromoUsage(order, session);
         }
 
         await session.commitTransaction();
