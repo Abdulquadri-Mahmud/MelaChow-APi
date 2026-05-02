@@ -586,6 +586,7 @@ export const getAllRiders = async (filters = {}) => {
     const query = { deletedAt: null };
     if (filters.status) query.status = filters.status;
     if (filters.vendorId) query.vendorId = filters.vendorId;
+    if (filters.managedBy) query.managedBy = filters.managedBy;
     if (filters.isActive !== undefined) query.isActive = filters.isActive;
     
     // Support filtering for available riders (for assignment modals)
@@ -607,9 +608,13 @@ export const adminUpdateRider = async (riderId, updateData) => {
     const allowedUpdates = ["name", "phone", "notes", "isActive", "avatar", "metadata", "vendorId", "status"];
     allowedUpdates.forEach(key => {
         if (updateData[key] !== undefined) {
-            rider[key] = updateData[key];
+            rider[key] = key === "vendorId" && !updateData[key] ? null : updateData[key];
         }
     });
+
+    if (updateData.vendorId === null || updateData.vendorId === "") {
+        rider.managedBy = "admin";
+    }
 
     if (updateData.password) {
         rider.password = updateData.password;

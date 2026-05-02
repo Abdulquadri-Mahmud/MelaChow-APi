@@ -17,7 +17,7 @@ const handlePaystackError = (error, defaultMessage) => {
 export const getBankList = async (req, res) => {
   try {
     const banks = await fetchBankList();
-    return res.json({ banks });
+    return res.json({ success: true, banks, data: banks });
   } catch (error) {
     const message = handlePaystackError(error, "Failed to fetch bank list");
     return res.status(502).json({ message });
@@ -27,7 +27,8 @@ export const getBankList = async (req, res) => {
 // ─── FUNCTION 2: resolveAccount ───
 export const resolveAccount = async (req, res) => {
   try {
-    const { account_number, bank_code } = req.query;
+    const account_number = req.query.account_number || req.query.accountNumber;
+    const bank_code = req.query.bank_code || req.query.bankCode;
 
     if (!account_number || !bank_code) {
       return res.status(400).json({ message: "Account number and bank code are required" });
@@ -35,7 +36,15 @@ export const resolveAccount = async (req, res) => {
 
     const account_name = await resolveAccountService(account_number, bank_code);
 
-    return res.json({ account_name });
+    return res.json({
+      success: true,
+      account_name,
+      data: {
+        accountName: account_name,
+        accountNumber: account_number,
+        bankCode: bank_code,
+      },
+    });
   } catch (error) {
     const message = handlePaystackError(error, "Could not resolve account. Check the account number and bank.");
     return res.status(502).json({ message });

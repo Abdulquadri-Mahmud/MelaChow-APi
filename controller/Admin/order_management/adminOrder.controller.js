@@ -5,6 +5,7 @@ import Wallet from "../../../model/wallet/wallet.mode.js";
 import User from "../../../model/user.model.js";
 import Rider from "../../../model/rider.model.js";
 import mongoose from "mongoose";
+import { getPlatformConfig } from "../../../services/platformConfig.service.js";
 
 /**
  * GET ALL ORDERS
@@ -411,6 +412,7 @@ export const getCommissionLedger = async (req, res) => {
     try {
         const { startDate, endDate, page = 1, limit = 20 } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
+        const platformConfig = await getPlatformConfig();
 
         const dateFilter = { paymentStatus: "paid" };
         if (startDate || endDate) {
@@ -445,8 +447,11 @@ export const getCommissionLedger = async (req, res) => {
                     createdAt: 1,
                     subtotal: 1,
                     deliveryFee: 1,
+                    serviceFee: { $ifNull: ["$serviceFee", 0] },
+                    riderEarnings: { $ifNull: ["$riderEarnings", platformConfig.riderFixedPayout] },
                     total: 1,
                     numberOfVendors: { $size: "$vOrders" },
+                    vendorNames: "$vendors.storeName",
                     totalCommission: { $sum: "$vOrders.commission" },
                     // All delivery fees are held by the platform
                     isPlatformManaged: true
@@ -456,6 +461,24 @@ export const getCommissionLedger = async (req, res) => {
                 $addFields: {
                     deliveryFeeHeld: {
                         $cond: ["$isPlatformManaged", "$deliveryFee", 0]
+                    },
+                    deliverySpread: {
+                        $max: [
+                            0,
+                            { $subtract: ["$deliveryFee", "$riderEarnings"] }
+                        ]
+                    },
+                    platformRevenue: {
+                        $add: [
+                            "$totalCommission",
+                            "$serviceFee",
+                            {
+                                $max: [
+                                    0,
+                                    { $subtract: ["$deliveryFee", "$riderEarnings"] }
+                                ]
+                            }
+                        ]
                     }
                 }
             },
@@ -468,6 +491,9 @@ export const getCommissionLedger = async (req, res) => {
                                 _id: null,
                                 totalCommissionEarned: { $sum: "$totalCommission" },
                                 totalDeliveryFeesHeld: { $sum: "$deliveryFeeHeld" },
+                                totalDeliverySpread: { $sum: "$deliverySpread" },
+                                totalServiceFees: { $sum: "$serviceFee" },
+                                totalPlatformRevenue: { $sum: "$platformRevenue" },
                                 totalCount: { $sum: 1 }
                             }
                         }
@@ -480,6 +506,9 @@ export const getCommissionLedger = async (req, res) => {
         const metadata = aggregationResult[0].metadata[0] || {
             totalCommissionEarned: 0,
             totalDeliveryFeesHeld: 0,
+            totalDeliverySpread: 0,
+            totalServiceFees: 0,
+            totalPlatformRevenue: 0,
             totalCount: 0
         };
 
@@ -491,7 +520,9 @@ export const getCommissionLedger = async (req, res) => {
                 summary: {
                     totalCommissionEarned: metadata.totalCommissionEarned,
                     totalDeliveryFeesHeld: metadata.totalDeliveryFeesHeld,
-                    combinedPlatformRevenue: metadata.totalCommissionEarned + metadata.totalDeliveryFeesHeld
+                    totalDeliverySpread: metadata.totalDeliverySpread || 0,
+                    totalServiceFees: metadata.totalServiceFees || 0,
+                    combinedPlatformRevenue: metadata.totalPlatformRevenue || 0
                 },
                 orders,
                 pagination: {

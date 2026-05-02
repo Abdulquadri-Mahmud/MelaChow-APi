@@ -7,10 +7,34 @@ const PAYSTACK_BASE_URL = "https://api.paystack.co";
  * Fetch list of valid Nigerian banks from Paystack
  */
 export const fetchBankList = async () => {
-  const response = await axios.get(`${PAYSTACK_BASE_URL}/bank?currency=NGN&per_page=100`, {
-    headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` },
-  });
-  return response.data.data;
+  const banks = [];
+  const perPage = 100;
+  let page = 1;
+  let hasMore = true;
+
+  while (hasMore) {
+    const response = await axios.get(
+      `${PAYSTACK_BASE_URL}/bank?country=nigeria&currency=NGN&perPage=${perPage}&page=${page}`,
+      {
+        headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` },
+      }
+    );
+
+    const pageBanks = Array.isArray(response.data?.data)
+      ? response.data.data
+      : [];
+
+    banks.push(...pageBanks);
+
+    const meta = response.data?.meta;
+    const totalPages = meta?.pageCount || meta?.total_pages || 1;
+    hasMore = page < totalPages && pageBanks.length > 0;
+    page += 1;
+  }
+
+  return banks
+    .filter((bank) => bank?.code && bank?.name && bank.active !== false)
+    .sort((a, b) => a.name.localeCompare(b.name));
 };
 
 /**
