@@ -417,7 +417,7 @@ export const getComboDetails = async (req, res) => {
             _id: comboId, is_archived: false
         }).lean();
         if (!combo) {
-            return res.status(404).json({ success: false, message: 'Combo found' });
+            return res.status(404).json({ success: false, message: 'Combo not found' });
         }
 
         // Fetch vendor info
@@ -577,21 +577,32 @@ export const getPublicFoodDetail = async (req, res) => {
         }
 
         // Find the item — must be active and not archived
-        const item = await MenuItem.findOne({
+        let item = await MenuItem.findOne({
             _id:          foodId,
-            is_archived:  false,
-            is_available: true,
+            is_archived:  { $ne: true },
+            is_available: { $ne: false },
         }).lean();
+
+        // Fallback: Check if it's a combo
+        let isCombo = false;
+        if (!item) {
+            item = await ComboItem.findOne({
+                _id:          foodId,
+                is_archived:  { $ne: true },
+                is_available: { $ne: false },
+            }).lean();
+            if (item) isCombo = true;
+        }
 
         if (!item) {
             return res.status(404).json({
                 success: false,
-                message: "Food item not found or unavailable",
+                message: "Food item or combo not found or unavailable",
             });
         }
 
         // Fetch vendor to attach delivery fee and store info
-        const vendor = await Vendor.findById(item.vendor_id)
+        const vendor = await Vendor.findById(item.vendor_id || item.vendorId)
             .select(
                 "storeName logo address openingHours rating ratingCount " +
                 "storeSlug platformDeliveryFeeOverride isOpen estimatedDeliveryTime"
@@ -603,14 +614,34 @@ export const getPublicFoodDetail = async (req, res) => {
             ? await resolveStorefrontDeliveryFee(vendor)
             : 0;
 
-        // Build full item — customer view (vendorView: false)
-        // Populates: portions, choice_groups, combos, platform_category with parent
-        const fullItem = await buildFullItem(item, { vendorView: false });
+        let resultData;
+
+        if (isCombo) {
+            // Format combo to look like a food item for the food-details page
+            // to prevent crashes, or provide enough data.
+            resultData = {
+                ...item,
+                type: 'combo',
+                price_naira: Math.round(item.price / 100),
+                choiceGroups: (item.choice_groups || []).map(group => ({
+                    ...group,
+                    options: (group.options || []).map(opt => ({
+                        ...opt,
+                        price_modifier_naira: Math.round((opt.price_modifier || 0) / 100)
+                    }))
+                }))
+            };
+        } else {
+            // Build full item — customer view (vendorView: false)
+            // Populates: portions, choice_groups, platform_category with parent
+            const fullItem = await buildFullItem(item, { vendorView: false });
+            resultData = fullItem;
+        }
 
         return res.status(200).json({
             success: true,
             food: {
-                ...fullItem,
+                ...resultData,
                 deliveryFee,
                 vendor: vendor
                     ? {

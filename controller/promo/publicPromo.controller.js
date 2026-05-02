@@ -15,15 +15,21 @@ export const getActivePromos = async (req, res) => {
     // 1. Platform promo — at most one active at a time
     const platformPromo = await FreeDeliveryPromo.findOne({
       isActive: true,
-      $expr: { $lt: ["$usedSlots", "$totalSlots"] },
       // Respect optional endsAt if set
       $or: [
         { endsAt: null },
+        { endsAt: { $exists: false } },
         { endsAt: { $gt: now } },
       ],
     })
       .select("totalSlots usedSlots startsAt endsAt")
+      .sort({ updatedAt: -1, createdAt: -1 })
       .lean();
+
+    const totalSlots = Number(platformPromo?.totalSlots ?? 100);
+    const usedSlots = Number(platformPromo?.usedSlots ?? 0);
+    const slotsRemaining = Math.max(0, totalSlots - usedSlots);
+    const activePlatformPromo = platformPromo && slotsRemaining > 0;
 
     // 2. Count of vendors currently running delivery promos
     const vendorPromoCount = await VendorDeliveryPromo.countDocuments({
@@ -38,10 +44,10 @@ export const getActivePromos = async (req, res) => {
 
     return res.json({
       success: true,
-      platformPromo: platformPromo
+      platformPromo: activePlatformPromo
         ? {
-            slotsRemaining: Math.max(0, platformPromo.totalSlots - platformPromo.usedSlots),
-            totalSlots:     platformPromo.totalSlots,
+            slotsRemaining,
+            totalSlots,
             endsAt:         platformPromo.endsAt || null,
           }
         : null,

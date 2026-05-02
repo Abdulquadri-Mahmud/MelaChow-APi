@@ -985,12 +985,17 @@ export const createOrderV2 = async ({
         // Business rule: don't layer a fee on top of a promo — bad UX.
         const platformConfig = await getPlatformConfig();
 
-        const anyPromoActive = vendorPromoResult.applicable || promoEligibilityResult.eligible;
+        // Service fee is suppressed ONLY for the platform first-order promo.
+        // Vendor-sponsored promos cover delivery only — the platform's operational
+        // service fee is still warranted regardless of who pays the rider.
+        // Real-world precedent: Glovo, Bolt Food charge service fee even on
+        // vendor-sponsored free delivery orders.
+        const serviceFeePromoActive = promoEligibilityResult.eligible; // platform promo only
 
         const serviceFee = calculateServiceFee(
             platformConfig,
             subtotal,       // fee is on food subtotal, not including delivery
-            anyPromoActive
+            serviceFeePromoActive
         );
 
         if (serviceFee > 0) {
