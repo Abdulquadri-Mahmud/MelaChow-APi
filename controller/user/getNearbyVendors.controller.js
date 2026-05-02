@@ -2,6 +2,42 @@ import User from "../../model/user.model.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 import City from "../../model/location/City.js";
 import State from "../../model/location/State.js";
+import VendorDeliveryPromo from "../../model/promo/VendorDeliveryPromo.js";
+
+const getActiveVendorPromoMap = async (vendorIds) => {
+    if (!vendorIds.length) return new Map();
+
+    const now = new Date();
+    const promos = await VendorDeliveryPromo.find({
+        vendorId: { $in: vendorIds },
+        isActive: true,
+        startsAt: { $lte: now },
+        endsAt: { $gte: now },
+        $or: [
+            { maxOrders: null },
+            { $expr: { $lt: ["$usedOrders", "$maxOrders"] } },
+        ],
+    })
+        .select("_id vendorId maxOrders usedOrders startsAt endsAt")
+        .lean();
+
+    return new Map(promos.map((promo) => [String(promo.vendorId), promo]));
+};
+
+const shapeActiveDeliveryPromo = (promo) => {
+    if (!promo) return null;
+
+    return {
+        promoId: promo._id,
+        maxOrders: promo.maxOrders,
+        usedOrders: promo.usedOrders,
+        remainingOrders: promo.maxOrders == null
+            ? null
+            : Math.max(0, promo.maxOrders - promo.usedOrders),
+        startsAt: promo.startsAt,
+        endsAt: promo.endsAt,
+    };
+};
 
 /**
  * @desc    Get all vendors near the logged-in user
@@ -68,12 +104,17 @@ export const getNearbyVendorsForUser = async (req, res) => {
 
         // 4.5 Resolve precise delivery fee for each vendor
         const cityPlatformFee = cityDoc?.platformDeliveryFee || 0;
+        const activePromoMap = await getActiveVendorPromoMap(vendors.map((v) => v._id));
         const vendorsWithFee = vendors.map(v => {
-            // Vendor-sponsored promo overrides all fee resolution.
-            // hasActiveDeliveryPromo is kept in sync atomically by the promo
-            // create/deactivate controllers — trust it without a DB re-query.
-            if (v.hasActiveDeliveryPromo === true) {
-                return { ...v, deliveryFee: 0 };
+            const activePromo = activePromoMap.get(String(v._id));
+
+            if (activePromo) {
+                return {
+                    ...v,
+                    deliveryFee: 0,
+                    hasActiveDeliveryPromo: true,
+                    activeDeliveryPromo: shapeActiveDeliveryPromo(activePromo),
+                };
             }
 
             let deliveryFee = 0;
@@ -82,7 +123,12 @@ export const getNearbyVendorsForUser = async (req, res) => {
             } else {
                 deliveryFee = cityPlatformFee;
             }
-            return { ...v, deliveryFee };
+            return {
+                ...v,
+                deliveryFee,
+                hasActiveDeliveryPromo: false,
+                activeDeliveryPromo: null,
+            };
         });
 
         // 5. Response

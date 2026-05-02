@@ -10,7 +10,12 @@ import VendorOrder from "../../model/vendor/VendorOrder.js";
 import Food from "../../model/vendor/food.model.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 import Admin from "../../model/Admin/admin.model.js";
-import { createOrderV2, updateOrderAfterPayment, releaseEscrowToVendor } from "./createOrderV2.controller.js";
+import {
+  createOrderV2,
+  updateOrderAfterPayment,
+  releaseEscrowToVendor,
+  releasePromoReservationsForOrder,
+} from "./createOrderV2.controller.js";
 import { getPlatformConfig } from "../../services/platformConfig.service.js";
 import PaymentLock from "../../model/order/PaymentLock.js";
 import { refundOrderToWallet } from "../../services/refund.service.js";
@@ -886,6 +891,7 @@ export const verifyPayment = async (req, res) => {
       order.paymentStatus = "failed";
       order.orderStatus = "failed";
       await order.save();
+      await releasePromoReservationsForOrder(order._id);
 
       console.error(`❌ Payment failed for Order ${order.orderId}`);
       return res.status(400).json({
@@ -1036,6 +1042,7 @@ export const verifyPaymentV2 = async (req, res) => {
       order.paymentStatus = "failed";
       order.orderStatus = "failed";
       await order.save();
+      await releasePromoReservationsForOrder(order._id);
 
       console.error(`❌ [V2] Payment failed for Order ${order.orderId}`);
       return res.status(400).json({

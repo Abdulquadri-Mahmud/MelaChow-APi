@@ -15,11 +15,21 @@ export const getActivePromos = async (req, res) => {
     // 1. Platform promo — at most one active at a time
     const platformPromo = await FreeDeliveryPromo.findOne({
       isActive: true,
-      // Respect optional endsAt if set
-      $or: [
-        { endsAt: null },
-        { endsAt: { $exists: false } },
-        { endsAt: { $gt: now } },
+      $and: [
+        {
+          $or: [
+            { startsAt: null },
+            { startsAt: { $exists: false } },
+            { startsAt: { $lte: now } },
+          ],
+        },
+        {
+          $or: [
+            { endsAt: null },
+            { endsAt: { $exists: false } },
+            { endsAt: { $gt: now } },
+          ],
+        },
       ],
     })
       .select("totalSlots usedSlots startsAt endsAt")

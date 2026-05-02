@@ -8,6 +8,57 @@ import Order from "../../model/order/Order.js";
 import User from "../../model/user.model.js";
 import { validateVendorLocation } from "../../services/locationService.js";
 import { redisClient, isRedisReady } from "../../config/redis.js";
+import City from "../../model/location/City.js";
+import VendorDeliveryPromo from "../../model/promo/VendorDeliveryPromo.js";
+
+const getActiveVendorDeliveryPromoContext = async (vendorId) => {
+  const now = new Date();
+  const promo = await VendorDeliveryPromo.findOne({
+    vendorId,
+    isActive: true,
+    startsAt: { $lte: now },
+    endsAt: { $gte: now },
+    $or: [
+      { maxOrders: null },
+      { $expr: { $lt: ["$usedOrders", "$maxOrders"] } },
+    ],
+  }).select("_id maxOrders usedOrders startsAt endsAt").lean();
+
+  return {
+    hasActiveDeliveryPromo: !!promo,
+    activeDeliveryPromo: promo
+      ? {
+          promoId: promo._id,
+          maxOrders: promo.maxOrders,
+          usedOrders: promo.usedOrders,
+          remainingOrders: promo.maxOrders == null ? null : Math.max(0, promo.maxOrders - promo.usedOrders),
+          startsAt: promo.startsAt,
+          endsAt: promo.endsAt,
+        }
+      : null,
+  };
+};
+
+const resolvePublicDeliveryFee = async (vendor) => {
+  const promoContext = await getActiveVendorDeliveryPromoContext(vendor._id);
+  if (promoContext.hasActiveDeliveryPromo) {
+    return { deliveryFee: 0, ...promoContext };
+  }
+
+  if (vendor.platformDeliveryFeeOverride != null && vendor.platformDeliveryFeeOverride > 0) {
+    return { deliveryFee: vendor.platformDeliveryFeeOverride, ...promoContext };
+  }
+
+  if (vendor.cityId?.platformDeliveryFee != null) {
+    return { deliveryFee: vendor.cityId.platformDeliveryFee, ...promoContext };
+  }
+
+  const cityName = vendor.address?.city;
+  if (!cityName) return { deliveryFee: vendor.deliveryFee || 0, ...promoContext };
+
+  const city = await City.findOne({ name: { $regex: new RegExp(`^${cityName}$`, "i") } }).lean();
+  return { deliveryFee: city?.platformDeliveryFee ?? vendor.deliveryFee ?? 0, ...promoContext };
+};
 
 // ----------------------------------------------
 // ✅ CREATE NEW VENDOR WITH AUTO WALLET CREATION
@@ -180,7 +231,8 @@ export const getVendorForUserDisplay = async (req, res) => {
       .findOne({
         $or: [{ _id: id }, { storeSlug: id }],
       })
-      .select("storeName fullAddress storeDescription address logo email phone openingHours acceptsDelivery rating ratingCount deliveryRadiusKm")
+      .populate("cityId", "name platformDeliveryFee")
+      .select("storeName fullAddress storeDescription address logo email phone openingHours acceptsDelivery rating ratingCount deliveryRadiusKm deliveryManagedBy deliveryFee flatRateDeliveryFee platformDeliveryFeeOverride cityId")
       .lean(); // lean makes it return a plain JS object
 
     if (!vendor) {
@@ -189,6 +241,12 @@ export const getVendorForUserDisplay = async (req, res) => {
         message: "Vendor not found",
       });
     }
+
+    const deliveryContext = await resolvePublicDeliveryFee(vendor);
+    const vendorData = {
+      ...vendor,
+      ...deliveryContext,
+    };
 
     // ✅ Fetch all foods created by this vendor
     const foods = await Food
@@ -200,7 +258,7 @@ export const getVendorForUserDisplay = async (req, res) => {
     res.status(200).json({
       success: true,
       data: {
-        vendor,
+        vendor: vendorData,
         foods,
       },
     });

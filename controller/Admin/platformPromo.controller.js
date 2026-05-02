@@ -17,6 +17,21 @@ export const listPlatformDeliveryPromos = async (req, res) => {
 export const createPlatformDeliveryPromo = async (req, res) => {
   try {
     const { name, totalSlots, startsAt, endsAt } = req.body;
+    const now = new Date();
+    const parsedStartsAt = startsAt ? new Date(startsAt) : now;
+    const parsedEndsAt = endsAt ? new Date(endsAt) : null;
+
+    if (Number(totalSlots) < 1) {
+      return res.status(400).json({ success: false, message: "totalSlots must be a positive number" });
+    }
+
+    if (isNaN(parsedStartsAt.getTime())) {
+      return res.status(400).json({ success: false, message: "Invalid startsAt date" });
+    }
+
+    if (parsedEndsAt && (isNaN(parsedEndsAt.getTime()) || parsedEndsAt <= parsedStartsAt)) {
+      return res.status(400).json({ success: false, message: "endsAt must be after startsAt" });
+    }
 
     // We only support one active promo for the entire platform at a time.
     const existingActive = await FreeDeliveryPromo.findOne({ isActive: true });
@@ -31,8 +46,8 @@ export const createPlatformDeliveryPromo = async (req, res) => {
       name: name || "first_order_free_delivery",
       totalSlots: Number(totalSlots) || 100,
       usedSlots: 0,
-      startsAt: startsAt ? new Date(startsAt) : new Date(),
-      endsAt: endsAt ? new Date(endsAt) : null,
+      startsAt: parsedStartsAt,
+      endsAt: parsedEndsAt,
       isActive: true,
     });
 
