@@ -1036,10 +1036,20 @@ export const createOrderV2 = async ({
             appliedDiscount = calculation.appliedDiscount;
 
             // Increment discount usage
-            await Discount.updateOne(
-                { code: validation.discount.code },
+            const usageUpdate = await Discount.updateOne(
+                {
+                    _id: validation.discount._id,
+                    $or: [
+                        { usageLimit: null },
+                        { $expr: { $lt: ["$usageCount", "$usageLimit"] } },
+                    ],
+                },
                 { $inc: { usageCount: 1 } }
             ).session(session);
+
+            if (usageUpdate.modifiedCount !== 1) {
+                throw new Error("Discount Error: Discount usage limit reached");
+            }
         }
 
         const total = finalTotal;

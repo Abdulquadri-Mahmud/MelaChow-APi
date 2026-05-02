@@ -1,5 +1,5 @@
 import Discount from "../model/discount/Discount.js";
-import User from "../model/user.model.js";
+import Order from "../model/order/Order.js";
 import { getPlatformConfig } from "./platformConfig.service.js";
 
 /**
@@ -40,13 +40,19 @@ class DiscountService {
             }
 
             // 3. 👤 User Usage Limits
-            if (context.userId) {
-                // Here we would check the Order model for previous usage of this code by this user.
-                // For performance, we assume this check is done or we query it. 
-                // NOTE: This requires checking past orders. For MVP of this service, we skip DB query here
-                // to keep it pure, unless we pass in `userUsageCount`.
-                // Ideally, we persist a "userUsedDiscounts" map or check orders.
-                // We will assume the controller handles the DB lookup for user's past usage if needed.
+            if (context.userId && discount.userUsageLimit !== null) {
+                const userUsageCount = await Order.countDocuments({
+                    userId: context.userId,
+                    "appliedDiscount.code": discount.code,
+                    orderStatus: { $ne: "cancelled" },
+                });
+
+                if (userUsageCount >= discount.userUsageLimit) {
+                    return {
+                        valid: false,
+                        error: `You have already used this discount ${discount.userUsageLimit} time${discount.userUsageLimit === 1 ? "" : "s"}`
+                    };
+                }
             }
 
             // 4. 🏪 Vendor Scope Validation
@@ -68,7 +74,7 @@ class DiscountService {
             // 6. 🍔 Item Specific Checks
             if (discount.scope === "SPECIFIC_ITEMS") {
                 const hasTargetItem = context.items.some(item =>
-                    discount.targetFoodIds.some(targetId => targetId.toString() === item.foodId.toString())
+                    item.foodId && discount.targetFoodIds.some(targetId => targetId.toString() === item.foodId.toString())
                 );
                 if (!hasTargetItem) {
                     return { valid: false, error: "Discount does not apply to any items in your cart" };
@@ -145,7 +151,7 @@ class DiscountService {
         else if (discount.scope === "SPECIFIC_ITEMS") {
             // Calculate discount for EACH matching item
             items.forEach(item => {
-                if (discount.targetFoodIds.some(id => id.toString() === item.foodId.toString())) {
+                if (item.foodId && discount.targetFoodIds.some(id => id.toString() === item.foodId.toString())) {
                     let itemDiscount = 0;
                     const itemTotal = item.price * item.quantity;
 
@@ -216,7 +222,8 @@ class DiscountService {
                 type: discount.type,
                 amount: discountAmount,
                 scope: discount.scope,
-                label: discount.description || discount.code
+                label: discount.description || discount.code,
+                fundedBy: discount.fundedBy,
             }
         };
     }

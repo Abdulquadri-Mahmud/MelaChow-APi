@@ -207,6 +207,7 @@ const orderSchema = new mongoose.Schema(
       amount: Number,
       scope: String,
       label: String,
+      fundedBy: String,
       _id: false // No ID needed for subdocument
     },
 
