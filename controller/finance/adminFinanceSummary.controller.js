@@ -41,7 +41,7 @@ export const getAdminWalletBreakdown = async (req, res) => {
         // Platform's retained spread (₦400 per delivery)
         const deliverySpreadEarned = txns
             .filter(t => t.transactionType === 'delivery_spread' && t.type === 'credit')
-            .reduce((acc, t) => acc + t.amount, 0);
+            .reduce((acc, t) => acc + Number(t.reportingAmount || t.amount || 0), 0);
 
         // Total refunds issued
         const totalRefundsIssued = txns
@@ -94,36 +94,55 @@ export const getPayoutHistory = async (req, res) => {
         const page = parseInt(req.query.page) || 1;
         const limit = 50;
         const skip = (page - 1) * limit;
+        const search = (req.query.search || "").trim().toLowerCase();
+        const { startDate, endDate } = req.query;
 
-        const [vendorPayouts, riderPayouts, vendorTotal, riderTotal] = await Promise.all([
+        const [vendorPayouts, riderPayouts] = await Promise.all([
             Withdrawal.find()
                 .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(limit)
                 .select("-recipientCode"),
             RiderWithdrawal.find()
                 .sort({ createdAt: -1 })
-                .skip(skip)
-                .limit(limit)
                 .select("-recipientCode"),
-            Withdrawal.countDocuments(),
-            RiderWithdrawal.countDocuments(),
         ]);
 
         // Merge and sort by date descending
-        const combined = [
+        let combined = [
             ...vendorPayouts.map(p => ({ ...p.toObject(), actorType: "vendor" })),
             ...riderPayouts.map(p => ({ ...p.toObject(), actorType: "rider" })),
-        ].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, limit);
+        ];
+
+        if (search) {
+            combined = combined.filter((p) =>
+                [p.accountName, p.bankName, p.accountNumber, p.status, p.paystackReference, p.actorType]
+                    .filter(Boolean)
+                    .some((value) => String(value).toLowerCase().includes(search))
+            );
+        }
+
+        if (startDate || endDate) {
+            combined = combined.filter((p) => {
+                const createdAt = new Date(p.createdAt);
+                return (!startDate || createdAt >= new Date(startDate)) &&
+                    (!endDate || createdAt <= new Date(endDate));
+            });
+        }
+
+        combined.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+        const total = combined.length;
+        const payouts = combined.slice(skip, skip + limit);
 
         return res.status(200).json({
             success: true,
             data: {
-                payouts: combined,
+                payouts,
                 pagination: {
+                    total,
                     page,
-                    totalVendorPayouts: vendorTotal,
-                    totalRiderPayouts: riderTotal,
+                    limit,
+                    totalPages: Math.ceil(total / limit),
+                    totalVendorPayouts: vendorPayouts.length,
+                    totalRiderPayouts: riderPayouts.length,
                 }
             }
         });

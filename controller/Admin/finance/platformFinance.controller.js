@@ -16,10 +16,14 @@ export const getRevenueSummary = async (req, res) => {
         const platformConfig = await getPlatformConfig();
 
         const dateFilter = {};
+        const parentOrderDateFilter = {};
         if (startDate || endDate) {
             dateFilter.createdAt = {};
+            parentOrderDateFilter["parentOrder.createdAt"] = {};
             if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
             if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
+            if (startDate) parentOrderDateFilter["parentOrder.createdAt"].$gte = new Date(startDate);
+            if (endDate) parentOrderDateFilter["parentOrder.createdAt"].$lte = new Date(endDate);
         }
 
         // 1. Commission Earned (from paid VendorOrders)
@@ -36,7 +40,7 @@ export const getRevenueSummary = async (req, res) => {
             {
                 $match: {
                     "parentOrder.paymentStatus": "paid",
-                    ...dateFilter
+                    ...parentOrderDateFilter
                 }
             },
             {
@@ -117,7 +121,8 @@ export const getRevenueSummary = async (req, res) => {
             {
                 $match: {
                     "parentOrder.paymentStatus": "paid",
-                    "escrowReleased": false
+                    "escrowReleased": false,
+                    ...parentOrderDateFilter
                 }
             },
             {
@@ -194,7 +199,7 @@ export const getRevenueChart = async (req, res) => {
 
         if (period === "30days") {
             daysToLookBack = 30;
-        } else if (period === "3months") {
+        } else if (period === "90days" || period === "3months") {
             daysToLookBack = 90;
             dateFormat = "%Y-W%V"; // Weekly
             groupType = "week";
@@ -238,11 +243,16 @@ export const getRevenueChart = async (req, res) => {
                     createdAt: 1,
                     commission: 1,
                     // Dynamic spread based on historical data where available, fallback to config
-                    platformDeliveryShare: { 
-                        $subtract: [
-                            "$parentOrder.deliveryFee", 
-                            { $ifNull: ["$parentOrder.riderEarnings", platformConfig.riderFixedPayout] }
-                        ] 
+                    platformDeliveryShare: {
+                        $max: [
+                            0,
+                            {
+                                $subtract: [
+                                    "$parentOrder.deliveryFee",
+                                    { $ifNull: ["$parentOrder.riderEarnings", platformConfig.riderFixedPayout] }
+                                ]
+                            }
+                        ]
                     },
                     serviceFee: { $ifNull: ["$parentOrder.serviceFee", 0] },
                     userOrderId: 1,
@@ -342,9 +352,18 @@ export const getTransactionLedger = async (req, res) => {
         if (endDate) {
             filtered = filtered.filter(tx => new Date(tx.date) <= new Date(endDate));
         }
+        let searchOrderIds = [];
         if (search) {
+            const matchingOrders = await Order.find({
+                orderId: { $regex: search, $options: "i" },
+            }).select("_id").lean();
+            searchOrderIds = matchingOrders.map((order) => order._id.toString());
+
             const s = search.toLowerCase();
-            filtered = filtered.filter(tx => tx.description?.toLowerCase().includes(s));
+            filtered = filtered.filter(tx =>
+                tx.description?.toLowerCase().includes(s) ||
+                (tx.orderId && searchOrderIds.includes(tx.orderId.toString()))
+            );
         }
 
         // Sort descending for response
@@ -407,10 +426,14 @@ export const getVendorBreakdown = async (req, res) => {
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
         const dateFilter = {};
+        const parentOrderDateFilter = {};
         if (startDate || endDate) {
             dateFilter.createdAt = {};
+            parentOrderDateFilter["parentOrder.createdAt"] = {};
             if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
             if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
+            if (startDate) parentOrderDateFilter["parentOrder.createdAt"].$gte = new Date(startDate);
+            if (endDate) parentOrderDateFilter["parentOrder.createdAt"].$lte = new Date(endDate);
         }
 
         const aggregation = await VendorOrder.aggregate([
@@ -426,7 +449,7 @@ export const getVendorBreakdown = async (req, res) => {
             {
                 $match: {
                     "parentOrder.paymentStatus": "paid",
-                    ...dateFilter
+                    ...parentOrderDateFilter
                 }
             },
             {
@@ -435,7 +458,19 @@ export const getVendorBreakdown = async (req, res) => {
                     orderCount: { $sum: 1 },
                     commissionPaid: { $sum: "$commission" },
                     vendorEarnings: { $sum: "$vendorTotal" },
-                    deliveryShareGenerated: { $sum: "$deliveryShare" },
+                    deliveryShareGenerated: {
+                        $sum: {
+                            $max: [
+                                0,
+                                {
+                                    $subtract: [
+                                        "$parentOrder.deliveryFee",
+                                        { $ifNull: ["$parentOrder.riderEarnings", platformConfig.riderFixedPayout] }
+                                    ]
+                                }
+                            ]
+                        }
+                    },
                     totalSubtotal: { $sum: { $add: ["$commission", "$vendorTotal"] } }
                 }
             },
@@ -510,13 +545,19 @@ export const getVendorBreakdown = async (req, res) => {
  */
 export const getUnreleasedEscrowList = async (req, res) => {
     try {
-        const { page = 1, limit = 20, search } = req.query;
+        const { page = 1, limit = 20, search, startDate, endDate } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
         const matchStage = {
             "parentOrder.paymentStatus": "paid",
             escrowReleased: false
         };
+
+        if (startDate || endDate) {
+            matchStage["parentOrder.createdAt"] = {};
+            if (startDate) matchStage["parentOrder.createdAt"].$gte = new Date(startDate);
+            if (endDate) matchStage["parentOrder.createdAt"].$lte = new Date(endDate);
+        }
 
         if (search) {
             matchStage["parentOrder.orderId"] = { $regex: search, $options: "i" };
@@ -598,10 +639,16 @@ export const getUnreleasedEscrowList = async (req, res) => {
  */
 export const getRefundsList = async (req, res) => {
     try {
-        const { page = 1, limit = 20, search } = req.query;
+        const { page = 1, limit = 20, search, startDate, endDate } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
         let query = {};
+        if (startDate || endDate) {
+            query.createdAt = {};
+            if (startDate) query.createdAt.$gte = new Date(startDate);
+            if (endDate) query.createdAt.$lte = new Date(endDate);
+        }
+
         if (search) {
             const matchingOrders = await Order.find({
                 orderId: { $regex: search, $options: "i" }

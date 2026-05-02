@@ -8,7 +8,7 @@ import { sendDeliveryOTP, verifyDeliveryOTP } from '../services/otp.service.js';
 
 export const createRider = async (req, res, next) => {
     try {
-        const { vendorId } = req.params;
+        const vendorId = req.admin ? null : req.params.vendorId;
         const rider = await riderService.createRider(req.body, vendorId);
         res.status(201).json({ success: true, data: rider.getPublicProfile() });
     } catch (error) {
