@@ -22,6 +22,7 @@ import { getPlatformConfig, calculateServiceFee } from '../../services/platformC
 import FreeDeliveryPromo from "../../model/promo/FreeDeliveryPromo.js";
 import FreeDeliveryClaim  from "../../model/promo/FreeDeliveryClaim.js";
 import VendorDeliveryPromo from "../../model/promo/VendorDeliveryPromo.js";
+import VendorDeliveryClaim from "../../model/promo/VendorDeliveryClaim.js";
 
 // Max number of claims allowed from the same IP address.
 // Set to 3 to allow legitimate students sharing campus/hostel WiFi
@@ -307,9 +308,27 @@ const checkFreeDeliveryEligibility = async (
       return { eligible: false, reason: "city_fee_already_zero" };
     }
 
-    // Gate 1: Promo must be active with slots remaining
+    const now = new Date();
+
+    // Gate 1: Promo must be active, inside date window, with slots remaining
     const promo = await FreeDeliveryPromo.findOne({
       isActive: true,
+      $and: [
+        {
+          $or: [
+            { startsAt: null },
+            { startsAt: { $exists: false } },
+            { startsAt: { $lte: now } },
+          ],
+        },
+        {
+          $or: [
+            { endsAt: null },
+            { endsAt: { $exists: false } },
+            { endsAt: { $gte: now } },
+          ],
+        },
+      ],
       $expr: { $lt: ["$usedSlots", "$totalSlots"] },
     })
       .session(session)
@@ -320,15 +339,24 @@ const checkFreeDeliveryEligibility = async (
     }
 
     // Gate 3: userId must not have a prior claim
-    const userClaim = await FreeDeliveryClaim.findOne({ userId }).lean();
+    const userClaim = await FreeDeliveryClaim.findOne({ userId }).session(session).lean();
     if (userClaim) {
       return { eligible: false, reason: "user_already_claimed" };
     }
 
-    // Gate 4: User must not have any previous paid order
+    // Gate 4: User must not have any previous paid order or a pending
+    // platform promo order. This prevents creating multiple unpaid orders
+    // that all carry free delivery before payment confirmation.
     const previousPaidOrder = await Order.findOne({
       userId,
-      paymentStatus: "paid",
+      $or: [
+        { paymentStatus: "paid" },
+        {
+          "freeDeliveryPromo.eligible": true,
+          paymentStatus: { $nin: ["failed", "refunded"] },
+          orderStatus: { $ne: "cancelled" },
+        },
+      ],
     })
       .session(session)
       .lean();
@@ -375,12 +403,12 @@ const checkFreeDeliveryEligibility = async (
 };
 
 /**
- * Atomically claim a free delivery slot after payment is confirmed.
+ * Atomically reserve/claim a free delivery slot.
  * Must be called within an active Mongoose session/transaction.
  * Idempotent — returns immediately if order already marked claimed.
  *
- * Non-fatal contract: this function MUST NOT throw uncaught errors.
- * Payment confirmation must never be blocked by promo logic.
+ * Strict contract: if this cannot reserve the slot, order creation should
+ * fail before the customer pays a zero-delivery total.
  */
 const claimFreeDeliverySlotInSession = async (order, session) => {
   if (!order.freeDeliveryPromo?.eligible) return;
@@ -390,9 +418,6 @@ const claimFreeDeliverySlotInSession = async (order, session) => {
 
   // Atomic slot increment.
   // Condition prevents going over totalSlots.
-  // If null is returned (race exhausted all slots between eligibility
-  // check and now), we still honor the ₦0 delivery the customer
-  // already paid — and log the overflow for admin review.
   const updatedPromo = await FreeDeliveryPromo.findOneAndUpdate(
     {
       _id:      promoId,
@@ -404,16 +429,10 @@ const claimFreeDeliverySlotInSession = async (order, session) => {
   );
 
   if (!updatedPromo) {
-    logger.warn(
-      { orderId: order.orderId },
-      "⚠️ Promo overflow — all 100 slots exhausted in race condition; ₦0 delivery honored for this order, slot not counted"
-    );
-    // Still record the claim for audit purposes, without having incremented usedSlots
+    throw new Error("Free delivery promo is no longer available");
   }
 
   // Create the claim record.
-  // On duplicate key (userId unique violation), this means the same user
-  // somehow triggered two concurrent payments. Log and continue — non-fatal.
   try {
     await FreeDeliveryClaim.create(
       [
@@ -433,14 +452,9 @@ const claimFreeDeliverySlotInSession = async (order, session) => {
     );
   } catch (dupErr) {
     if (dupErr.code === 11000) {
-      logger.warn(
-        { orderId: order.orderId },
-        "⚠️ Duplicate free delivery claim prevented (userId unique violation) — ₦0 delivery honored"
-      );
-      // Non-fatal: customer paid ₦0 already; honor it
-    } else {
-      throw dupErr; // Unexpected error — re-throw for outer catch
+      throw new Error("You have already used this free delivery promo");
     }
+    throw dupErr;
   }
 
   // Mark order as claimed within the same transaction
@@ -449,6 +463,7 @@ const claimFreeDeliverySlotInSession = async (order, session) => {
     { "freeDeliveryPromo.claimed": true },
     { session }
   );
+  order.freeDeliveryPromo.claimed = true;
 };
 
 /**
@@ -462,7 +477,7 @@ const claimFreeDeliverySlotInSession = async (order, session) => {
  *
  * Returns { applicable: false } on any error — never blocks order creation.
  */
-const checkVendorDeliveryPromo = async (vendorId, originalDeliveryFee, session) => {
+const checkVendorDeliveryPromo = async (vendorId, userId, originalDeliveryFee, session) => {
   try {
     // Gate: only apply if there is a fee to waive
     if (!originalDeliveryFee || originalDeliveryFee <= 0) {
@@ -482,6 +497,31 @@ const checkVendorDeliveryPromo = async (vendorId, originalDeliveryFee, session) 
 
     if (!promo) {
       return { applicable: false, reason: "no_active_promo" };
+    }
+
+    const existingClaim = await VendorDeliveryClaim.findOne({
+      promoId: promo._id,
+      userId,
+    })
+      .session(session)
+      .lean();
+
+    if (existingClaim) {
+      return { applicable: false, reason: "user_already_claimed_vendor_promo" };
+    }
+
+    const existingPromoOrder = await Order.findOne({
+      userId,
+      "vendorDeliveryPromo.promoId": promo._id,
+      "vendorDeliveryPromo.applied": true,
+      paymentStatus: { $nin: ["failed", "refunded"] },
+      orderStatus: { $ne: "cancelled" },
+    })
+      .session(session)
+      .lean();
+
+    if (existingPromoOrder) {
+      return { applicable: false, reason: "user_has_pending_vendor_promo_order" };
     }
 
     // Check order cap if set
@@ -521,20 +561,54 @@ const checkVendorDeliveryPromo = async (vendorId, originalDeliveryFee, session) 
  */
 const recordVendorPromoUsage = async (order, session) => {
   if (!order.vendorDeliveryPromo?.applied) return;
+  if (order.vendorDeliveryPromo?.claimed) return;
 
-  const { promoId, vendorId } = order.vendorDeliveryPromo;
+  const { promoId, vendorId, originalDeliveryFee } = order.vendorDeliveryPromo;
   if (!promoId) return;
 
-  const updatedPromo = await VendorDeliveryPromo.findByIdAndUpdate(
-    promoId,
+  const updatedPromo = await VendorDeliveryPromo.findOneAndUpdate(
+    {
+      _id: promoId,
+      isActive: true,
+      $or: [
+        { maxOrders: null },
+        { $expr: { $lt: ["$usedOrders", "$maxOrders"] } },
+      ],
+    },
     { $inc: { usedOrders: 1 } },
     { new: true, session }
   );
 
   if (!updatedPromo) {
-    logger.warn({ promoId, orderId: order.orderId }, "⚠️ Vendor promo not found during usage recording");
-    return;
+    throw new Error("Vendor delivery promo is no longer available");
   }
+
+  try {
+    await VendorDeliveryClaim.create(
+      [
+        {
+          promoId,
+          vendorId,
+          userId: order.userId,
+          orderId: order._id,
+          deliveryFeeWaived: originalDeliveryFee || 0,
+        },
+      ],
+      { session }
+    );
+  } catch (claimErr) {
+    if (claimErr.code === 11000) {
+      throw new Error("You have already used this restaurant free delivery promo");
+    }
+    throw claimErr;
+  }
+
+  await Order.findByIdAndUpdate(
+    order._id,
+    { "vendorDeliveryPromo.claimed": true },
+    { session }
+  );
+  order.vendorDeliveryPromo.claimed = true;
 
   logger.info(
     { promoId, orderId: order.orderId, usedOrders: updatedPromo.usedOrders },
@@ -557,6 +631,66 @@ const recordVendorPromoUsage = async (order, session) => {
     logger.info(
       { promoId, vendorId },
       "🏁 Vendor promo exhausted and auto-deactivated"
+    );
+  }
+};
+
+export const releasePromoReservationsForOrder = async (orderIdOrDoc) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const order = orderIdOrDoc?._id
+      ? await Order.findById(orderIdOrDoc._id).session(session)
+      : await Order.findById(orderIdOrDoc).session(session);
+
+    if (!order || order.paymentStatus === "paid") {
+      await session.commitTransaction();
+      session.endSession();
+      return;
+    }
+
+    if (order.freeDeliveryPromo?.eligible && order.freeDeliveryPromo?.claimed) {
+      const claimDelete = await FreeDeliveryClaim.deleteOne({
+        orderId: order._id,
+      }).session(session);
+
+      if (claimDelete.deletedCount > 0 && order.freeDeliveryPromo.promoId) {
+        await FreeDeliveryPromo.updateOne(
+          { _id: order.freeDeliveryPromo.promoId, usedSlots: { $gt: 0 } },
+          { $inc: { usedSlots: -1 } },
+          { session }
+        );
+      }
+
+      order.freeDeliveryPromo.claimed = false;
+    }
+
+    if (order.vendorDeliveryPromo?.applied && order.vendorDeliveryPromo?.claimed) {
+      const claimDelete = await VendorDeliveryClaim.deleteOne({
+        orderId: order._id,
+      }).session(session);
+
+      if (claimDelete.deletedCount > 0 && order.vendorDeliveryPromo.promoId) {
+        await VendorDeliveryPromo.updateOne(
+          { _id: order.vendorDeliveryPromo.promoId, usedOrders: { $gt: 0 } },
+          { $inc: { usedOrders: -1 } },
+          { session }
+        );
+      }
+
+      order.vendorDeliveryPromo.claimed = false;
+    }
+
+    await order.save({ session });
+    await session.commitTransaction();
+    session.endSession();
+  } catch (error) {
+    if (session.inTransaction()) await session.abortTransaction();
+    session.endSession();
+    logger.error(
+      { orderId: orderIdOrDoc?._id || orderIdOrDoc, error: error.message },
+      "Failed to release promo reservation"
     );
   }
 };
@@ -941,6 +1075,7 @@ export const createOrderV2 = async ({
         if (singleVendorId) {
           vendorPromoResult = await checkVendorDeliveryPromo(
             singleVendorId,
+            userId,
             originalTotalDeliveryFee,
             session
           );
@@ -1145,6 +1280,7 @@ export const createOrderV2 = async ({
                         vendorDeliveryPromo: vendorPromoResult.applicable
                             ? {
                                 applied:             true,
+                                claimed:             false,
                                 promoId:             vendorPromoResult.promoId,
                                 vendorId:            singleVendorId,
                                 originalDeliveryFee: originalTotalDeliveryFee,
@@ -1187,6 +1323,14 @@ export const createOrderV2 = async ({
             if (order.vendorDeliveryPromo?.applied) {
                 await recordVendorPromoUsage(order, session);
             }
+        }
+
+        if (!useWallet && order.freeDeliveryPromo?.eligible) {
+            await claimFreeDeliverySlotInSession(order, session);
+        }
+
+        if (!useWallet && order.vendorDeliveryPromo?.applied) {
+            await recordVendorPromoUsage(order, session);
         }
 
         await session.commitTransaction();

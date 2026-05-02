@@ -226,6 +226,7 @@ const orderSchema = new mongoose.Schema(
     // 🏪 Vendor-Sponsored Free Delivery Promo
     vendorDeliveryPromo: {
       applied:             { type: Boolean, default: false },
+      claimed:             { type: Boolean, default: false },
       promoId:             { type: mongoose.Schema.Types.ObjectId, ref: "VendorDeliveryPromo" },
       vendorId:            { type: mongoose.Schema.Types.ObjectId, ref: "Vendor" },
       originalDeliveryFee: { type: Number, default: 0 },

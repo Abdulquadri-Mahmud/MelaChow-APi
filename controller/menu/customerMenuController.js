@@ -6,6 +6,7 @@ import VendorMenuSection from '../../model/menu/VendorMenuSection.js';
 import Category from '../../model/category.model.js';
 import Vendor           from "../../model/vendor/vendor.model.js";
 import City from "../../model/location/City.js";
+import VendorDeliveryPromo from "../../model/promo/VendorDeliveryPromo.js";
 import mongoose from 'mongoose';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -107,12 +108,23 @@ async function buildFullItem(item, { vendorView = false } = {}) {
  * 2. City.platformDeliveryFee (city-level default)
  * Returns fee in NAIRA.
  */
+async function getActiveVendorDeliveryPromo(vendorId) {
+    const now = new Date();
+    return VendorDeliveryPromo.findOne({
+        vendorId,
+        isActive: true,
+        startsAt: { $lte: now },
+        endsAt: { $gte: now },
+        $or: [
+            { maxOrders: null },
+            { $expr: { $lt: ["$usedOrders", "$maxOrders"] } },
+        ],
+    }).select("_id maxOrders usedOrders startsAt endsAt").lean();
+}
+
 async function resolveStorefrontDeliveryFee(vendor) {
-    // Vendor-sponsored promo makes delivery free for ALL customers.
-    // Trust the denormalized flag — no extra DB query needed.
-    if (vendor.hasActiveDeliveryPromo === true) {
-        return 0;
-    }
+    const activePromo = await getActiveVendorDeliveryPromo(vendor._id);
+    if (activePromo) return 0;
 
     if (
         vendor.platformDeliveryFeeOverride != null &&
@@ -130,6 +142,25 @@ async function resolveStorefrontDeliveryFee(vendor) {
     } catch {
         return 0;
     }
+}
+
+async function buildVendorDeliveryPromoContext(vendor) {
+    const activePromo = await getActiveVendorDeliveryPromo(vendor._id);
+    return {
+        hasActiveDeliveryPromo: !!activePromo,
+        activeDeliveryPromo: activePromo
+            ? {
+                promoId: activePromo._id,
+                maxOrders: activePromo.maxOrders,
+                usedOrders: activePromo.usedOrders,
+                remainingOrders: activePromo.maxOrders == null
+                    ? null
+                    : Math.max(0, activePromo.maxOrders - activePromo.usedOrders),
+                startsAt: activePromo.startsAt,
+                endsAt: activePromo.endsAt,
+            }
+            : null,
+    };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -153,6 +184,7 @@ export const getFullVendorMenu = async (req, res) => {
 
         // Resolve the fee the customer will actually be charged
         const resolvedDeliveryFee = await resolveStorefrontDeliveryFee(vendor);
+        const vendorPromoContext = await buildVendorDeliveryPromoContext(vendor);
 
         const vendorData = {
             _id:                   vendor._id,
@@ -170,7 +202,7 @@ export const getFullVendorMenu = async (req, res) => {
             rating:                vendor.rating ?? null,
             ratingCount:           vendor.ratingCount ?? 0,
             storeSlug:             vendor.storeSlug,
-            hasActiveDeliveryPromo: vendor.hasActiveDeliveryPromo === true,
+            ...vendorPromoContext,
         };
 
         // Step 2 — Fetch Combos, Sections, and Items in parallel
@@ -377,6 +409,7 @@ export const getMenuItemDetails = async (req, res) => {
                 .lean();
             if (vendor) {
                 const deliveryFee = await resolveStorefrontDeliveryFee(vendor);
+                const vendorPromoContext = await buildVendorDeliveryPromoContext(vendor);
                 vendorJson = {
                     _id: vendor._id,
                     storeName: vendor.storeName,
@@ -390,7 +423,7 @@ export const getMenuItemDetails = async (req, res) => {
                     isOpen: vendor.isOpen ?? true,
                     estimatedDeliveryTime: vendor.estimatedDeliveryTime ?? 30,
                     deliveryFee,
-                    hasActiveDeliveryPromo: vendor.hasActiveDeliveryPromo === true,
+                    ...vendorPromoContext,
                 };
             }
         }
@@ -429,6 +462,7 @@ export const getComboDetails = async (req, res) => {
         let deliveryFee = 0;
         if (vendor) {
             deliveryFee = await resolveStorefrontDeliveryFee(vendor);
+            const vendorPromoContext = await buildVendorDeliveryPromoContext(vendor);
             vendorJson = {
                 _id: vendor._id,
                 storeName: vendor.storeName,
@@ -442,7 +476,7 @@ export const getComboDetails = async (req, res) => {
                 isOpen: vendor.isOpen ?? true,
                 estimatedDeliveryTime: vendor.estimatedDeliveryTime ?? 30,
                 deliveryFee,
-                hasActiveDeliveryPromo: vendor.hasActiveDeliveryPromo === true,
+                ...vendorPromoContext,
             };
         }
 
@@ -613,6 +647,9 @@ export const getPublicFoodDetail = async (req, res) => {
         const deliveryFee = vendor
             ? await resolveStorefrontDeliveryFee(vendor)
             : 0;
+        const vendorPromoContext = vendor
+            ? await buildVendorDeliveryPromoContext(vendor)
+            : { hasActiveDeliveryPromo: false, activeDeliveryPromo: null };
 
         let resultData;
 
@@ -656,7 +693,7 @@ export const getPublicFoodDetail = async (req, res) => {
                           storeSlug:             vendor.storeSlug,
                           isOpen:                vendor.isOpen ?? true,
                           estimatedDeliveryTime: vendor.estimatedDeliveryTime ?? 30,
-                          hasActiveDeliveryPromo: vendor.hasActiveDeliveryPromo === true,
+                          ...vendorPromoContext,
                       }
                     : null,
             },

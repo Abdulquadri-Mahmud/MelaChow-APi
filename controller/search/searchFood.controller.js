@@ -24,6 +24,42 @@ import MenuItemPortion from "../../model/menu/MenuItemPortion.js";
 import Category from "../../model/category.model.js";
 import vendorModel from "../../model/vendor/vendor.model.js";
 import City from "../../model/location/City.js";
+import VendorDeliveryPromo from "../../model/promo/VendorDeliveryPromo.js";
+
+const getActiveVendorPromoMap = async (vendorIds) => {
+  if (!vendorIds.length) return new Map();
+
+  const now = new Date();
+  const promos = await VendorDeliveryPromo.find({
+    vendorId: { $in: vendorIds },
+    isActive: true,
+    startsAt: { $lte: now },
+    endsAt: { $gte: now },
+    $or: [
+      { maxOrders: null },
+      { $expr: { $lt: ["$usedOrders", "$maxOrders"] } },
+    ],
+  })
+    .select("_id vendorId maxOrders usedOrders startsAt endsAt")
+    .lean();
+
+  return new Map(promos.map((promo) => [String(promo.vendorId), promo]));
+};
+
+const shapeActiveDeliveryPromo = (promo) => {
+  if (!promo) return null;
+
+  return {
+    promoId: promo._id,
+    maxOrders: promo.maxOrders,
+    usedOrders: promo.usedOrders,
+    remainingOrders: promo.maxOrders == null
+      ? null
+      : Math.max(0, promo.maxOrders - promo.usedOrders),
+    startsAt: promo.startsAt,
+    endsAt: promo.endsAt,
+  };
+};
 
 /**
  * Resolve vendorIds in the user's city.
@@ -137,12 +173,20 @@ const bulkFetchItemSupport = async (items) => {
     cityFeeMap[c.name.toLowerCase()] = c.platformDeliveryFee || 0;
   });
 
+  const activePromoMap = await getActiveVendorPromoMap(vendors.map((v) => v._id));
+
     // Build vendorMap with resolved fees
     const vendorMap = {};
     vendors.forEach((v) => {
-      // Vendor-sponsored promo overrides all fee resolution
-      if (v.hasActiveDeliveryPromo === true) {
-        vendorMap[v._id.toString()] = { ...v, resolvedDeliveryFee: 0 };
+      const activePromo = activePromoMap.get(String(v._id));
+
+      if (activePromo) {
+        vendorMap[v._id.toString()] = {
+          ...v,
+          resolvedDeliveryFee: 0,
+          hasActiveDeliveryPromo: true,
+          activeDeliveryPromo: shapeActiveDeliveryPromo(activePromo),
+        };
         return;
       }
 
@@ -154,7 +198,12 @@ const bulkFetchItemSupport = async (items) => {
         resolvedFee = cityFeeMap[cityName] || 0;
       }
 
-      vendorMap[v._id.toString()] = { ...v, resolvedDeliveryFee: resolvedFee };
+      vendorMap[v._id.toString()] = {
+        ...v,
+        resolvedDeliveryFee: resolvedFee,
+        hasActiveDeliveryPromo: false,
+        activeDeliveryPromo: null,
+      };
     });
 
   // Build priceMap (cheapest) + portionsMap (all)
@@ -228,6 +277,8 @@ const shapeSearchResult = (item, vendorMap, priceMap, categoryMap) => {
       state: vendor.address?.state,
       rating: vendor.rating,
       openingHours: vendor.openingHours,
+      hasActiveDeliveryPromo: vendor.hasActiveDeliveryPromo === true,
+      activeDeliveryPromo: vendor.activeDeliveryPromo || null,
     },
   };
 };
