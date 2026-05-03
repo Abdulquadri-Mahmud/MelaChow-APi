@@ -6,6 +6,70 @@ import Refund from "../../../model/refund.model.js";
 import { getPlatformConfig } from "../../../services/platformConfig.service.js";
 import mongoose from "mongoose";
 
+const buildTransactionDateMatch = (startDate, endDate) => {
+    const match = {};
+    if (startDate || endDate) {
+        match["transactions.date"] = {};
+        if (startDate) match["transactions.date"].$gte = new Date(startDate);
+        if (endDate) match["transactions.date"].$lte = new Date(endDate);
+    }
+    return match;
+};
+
+const getAdminWalletBalance = async () => {
+    const wallet = await Wallet.findOne({ ownerModel: "Admin" }).select("balance").lean();
+    return wallet?.balance || 0;
+};
+
+const getAdminWalletTransactionStats = async ({ startDate, endDate } = {}) => {
+    const stats = await Wallet.aggregate([
+        { $match: { ownerModel: "Admin" } },
+        { $unwind: "$transactions" },
+        { $match: buildTransactionDateMatch(startDate, endDate) },
+        {
+            $group: {
+                _id: null,
+                totalCredits: {
+                    $sum: { $cond: [{ $eq: ["$transactions.type", "credit"] }, "$transactions.amount", 0] }
+                },
+                totalDebits: {
+                    $sum: { $cond: [{ $eq: ["$transactions.type", "debit"] }, "$transactions.amount", 0] }
+                },
+                totalPlatformDeliveryRevenue: {
+                    $sum: {
+                        $cond: [
+                            { $eq: ["$transactions.transactionType", "delivery_spread"] },
+                            { $ifNull: ["$transactions.reportingAmount", 0] },
+                            0
+                        ]
+                    }
+                },
+                totalServiceFeeRevenue: {
+                    $sum: {
+                        $cond: [
+                            {
+                                $and: [
+                                    { $eq: ["$transactions.transactionType", "service_fee"] },
+                                    { $eq: ["$transactions.type", "credit"] }
+                                ]
+                            },
+                            "$transactions.amount",
+                            0
+                        ]
+                    }
+                }
+            }
+        }
+    ]);
+
+    return stats[0] || {
+        totalCredits: 0,
+        totalDebits: 0,
+        totalPlatformDeliveryRevenue: 0,
+        totalServiceFeeRevenue: 0,
+    };
+};
+
 /**
  * GET REVENUE SUMMARY
  * Route: GET /api/admin/finance/summary
@@ -26,8 +90,7 @@ export const getRevenueSummary = async (req, res) => {
             if (endDate) parentOrderDateFilter["parentOrder.createdAt"].$lte = new Date(endDate);
         }
 
-        // 1. Commission Earned (from paid VendorOrders)
-        const commissionStats = await VendorOrder.aggregate([
+        const commissionPromise = VendorOrder.aggregate([
             {
                 $lookup: {
                     from: "orders",
@@ -51,27 +114,7 @@ export const getRevenueSummary = async (req, res) => {
             }
         ]);
 
-        // 2. Admin Wallet Stats
-        const adminWallet = await Wallet.findOne({ ownerModel: "Admin" }).lean();
-
-        // Compute debits/credits from transaction array (filtering by date if provided)
-        let totalCredits = 0;
-        let totalDebits = 0;
-
-        if (adminWallet && adminWallet.transactions) {
-            adminWallet.transactions.forEach(tx => {
-                const txDate = new Date(tx.date);
-                const inRange = (!startDate || txDate >= new Date(startDate)) &&
-                    (!endDate || txDate <= new Date(endDate));
-                if (inRange) {
-                    if (tx.type === "credit") totalCredits += tx.amount;
-                    else if (tx.type === "debit") totalDebits += tx.amount;
-                }
-            });
-        }
-
-        // 3. Order Revenue & Delivery Fees
-        const orderStats = await Order.aggregate([
+        const orderStatsPromise = Order.aggregate([
             { $match: { paymentStatus: "paid", ...dateFilter } },
             {
                 $group: {
@@ -83,32 +126,7 @@ export const getRevenueSummary = async (req, res) => {
             }
         ]);
 
-        // 4. Platform Delivery Spread Revenue
-        let totalPlatformDeliveryRevenue = 0;
-        let totalServiceFeeRevenue = 0;
-
-        if (adminWallet && adminWallet.transactions) {
-            adminWallet.transactions.forEach(tx => {
-                const txDate = new Date(tx.date);
-                const inRange = (!startDate || txDate >= new Date(startDate)) &&
-                    (!endDate || txDate <= new Date(endDate));
-                if (!inRange) return;
-
-                // Spread: use reportingAmount field (eliminates regex fragility)
-                if (tx.transactionType === 'delivery_spread') {
-                    totalPlatformDeliveryRevenue += Number(tx.reportingAmount || 0);
-                }
-
-                // Service fee: real credit transactions — use amount directly
-                if (tx.transactionType === 'service_fee' && tx.type === 'credit') {
-                    totalServiceFeeRevenue += Number(tx.amount || 0);
-                }
-            });
-        }
-        const platformDeliveryStats = [{ totalPlatformDeliveryRevenue }];
-
-        // 5. Active Escrow Holdings
-        const activeEscrowStats = await VendorOrder.aggregate([
+        const activeEscrowPromise = VendorOrder.aggregate([
             {
                 $lookup: {
                     from: "orders",
@@ -133,18 +151,27 @@ export const getRevenueSummary = async (req, res) => {
             }
         ]);
 
-        const commEarned = commissionStats[0]?.totalCommissionEarned || 0;
-        const delivRevenue = totalPlatformDeliveryRevenue;
-        const totalEscrowHeld = activeEscrowStats[0]?.totalEscrowHeld || 0;
-        const currentPlatformBalance = adminWallet?.balance || 0;
-        
-        // availableBalance = platform balance minus funds committed to vendor escrow.
-        // Delivery fees and spread are platform revenue — not committed to anyone.
-        // This gives admin a clear view of what they can actually withdraw or spend.
-        const availableBalance = Math.max(0, currentPlatformBalance - totalEscrowHeld);
-        const totalDeliverySpreadEarned = totalPlatformDeliveryRevenue; // alias for clarity in response
+        const [
+            commissionStats,
+            orderStats,
+            activeEscrowStats,
+            currentPlatformBalance,
+            walletTxnStats,
+        ] = await Promise.all([
+            commissionPromise,
+            orderStatsPromise,
+            activeEscrowPromise,
+            getAdminWalletBalance(),
+            getAdminWalletTransactionStats({ startDate, endDate }),
+        ]);
 
-        const deliveryFeeExample = 1000; // Reference for reporting
+        const commEarned = commissionStats[0]?.totalCommissionEarned || 0;
+        const delivRevenue = walletTxnStats.totalPlatformDeliveryRevenue || 0;
+        const totalServiceFeeRevenue = walletTxnStats.totalServiceFeeRevenue || 0;
+        const totalEscrowHeld = activeEscrowStats[0]?.totalEscrowHeld || 0;
+        const availableBalance = Math.max(0, currentPlatformBalance - totalEscrowHeld);
+        const totalDeliverySpreadEarned = delivRevenue;
+        const deliveryFeeExample = 1000;
 
         res.status(200).json({
             success: true,
@@ -152,28 +179,24 @@ export const getRevenueSummary = async (req, res) => {
                 currentPlatformBalance,
                 totalEscrowHeld,
                 availableBalance,
-                // Revenue breakdown — admin sees exactly where money comes from
                 totalCommissionEarned: commEarned,
                 totalDeliverySpreadEarned,
                 totalServiceFeeRevenue,
                 combinedPlatformRevenue: commEarned + delivRevenue + totalServiceFeeRevenue,
-                // Order volume stats
                 totalOrderRevenue: orderStats[0]?.totalOrderRevenue || 0,
                 totalDeliveryFeesCollected: orderStats[0]?.totalDeliveryFeesCollected || 0,
                 totalServiceFeesCollected: orderStats[0]?.totalServiceFeesCollected || 0,
-                // Wallet transaction totals (excludes zero-amount spread entries)
-                totalCredits,
-                totalDebits,
+                totalCredits: walletTxnStats.totalCredits || 0,
+                totalDebits: walletTxnStats.totalDebits || 0,
                 period: { startDate, endDate },
-                // Explanation for admin dashboard tooltip
                 revenueModel: {
                     commissionRate: platformConfig.commissionEnabled
                         ? `${platformConfig.commissionRate}% (enabled)`
                         : '0% (disabled)',
-                    spreadPerOrder: `₦${deliveryFeeExample - platformConfig.riderFixedPayout} (approx — varies by city fee)`,
-                    riderPayout: `₦${platformConfig.riderFixedPayout} fixed per platform delivery`,
+                    spreadPerOrder: `?${deliveryFeeExample - platformConfig.riderFixedPayout} (approx - varies by city fee)`,
+                    riderPayout: `?${platformConfig.riderFixedPayout} fixed per platform delivery`,
                     serviceFee: platformConfig.serviceFeeEnabled
-                        ? `${platformConfig.serviceFeeType === 'fixed' ? '₦' + platformConfig.serviceFeeValue : platformConfig.serviceFeeValue + '%'} (max ₦${platformConfig.serviceFeeCap})`
+                        ? `${platformConfig.serviceFeeType === 'fixed' ? '?' + platformConfig.serviceFeeValue : platformConfig.serviceFeeValue + '%'} (max ?${platformConfig.serviceFeeCap})`
                         : 'Disabled',
                 }
             }
@@ -424,6 +447,7 @@ export const getVendorBreakdown = async (req, res) => {
     try {
         const { startDate, endDate, page = 1, limit = 20 } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
+        const platformConfig = await getPlatformConfig();
 
         const dateFilter = {};
         const parentOrderDateFilter = {};

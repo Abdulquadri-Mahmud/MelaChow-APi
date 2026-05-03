@@ -27,7 +27,7 @@ import VendorDeliveryClaim from "../../model/promo/VendorDeliveryClaim.js";
 // Max number of claims allowed from the same IP address.
 // Set to 3 to allow legitimate students sharing campus/hostel WiFi
 // while still soft-blocking obvious multi-account abuse.
-const PROMO_MAX_CLAIMS_PER_IP = 3;
+const PROMO_MAX_CLAIMS_PER_IP = 5;
 
 /**
  * ========================================
@@ -338,25 +338,43 @@ const checkFreeDeliveryEligibility = async (
       return { eligible: false, reason: "no_active_promo" };
     }
 
-    // Gate 3: userId must not have a prior claim
+    // Gate 3: userId must not have a prior successful claim.
+    // We check for any existing claim record for this user.
     const userClaim = await FreeDeliveryClaim.findOne({ userId }).session(session).lean();
     if (userClaim) {
-      return { eligible: false, reason: "user_already_claimed" };
+      // If a claim exists, check the status of the associated order.
+      const claimedOrder = userClaim.orderId
+        ? await Order.findById(userClaim.orderId).select("paymentStatus orderStatus").session(session).lean()
+        : null;
+
+      // If the order was paid, or is still pending (not failed/cancelled),
+      // the user cannot claim another slot. This prevents "promo stealing"
+      // by opening multiple checkout tabs.
+      if (claimedOrder && !["failed", "refunded"].includes(claimedOrder.paymentStatus) && claimedOrder.orderStatus !== "cancelled") {
+        return { eligible: false, reason: "user_already_claimed" };
+      }
+
+      // If the order was never created (orphaned claim) or reached a terminal failure state,
+      // we clean up the stale claim to allow the user to try again on a new order.
+      await FreeDeliveryClaim.deleteOne({ _id: userClaim._id }).session(session);
+      if (userClaim.promoId) {
+        await FreeDeliveryPromo.updateOne(
+          { _id: userClaim.promoId, usedSlots: { $gt: 0 } },
+          { $inc: { usedSlots: -1 } },
+          { session }
+        );
+      }
+      logger.info(
+        { userId, staleOrderId: userClaim.orderId, status: claimedOrder?.paymentStatus },
+        "Reclaimed free delivery slot from failed/cancelled prior attempt"
+      );
     }
 
-    // Gate 4: User must not have any previous paid order or a pending
-    // platform promo order. This prevents creating multiple unpaid orders
-    // that all carry free delivery before payment confirmation.
+    // Gate 4: User must not have any previous paid order.
+    // Pending orders are ignored because Paystack payment may be abandoned or retried.
     const previousPaidOrder = await Order.findOne({
       userId,
-      $or: [
-        { paymentStatus: "paid" },
-        {
-          "freeDeliveryPromo.eligible": true,
-          paymentStatus: { $nin: ["failed", "refunded"] },
-          orderStatus: { $ne: "cancelled" },
-        },
-      ],
+      paymentStatus: "paid",
     })
       .session(session)
       .lean();
@@ -507,7 +525,29 @@ const checkVendorDeliveryPromo = async (vendorId, userId, originalDeliveryFee, s
       .lean();
 
     if (existingClaim) {
-      return { applicable: false, reason: "user_already_claimed_vendor_promo" };
+      const claimedOrder = existingClaim.orderId
+        ? await Order.findById(existingClaim.orderId).select("paymentStatus").session(session).lean()
+        : null;
+
+      // If the order was paid, or is still pending (not failed/cancelled),
+      // the user cannot claim another slot for this vendor promo.
+      if (claimedOrder && !["failed", "refunded"].includes(claimedOrder.paymentStatus) && claimedOrder.orderStatus !== "cancelled") {
+        return { applicable: false, reason: "user_already_claimed_vendor_promo" };
+      }
+
+      // If orphaned or failed, reclaim the slot
+      await VendorDeliveryClaim.deleteOne({ _id: existingClaim._id }).session(session);
+      if (existingClaim.promoId) {
+        await VendorDeliveryPromo.updateOne(
+          { _id: existingClaim.promoId, usedOrders: { $gt: 0 } },
+          { $inc: { usedOrders: -1 } },
+          { session }
+        );
+      }
+      logger.info(
+        { userId, vendorId, staleOrderId: existingClaim.orderId },
+        "Reclaimed vendor delivery slot from failed/cancelled prior attempt"
+      );
     }
 
     const existingPromoOrder = await Order.findOne({
@@ -520,8 +560,8 @@ const checkVendorDeliveryPromo = async (vendorId, userId, originalDeliveryFee, s
       .session(session)
       .lean();
 
-    if (existingPromoOrder) {
-      return { applicable: false, reason: "user_has_pending_vendor_promo_order" };
+    if (existingPromoOrder?.paymentStatus === "paid") {
+      return { applicable: false, reason: "user_already_used_vendor_promo" };
     }
 
     // Check order cap if set
@@ -1276,7 +1316,10 @@ export const createOrderV2 = async ({
                                 hashedIp:            promoEligibilityResult.hashedIp,
                                 originalDeliveryFee: originalTotalDeliveryFee,
                               }
-                            : { eligible: false },
+                            : { 
+                                eligible: false,
+                                reason: promoEligibilityResult.reason 
+                              },
                         vendorDeliveryPromo: vendorPromoResult.applicable
                             ? {
                                 applied:             true,
@@ -1285,7 +1328,10 @@ export const createOrderV2 = async ({
                                 vendorId:            singleVendorId,
                                 originalDeliveryFee: originalTotalDeliveryFee,
                               }
-                            : { applied: false },
+                            : { 
+                                applied: false,
+                                reason: vendorPromoResult.reason
+                              },
                     }
                 ],
                 { session }
@@ -1323,14 +1369,6 @@ export const createOrderV2 = async ({
             if (order.vendorDeliveryPromo?.applied) {
                 await recordVendorPromoUsage(order, session);
             }
-        }
-
-        if (!useWallet && order.freeDeliveryPromo?.eligible) {
-            await claimFreeDeliverySlotInSession(order, session);
-        }
-
-        if (!useWallet && order.vendorDeliveryPromo?.applied) {
-            await recordVendorPromoUsage(order, session);
         }
 
         await session.commitTransaction();
