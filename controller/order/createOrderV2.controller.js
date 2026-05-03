@@ -28,6 +28,7 @@ import VendorDeliveryClaim from "../../model/promo/VendorDeliveryClaim.js";
 // Set to 3 to allow legitimate students sharing campus/hostel WiFi
 // while still soft-blocking obvious multi-account abuse.
 const PROMO_MAX_CLAIMS_PER_IP = 5;
+const PROMO_RESERVATION_TTL_MS = 45 * 60 * 1000;
 
 /**
  * ========================================
@@ -283,8 +284,8 @@ const extractIp = (req) => {
 /**
  * Soft eligibility check for the first-order free delivery promo.
  *
- * Does NOT claim a slot. Slot is claimed atomically inside
- * claimFreeDeliverySlotInSession at payment verification time.
+ * Does NOT claim a slot. Slot is reserved atomically inside
+ * claimFreeDeliverySlotInSession during order creation.
  *
  * Returns { eligible: false } on any error — never blocks order creation.
  *
@@ -338,24 +339,43 @@ const checkFreeDeliveryEligibility = async (
       return { eligible: false, reason: "no_active_promo" };
     }
 
+    const staleBefore = new Date(Date.now() - PROMO_RESERVATION_TTL_MS);
+
     // Gate 3: userId must not have a prior successful claim.
     // We check for any existing claim record for this user.
     const userClaim = await FreeDeliveryClaim.findOne({ userId }).session(session).lean();
     if (userClaim) {
       // If a claim exists, check the status of the associated order.
       const claimedOrder = userClaim.orderId
-        ? await Order.findById(userClaim.orderId).select("paymentStatus orderStatus").session(session).lean()
+        ? await Order.findById(userClaim.orderId).select("paymentStatus orderStatus createdAt").session(session).lean()
         : null;
+      const isStalePendingReservation =
+        claimedOrder &&
+        claimedOrder.paymentStatus === "pending" &&
+        claimedOrder.createdAt &&
+        claimedOrder.createdAt < staleBefore;
 
-      // If the order was paid, or is still pending (not failed/cancelled),
-      // the user cannot claim another slot. This prevents "promo stealing"
-      // by opening multiple checkout tabs.
-      if (claimedOrder && !["failed", "refunded"].includes(claimedOrder.paymentStatus) && claimedOrder.orderStatus !== "cancelled") {
+      if (
+        claimedOrder &&
+        claimedOrder.paymentStatus === "paid" &&
+        claimedOrder.orderStatus !== "cancelled"
+      ) {
         return { eligible: false, reason: "user_already_claimed" };
       }
 
-      // If the order was never created (orphaned claim) or reached a terminal failure state,
-      // we clean up the stale claim to allow the user to try again on a new order.
+      // A fresh pending reservation means the user already has a free-delivery
+      // checkout in progress. This prevents opening many free Paystack attempts.
+      if (
+        claimedOrder &&
+        claimedOrder.paymentStatus === "pending" &&
+        claimedOrder.orderStatus !== "cancelled" &&
+        !isStalePendingReservation
+      ) {
+        return { eligible: false, reason: "user_already_claimed" };
+      }
+
+      // If the order was never created, failed/cancelled, or is an old unpaid
+      // Paystack attempt, release the reserved slot and let the user try again.
       await FreeDeliveryClaim.deleteOne({ _id: userClaim._id }).session(session);
       if (userClaim.promoId) {
         await FreeDeliveryPromo.updateOne(
@@ -365,7 +385,12 @@ const checkFreeDeliveryEligibility = async (
         );
       }
       logger.info(
-        { userId, staleOrderId: userClaim.orderId, status: claimedOrder?.paymentStatus },
+        {
+          userId,
+          staleOrderId: userClaim.orderId,
+          status: claimedOrder?.paymentStatus,
+          stalePending: !!isStalePendingReservation,
+        },
         "Reclaimed free delivery slot from failed/cancelled prior attempt"
       );
     }
@@ -1156,21 +1181,11 @@ export const createOrderV2 = async ({
 
         // ── SECTION 6: SERVICE FEE ─────────────────────────────────────────
         // Fetch config once per order (single indexed document lookup).
-        // Service fee is SKIPPED if any delivery promo is active.
-        // Business rule: don't layer a fee on top of a promo — bad UX.
         const platformConfig = await getPlatformConfig();
-
-        // Service fee is suppressed ONLY for the platform first-order promo.
-        // Vendor-sponsored promos cover delivery only — the platform's operational
-        // service fee is still warranted regardless of who pays the rider.
-        // Real-world precedent: Glovo, Bolt Food charge service fee even on
-        // vendor-sponsored free delivery orders.
-        const serviceFeePromoActive = promoEligibilityResult.eligible; // platform promo only
-
+        // Free delivery promos cover delivery only; service fee still applies when enabled.
         const serviceFee = calculateServiceFee(
             platformConfig,
-            subtotal,       // fee is on food subtotal, not including delivery
-            serviceFeePromoActive
+            subtotal        // fee is on food subtotal, not including delivery
         );
 
         if (serviceFee > 0) {
@@ -1356,19 +1371,20 @@ export const createOrderV2 = async ({
 
         // 9️⃣ ATOMIC FULFILLMENT (For Wallet Payments)
         // If paid by wallet, we MUST fulfill (distribute funds) immediately within the same transaction
+        // Reserve promo slots before payment starts. If Paystack fails, the
+        // reservation is released; if the user abandons payment, stale cleanup
+        // releases it on the next checkout attempt.
+        if (order.freeDeliveryPromo?.eligible) {
+            await claimFreeDeliverySlotInSession(order, session);
+        }
+
+        if (order.vendorDeliveryPromo?.applied) {
+            await recordVendorPromoUsage(order, session);
+        }
+
         let vendorOrderMapping = {};
         if (useWallet) {
             vendorOrderMapping = await createVendorOrdersAndUpdateWallets(order, session);
-
-            // 🎁 Claim promo slot for wallet-paid orders (within same transaction)
-            if (order.freeDeliveryPromo?.eligible) {
-                await claimFreeDeliverySlotInSession(order, session);
-            }
-
-            // 🏪 Record vendor promo usage for wallet-paid orders
-            if (order.vendorDeliveryPromo?.applied) {
-                await recordVendorPromoUsage(order, session);
-            }
         }
 
         await session.commitTransaction();
@@ -1907,12 +1923,13 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
  * ========================================
  */
 export const createOrderController = async (req, res) => {
+    let order = null;
     try {
         const { items, vendorDeliveryFees, deliveryAddress, phone, discountCode, useWallet, idempotencyKey } = req.body;
         const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip || "unknown";
         const userId = req.userId; // From auth middleware
 
-        const order = await createOrderV2({
+        order = await createOrderV2({
             userId,
             items,
             vendorDeliveryFees,
@@ -1977,6 +1994,10 @@ export const createOrderController = async (req, res) => {
         });
 
     } catch (error) {
+        if (order?._id && order.paymentStatus !== "paid") {
+            await releasePromoReservationsForOrder(order._id);
+        }
+
         console.error("Create Order Controller Error:", error);
         return res.status(400).json({
             success: false,

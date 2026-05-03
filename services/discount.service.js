@@ -193,10 +193,9 @@ class DiscountService {
             finalSubtotal = Math.max(0, subtotal - discountAmount);
         }
 
-        // Service Fee logic
-        // Skip if delivery promo is active (scope === "DELIVERY_FEE")
+        // Free delivery discounts cover delivery only; service fee still applies when enabled.
         let serviceFee = 0;
-        if (platformConfig.serviceFeeEnabled && discount?.scope !== "DELIVERY_FEE") {
+        if (platformConfig.serviceFeeEnabled) {
             if (platformConfig.serviceFeeType === 'fixed') {
                 serviceFee = platformConfig.serviceFeeValue;
             } else {

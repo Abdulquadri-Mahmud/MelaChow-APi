@@ -29,19 +29,18 @@ export const getPlatformConfig = async () => {
 
 /**
  * Calculate the service fee for an order given the platform config.
+ * Free delivery promos only remove delivery fee. They do not remove service fee.
+ *
  * Returns 0 if:
  *   - service fee is disabled
- *   - any delivery promo is active for this order (promoActive = true)
  *   - subtotal is 0 or negative
  *
  * @param {Object} config - Result of getPlatformConfig()
  * @param {Number} subtotal - Order food subtotal in naira
- * @param {Boolean} promoActive - True if vendor OR platform promo applies
  * @returns {Number} Service fee in naira (2 decimal precision)
  */
-export const calculateServiceFee = (config, subtotal, promoActive) => {
+export const calculateServiceFee = (config, subtotal) => {
   if (!config.serviceFeeEnabled) return 0;
-  if (promoActive) return 0;  // Never charge service fee during promo
   if (!subtotal || subtotal <= 0) return 0;
 
   let fee = 0;
