@@ -21,6 +21,16 @@ const freeDeliveryClaimSchema = new mongoose.Schema(
       type:     String,
       required: true,
     },
+    hashedDeviceId: {
+      type: String,
+      default: null,
+      select: false,
+    },
+    phoneHash: {
+      type: String,
+      default: null,
+      select: false,
+    },
     // How much platform subsidised for this order (₦)
     deliveryFeeWaived: {
       type:     Number,
@@ -39,6 +49,20 @@ freeDeliveryClaimSchema.index({ userId: 1 });
 
 // IP threshold queries — find all claims for a given IP
 freeDeliveryClaimSchema.index({ hashedIp: 1 });
+freeDeliveryClaimSchema.index(
+  { promoId: 1, hashedDeviceId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { hashedDeviceId: { $type: "string" } },
+  }
+);
+freeDeliveryClaimSchema.index(
+  { promoId: 1, phoneHash: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { phoneHash: { $type: "string" } },
+  }
+);
 
 const FreeDeliveryClaim =
   mongoose.models.FreeDeliveryClaim ||

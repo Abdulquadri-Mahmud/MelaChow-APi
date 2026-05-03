@@ -7,7 +7,14 @@ import Category from '../../model/category.model.js';
 import Vendor           from "../../model/vendor/vendor.model.js";
 import City from "../../model/location/City.js";
 import VendorDeliveryPromo from "../../model/promo/VendorDeliveryPromo.js";
+import VendorDeliveryClaim from "../../model/promo/VendorDeliveryClaim.js";
+import { buildPromoIdentity } from "../../utils/promoIdentity.js";
 import mongoose from 'mongoose';
+
+const getRequestPromoIdentity = (req) => buildPromoIdentity({
+    deviceId: req.headers["x-melachow-device-id"] || req.query?.deviceId,
+    phone: req.query?.phone,
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPER: Resolve platform_category with parent populated
@@ -108,9 +115,9 @@ async function buildFullItem(item, { vendorView = false } = {}) {
  * 2. City.platformDeliveryFee (city-level default)
  * Returns fee in NAIRA.
  */
-async function getActiveVendorDeliveryPromo(vendorId) {
+async function getActiveVendorDeliveryPromo(vendorId, promoIdentity = {}) {
     const now = new Date();
-    return VendorDeliveryPromo.findOne({
+    const promo = await VendorDeliveryPromo.findOne({
         vendorId,
         isActive: true,
         startsAt: { $lte: now },
@@ -120,10 +127,23 @@ async function getActiveVendorDeliveryPromo(vendorId) {
             { $expr: { $lt: ["$usedOrders", "$maxOrders"] } },
         ],
     }).select("_id maxOrders usedOrders startsAt endsAt").lean();
+
+    const claimChecks = [];
+    if (promo?._id && promoIdentity.hashedDeviceId) {
+        claimChecks.push({ promoId: promo._id, hashedDeviceId: promoIdentity.hashedDeviceId });
+    }
+    if (promo?._id && promoIdentity.phoneHash) {
+        claimChecks.push({ promoId: promo._id, phoneHash: promoIdentity.phoneHash });
+    }
+    const usedPromo = claimChecks.length
+        ? await VendorDeliveryClaim.findOne({ $or: claimChecks }).select("_id").lean()
+        : null;
+
+    return usedPromo ? null : promo;
 }
 
 async function resolveStorefrontDeliveryFee(vendor) {
-    const activePromo = await getActiveVendorDeliveryPromo(vendor._id);
+    const activePromo = await getActiveVendorDeliveryPromo(vendor._id, vendor.promoIdentity);
     if (activePromo) return 0;
 
     if (
@@ -145,7 +165,7 @@ async function resolveStorefrontDeliveryFee(vendor) {
 }
 
 async function buildVendorDeliveryPromoContext(vendor) {
-    const activePromo = await getActiveVendorDeliveryPromo(vendor._id);
+    const activePromo = await getActiveVendorDeliveryPromo(vendor._id, vendor.promoIdentity);
     return {
         hasActiveDeliveryPromo: !!activePromo,
         activeDeliveryPromo: activePromo
@@ -181,6 +201,7 @@ export const getFullVendorMenu = async (req, res) => {
         if (!vendor) {
             return res.status(404).json({ success: false, message: "Vendor not found" });
         }
+        vendor.promoIdentity = getRequestPromoIdentity(req);
 
         // Resolve the fee the customer will actually be charged
         const resolvedDeliveryFee = await resolveStorefrontDeliveryFee(vendor);
@@ -408,6 +429,7 @@ export const getMenuItemDetails = async (req, res) => {
                 .select("storeName logo address openingHours rating ratingCount storeSlug isOpen estimatedDeliveryTime platformDeliveryFeeOverride hasActiveDeliveryPromo")
                 .lean();
             if (vendor) {
+                vendor.promoIdentity = getRequestPromoIdentity(req);
                 const deliveryFee = await resolveStorefrontDeliveryFee(vendor);
                 const vendorPromoContext = await buildVendorDeliveryPromoContext(vendor);
                 vendorJson = {
@@ -461,6 +483,7 @@ export const getComboDetails = async (req, res) => {
         let vendorJson = null;
         let deliveryFee = 0;
         if (vendor) {
+            vendor.promoIdentity = getRequestPromoIdentity(req);
             deliveryFee = await resolveStorefrontDeliveryFee(vendor);
             const vendorPromoContext = await buildVendorDeliveryPromoContext(vendor);
             vendorJson = {
@@ -642,6 +665,9 @@ export const getPublicFoodDetail = async (req, res) => {
                 "storeSlug platformDeliveryFeeOverride isOpen estimatedDeliveryTime"
             )
             .lean();
+        if (vendor) {
+            vendor.promoIdentity = getRequestPromoIdentity(req);
+        }
 
         // Resolve delivery fee using same logic as storefront
         const deliveryFee = vendor

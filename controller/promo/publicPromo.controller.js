@@ -2,6 +2,7 @@ import FreeDeliveryPromo from "../../model/promo/FreeDeliveryPromo.js";
 import FreeDeliveryClaim from "../../model/promo/FreeDeliveryClaim.js";
 import VendorDeliveryPromo from "../../model/promo/VendorDeliveryPromo.js";
 import logger from "../../config/logger.js";
+import { buildPromoIdentity } from "../../utils/promoIdentity.js";
 
 /**
  * GET /api/promos/active
@@ -40,8 +41,26 @@ export const getActivePromos = async (req, res) => {
     const totalSlots = Number(platformPromo?.totalSlots ?? 100);
     const usedSlots = Number(platformPromo?.usedSlots ?? 0);
     const slotsRemaining = Math.max(0, totalSlots - usedSlots);
-    const userClaim = req.userId
-      ? await FreeDeliveryClaim.findOne({ userId: req.userId })
+    const promoIdentity = buildPromoIdentity({
+      deviceId: req.headers["x-melachow-device-id"] || req.query?.deviceId,
+      phone: req.user?.phone,
+    });
+    const claimChecks = [];
+    if (req.userId) claimChecks.push({ userId: req.userId });
+    if (platformPromo?._id && promoIdentity.hashedDeviceId) {
+      claimChecks.push({
+        promoId: platformPromo._id,
+        hashedDeviceId: promoIdentity.hashedDeviceId,
+      });
+    }
+    if (platformPromo?._id && promoIdentity.phoneHash) {
+      claimChecks.push({
+        promoId: platformPromo._id,
+        phoneHash: promoIdentity.phoneHash,
+      });
+    }
+    const userClaim = claimChecks.length
+      ? await FreeDeliveryClaim.findOne({ $or: claimChecks })
           .select("_id")
           .lean()
       : null;

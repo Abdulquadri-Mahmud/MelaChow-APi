@@ -156,7 +156,14 @@ export const clearAllRiderNotifications = async (req, res) => {
  * Get VAPID public key for push notifications
  */
 export const getVapidPublicKey = async (req, res) => {
-    res.json({ publicKey: process.env.VAPID_PUBLIC_KEY });
+    if (!process.env.VAPID_PUBLIC_KEY) {
+        return res.status(503).json({
+            success: false,
+            message: "Push notification key is not configured"
+        });
+    }
+
+    res.json({ success: true, publicKey: process.env.VAPID_PUBLIC_KEY });
 };
 
 /**

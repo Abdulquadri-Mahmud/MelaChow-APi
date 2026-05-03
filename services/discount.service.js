@@ -19,7 +19,7 @@ class DiscountService {
             const discount = await Discount.findOne({
                 code: code.toUpperCase(),
                 isActive: true
-            });
+            }).select("+usedBy.hashedDeviceId +usedBy.phoneHash");
 
             if (!discount) {
                 return { valid: false, error: "Invalid discount code" };
@@ -46,11 +46,30 @@ class DiscountService {
                     "appliedDiscount.code": discount.code,
                     orderStatus: { $ne: "cancelled" },
                 });
+                const usedBy = discount.usedBy || [];
+                const matchingIdentityUsageCount = usedBy.filter((usage) => {
+                    const sameUser =
+                        usage.userId &&
+                        String(usage.userId) === String(context.userId);
+                    const sameDevice =
+                        context.hashedDeviceId &&
+                        usage.hashedDeviceId &&
+                        usage.hashedDeviceId === context.hashedDeviceId;
+                    const samePhone =
+                        context.phoneHash &&
+                        usage.phoneHash &&
+                        usage.phoneHash === context.phoneHash;
 
-                if (userUsageCount >= discount.userUsageLimit) {
+                    return sameUser || sameDevice || samePhone;
+                }).length;
+
+                if (
+                    userUsageCount >= discount.userUsageLimit ||
+                    matchingIdentityUsageCount >= discount.userUsageLimit
+                ) {
                     return {
                         valid: false,
-                        error: `You have already used this discount ${discount.userUsageLimit} time${discount.userUsageLimit === 1 ? "" : "s"}`
+                        error: "This discount has already been used by this account, device, or phone"
                     };
                 }
             }
@@ -225,6 +244,31 @@ class DiscountService {
                 fundedBy: discount.fundedBy,
             }
         };
+    }
+
+    async recordDiscountUsage(discountId, usage, session) {
+        return Discount.updateOne(
+            {
+                _id: discountId,
+                $or: [
+                    { usageLimit: null },
+                    { $expr: { $lt: ["$usageCount", "$usageLimit"] } },
+                ],
+            },
+            {
+                $inc: { usageCount: 1 },
+                $push: {
+                    usedBy: {
+                        userId: usage.userId,
+                        orderId: usage.orderId,
+                        hashedDeviceId: usage.hashedDeviceId || null,
+                        phoneHash: usage.phoneHash || null,
+                        usedAt: new Date(),
+                    },
+                },
+            },
+            { session }
+        );
     }
 }
 
