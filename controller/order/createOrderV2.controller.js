@@ -293,8 +293,7 @@ const extractIp = (req) => {
  *   1. Promo exists, isActive, usedSlots < totalSlots
  *   2. originalDeliveryFee > 0 (city fee must be non-zero; if already free, no slot consumed)
  *   3. userId not in FreeDeliveryClaim (hard unique constraint)
- *   4. User has no previous paid order (first-order verification)
- *   5. IP claim count ≤ PROMO_MAX_CLAIMS_PER_IP (soft fraud signal)
+ *   4. IP claim count <= PROMO_MAX_CLAIMS_PER_IP (soft fraud signal)
  */
 const checkFreeDeliveryEligibility = async (
   userId,
@@ -395,20 +394,7 @@ const checkFreeDeliveryEligibility = async (
       );
     }
 
-    // Gate 4: User must not have any previous paid order.
-    // Pending orders are ignored because Paystack payment may be abandoned or retried.
-    const previousPaidOrder = await Order.findOne({
-      userId,
-      paymentStatus: "paid",
-    })
-      .session(session)
-      .lean();
-
-    if (previousPaidOrder) {
-      return { eligible: false, reason: "not_first_order" };
-    }
-
-    // Gate 5: IP soft fraud check — allow up to PROMO_MAX_CLAIMS_PER_IP per IP
+    // Gate 4: IP soft fraud check - allow up to PROMO_MAX_CLAIMS_PER_IP per IP
     const hashedIp = hashIp(rawIp);
     const ipClaimCount = await FreeDeliveryClaim.countDocuments({
       hashedIp,
@@ -442,6 +428,60 @@ const checkFreeDeliveryEligibility = async (
       "⚠️ Free delivery eligibility check failed — skipping promo"
     );
     return { eligible: false, reason: "check_error" };
+  }
+};
+
+export const getFreeDeliveryEligibility = async (req, res) => {
+  const session = await mongoose.startSession();
+  session.startTransaction();
+
+  try {
+    const userId = req.userId;
+    const originalDeliveryFee = Number(
+      req.body?.originalDeliveryFee ??
+      req.body?.deliveryFee ??
+      req.query?.originalDeliveryFee ??
+      0
+    );
+    const rawIp =
+      req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+      req.ip ||
+      "unknown";
+
+    if (!userId) {
+      await session.abortTransaction();
+      session.endSession();
+      return res.status(401).json({ success: false, message: "Unauthorized" });
+    }
+
+    const eligibility = await checkFreeDeliveryEligibility(
+      userId,
+      rawIp,
+      originalDeliveryFee,
+      session
+    );
+
+    await session.commitTransaction();
+    session.endSession();
+
+    return res.status(200).json({
+      success: true,
+      eligible: !!eligibility.eligible,
+      reason: eligibility.reason || null,
+    });
+  } catch (error) {
+    if (session.inTransaction()) await session.abortTransaction();
+    session.endSession();
+    logger.error(
+      { error: error.message },
+      "Free delivery eligibility endpoint failed"
+    );
+    return res.status(500).json({
+      success: false,
+      eligible: false,
+      reason: "server_error",
+      message: "Unable to check free delivery eligibility",
+    });
   }
 };
 
