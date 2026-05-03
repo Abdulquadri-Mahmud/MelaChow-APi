@@ -92,7 +92,7 @@ export const getPlatformPromoStats = async (req, res) => {
 
     // 2. Fetch all claims for this promo with user details
     const claims = await FreeDeliveryClaim.find({ promoId })
-      .populate("userId", "firstName lastName email profilePicture")
+      .populate("userId", "firstname lastname fullName email avatar phone")
       .sort({ createdAt: -1 });
 
     // 3. Aggregate data for charts (Claims per day)
