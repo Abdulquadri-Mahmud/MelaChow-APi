@@ -14,7 +14,6 @@ import Vendor from "../../model/vendor/vendor.model.js";
 import Wallet from "../../model/wallet/wallet.mode.js";
 import Admin from "../../model/Admin/admin.model.js";
 import discountService from "../../services/discount.service.js";
-import Discount from "../../model/discount/Discount.js";
 import { emitNewOrderToRestaurant } from "../../socket/events/orderEvents.js";
 import logger from '../../config/logger.js';
 import { getPlatformConfig, calculateServiceFee } from '../../services/platformConfig.service.js';
@@ -23,6 +22,7 @@ import FreeDeliveryPromo from "../../model/promo/FreeDeliveryPromo.js";
 import FreeDeliveryClaim  from "../../model/promo/FreeDeliveryClaim.js";
 import VendorDeliveryPromo from "../../model/promo/VendorDeliveryPromo.js";
 import VendorDeliveryClaim from "../../model/promo/VendorDeliveryClaim.js";
+import { buildPromoIdentity } from "../../utils/promoIdentity.js";
 
 // Max number of claims allowed from the same IP address.
 // Set to 3 to allow legitimate students sharing campus/hostel WiFi
@@ -299,7 +299,8 @@ const checkFreeDeliveryEligibility = async (
   userId,
   rawIp,
   originalDeliveryFee,
-  session
+  session,
+  promoIdentity = {}
 ) => {
   try {
     // Gate 2: Only apply promo if there is actually a fee to waive.
@@ -339,14 +340,28 @@ const checkFreeDeliveryEligibility = async (
     }
 
     const staleBefore = new Date(Date.now() - PROMO_RESERVATION_TTL_MS);
+    const { hashedDeviceId, phoneHash } = promoIdentity;
+    const identityClaimChecks = [{ userId }];
+    if (hashedDeviceId) {
+      identityClaimChecks.push({ promoId: promo._id, hashedDeviceId });
+    }
+    if (phoneHash) {
+      identityClaimChecks.push({ promoId: promo._id, phoneHash });
+    }
 
-    // Gate 3: userId must not have a prior successful claim.
-    // We check for any existing claim record for this user.
-    const userClaim = await FreeDeliveryClaim.findOne({ userId }).session(session).lean();
-    if (userClaim) {
+    // Gate 3: the same account, device, or phone must not have a prior
+    // successful claim. This blocks creating another account on the same
+    // browser/device/phone to claim the promo again.
+    const identityClaim = await FreeDeliveryClaim.findOne({
+      $or: identityClaimChecks,
+    })
+      .session(session)
+      .lean();
+
+    if (identityClaim) {
       // If a claim exists, check the status of the associated order.
-      const claimedOrder = userClaim.orderId
-        ? await Order.findById(userClaim.orderId).select("paymentStatus orderStatus createdAt").session(session).lean()
+      const claimedOrder = identityClaim.orderId
+        ? await Order.findById(identityClaim.orderId).select("paymentStatus orderStatus createdAt").session(session).lean()
         : null;
       const isStalePendingReservation =
         claimedOrder &&
@@ -359,7 +374,7 @@ const checkFreeDeliveryEligibility = async (
         claimedOrder.paymentStatus === "paid" &&
         claimedOrder.orderStatus !== "cancelled"
       ) {
-        return { eligible: false, reason: "user_already_claimed" };
+        return { eligible: false, reason: "promo_already_claimed_by_account_device_or_phone" };
       }
 
       // A fresh pending reservation means the user already has a free-delivery
@@ -370,15 +385,15 @@ const checkFreeDeliveryEligibility = async (
         claimedOrder.orderStatus !== "cancelled" &&
         !isStalePendingReservation
       ) {
-        return { eligible: false, reason: "user_already_claimed" };
+        return { eligible: false, reason: "promo_already_reserved_by_account_device_or_phone" };
       }
 
       // If the order was never created, failed/cancelled, or is an old unpaid
       // Paystack attempt, release the reserved slot and let the user try again.
-      await FreeDeliveryClaim.deleteOne({ _id: userClaim._id }).session(session);
-      if (userClaim.promoId) {
+      await FreeDeliveryClaim.deleteOne({ _id: identityClaim._id }).session(session);
+      if (identityClaim.promoId) {
         await FreeDeliveryPromo.updateOne(
-          { _id: userClaim.promoId, usedSlots: { $gt: 0 } },
+          { _id: identityClaim.promoId, usedSlots: { $gt: 0 } },
           { $inc: { usedSlots: -1 } },
           { session }
         );
@@ -386,7 +401,7 @@ const checkFreeDeliveryEligibility = async (
       logger.info(
         {
           userId,
-          staleOrderId: userClaim.orderId,
+          staleOrderId: identityClaim.orderId,
           status: claimedOrder?.paymentStatus,
           stalePending: !!isStalePendingReservation,
         },
@@ -420,6 +435,8 @@ const checkFreeDeliveryEligibility = async (
       eligible: true,
       promoId:  promo._id,
       hashedIp,
+      hashedDeviceId,
+      phoneHash,
     };
   } catch (err) {
     // Never block order creation due to promo check failure
@@ -447,6 +464,10 @@ export const getFreeDeliveryEligibility = async (req, res) => {
       req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
       req.ip ||
       "unknown";
+    const promoIdentity = buildPromoIdentity({
+      deviceId: req.body?.deviceId || req.headers["x-melachow-device-id"],
+      phone: req.body?.phone || req.user?.phone,
+    });
 
     if (!userId) {
       await session.abortTransaction();
@@ -458,7 +479,8 @@ export const getFreeDeliveryEligibility = async (req, res) => {
       userId,
       rawIp,
       originalDeliveryFee,
-      session
+      session,
+      promoIdentity
     );
 
     await session.commitTransaction();
@@ -497,7 +519,7 @@ const claimFreeDeliverySlotInSession = async (order, session) => {
   if (!order.freeDeliveryPromo?.eligible) return;
   if (order.freeDeliveryPromo?.claimed) return; // idempotency — already done
 
-  const { promoId, hashedIp, originalDeliveryFee } = order.freeDeliveryPromo;
+  const { promoId, hashedIp, hashedDeviceId, phoneHash, originalDeliveryFee } = order.freeDeliveryPromo;
 
   // Atomic slot increment.
   // Condition prevents going over totalSlots.
@@ -523,6 +545,8 @@ const claimFreeDeliverySlotInSession = async (order, session) => {
           userId:            order.userId,
           orderId:           order._id,
           hashedIp:          hashedIp || "unknown",
+          hashedDeviceId:    hashedDeviceId || null,
+          phoneHash:         phoneHash || null,
           deliveryFeeWaived: originalDeliveryFee,
           promoId:           promoId || null,
         },
@@ -560,7 +584,13 @@ const claimFreeDeliverySlotInSession = async (order, session) => {
  *
  * Returns { applicable: false } on any error — never blocks order creation.
  */
-const checkVendorDeliveryPromo = async (vendorId, userId, originalDeliveryFee, session) => {
+const checkVendorDeliveryPromo = async (
+  vendorId,
+  userId,
+  originalDeliveryFee,
+  session,
+  promoIdentity = {}
+) => {
   try {
     // Gate: only apply if there is a fee to waive
     if (!originalDeliveryFee || originalDeliveryFee <= 0) {
@@ -582,9 +612,17 @@ const checkVendorDeliveryPromo = async (vendorId, userId, originalDeliveryFee, s
       return { applicable: false, reason: "no_active_promo" };
     }
 
+    const { hashedDeviceId, phoneHash } = promoIdentity;
+    const identityClaimChecks = [{ promoId: promo._id, userId }];
+    if (hashedDeviceId) {
+      identityClaimChecks.push({ promoId: promo._id, hashedDeviceId });
+    }
+    if (phoneHash) {
+      identityClaimChecks.push({ promoId: promo._id, phoneHash });
+    }
+
     const existingClaim = await VendorDeliveryClaim.findOne({
-      promoId: promo._id,
-      userId,
+      $or: identityClaimChecks,
     })
       .session(session)
       .lean();
@@ -597,7 +635,7 @@ const checkVendorDeliveryPromo = async (vendorId, userId, originalDeliveryFee, s
       // If the order was paid, or is still pending (not failed/cancelled),
       // the user cannot claim another slot for this vendor promo.
       if (claimedOrder && !["failed", "refunded"].includes(claimedOrder.paymentStatus) && claimedOrder.orderStatus !== "cancelled") {
-        return { applicable: false, reason: "user_already_claimed_vendor_promo" };
+        return { applicable: false, reason: "vendor_promo_already_claimed_by_account_device_or_phone" };
       }
 
       // If orphaned or failed, reclaim the slot
@@ -646,6 +684,8 @@ const checkVendorDeliveryPromo = async (vendorId, userId, originalDeliveryFee, s
     return {
       applicable: true,
       promoId:    promo._id,
+      hashedDeviceId,
+      phoneHash,
     };
   } catch (err) {
     logger.warn(
@@ -668,7 +708,7 @@ const recordVendorPromoUsage = async (order, session) => {
   if (!order.vendorDeliveryPromo?.applied) return;
   if (order.vendorDeliveryPromo?.claimed) return;
 
-  const { promoId, vendorId, originalDeliveryFee } = order.vendorDeliveryPromo;
+  const { promoId, vendorId, hashedDeviceId, phoneHash, originalDeliveryFee } = order.vendorDeliveryPromo;
   if (!promoId) return;
 
   const updatedPromo = await VendorDeliveryPromo.findOneAndUpdate(
@@ -697,6 +737,8 @@ const recordVendorPromoUsage = async (order, session) => {
           userId: order.userId,
           orderId: order._id,
           deliveryFeeWaived: originalDeliveryFee || 0,
+          hashedDeviceId: hashedDeviceId || null,
+          phoneHash: phoneHash || null,
         },
       ],
       { session }
@@ -829,6 +871,7 @@ export const createOrderV2 = async ({
     orderId = null,
     idempotencyKey = null, // ← ADD THIS
     clientIp = null,
+    deviceId = null,
 }) => {
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -858,6 +901,7 @@ export const createOrderV2 = async ({
          * 1️⃣ VALIDATION
          * ======================================== */
         if (!userId) throw new Error("User ID is required");
+        const promoIdentity = buildPromoIdentity({ deviceId, phone });
         if (!Array.isArray(items) || items.length === 0) {
             throw new Error("Order items are required");
         }
@@ -1182,7 +1226,8 @@ export const createOrderV2 = async ({
             singleVendorId,
             userId,
             originalTotalDeliveryFee,
-            session
+            session,
+            promoIdentity
           );
 
           if (vendorPromoResult.applicable) {
@@ -1204,7 +1249,8 @@ export const createOrderV2 = async ({
             userId,
             clientIp,
             originalTotalDeliveryFee,
-            session
+            session,
+            promoIdentity
           );
 
           if (promoEligibilityResult.eligible) {
@@ -1249,7 +1295,9 @@ export const createOrderV2 = async ({
                 userId,
                 vendorId: vendorIdContext,
                 subtotal: subtotal,
-                items: normalizedItems
+                items: normalizedItems,
+                hashedDeviceId: promoIdentity.hashedDeviceId,
+                phoneHash: promoIdentity.phoneHash,
             });
 
             if (!validation.valid) {
@@ -1265,17 +1313,18 @@ export const createOrderV2 = async ({
             finalTotal = calculation.total;
             appliedDiscount = calculation.appliedDiscount;
 
-            // Increment discount usage
-            const usageUpdate = await Discount.updateOne(
+            // Reserve discount usage with the same account/device/phone identity
+            // used during validation. This prevents a second account on the
+            // same device/phone from using the same promo.
+            const usageUpdate = await discountService.recordDiscountUsage(
+                validation.discount._id,
                 {
-                    _id: validation.discount._id,
-                    $or: [
-                        { usageLimit: null },
-                        { $expr: { $lt: ["$usageCount", "$usageLimit"] } },
-                    ],
+                    userId,
+                    hashedDeviceId: promoIdentity.hashedDeviceId,
+                    phoneHash: promoIdentity.phoneHash,
                 },
-                { $inc: { usageCount: 1 } }
-            ).session(session);
+                session
+            );
 
             if (usageUpdate.modifiedCount !== 1) {
                 throw new Error("Discount Error: Discount usage limit reached");
@@ -1369,6 +1418,8 @@ export const createOrderV2 = async ({
                                 claimed:             false,
                                 promoId:             promoEligibilityResult.promoId,
                                 hashedIp:            promoEligibilityResult.hashedIp,
+                                hashedDeviceId:      promoEligibilityResult.hashedDeviceId,
+                                phoneHash:           promoEligibilityResult.phoneHash,
                                 originalDeliveryFee: originalTotalDeliveryFee,
                               }
                             : { 
@@ -1381,6 +1432,8 @@ export const createOrderV2 = async ({
                                 claimed:             false,
                                 promoId:             vendorPromoResult.promoId,
                                 vendorId:            singleVendorId,
+                                hashedDeviceId:      vendorPromoResult.hashedDeviceId,
+                                phoneHash:           vendorPromoResult.phoneHash,
                                 originalDeliveryFee: originalTotalDeliveryFee,
                               }
                             : { 
@@ -1965,7 +2018,7 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
 export const createOrderController = async (req, res) => {
     let order = null;
     try {
-        const { items, vendorDeliveryFees, deliveryAddress, phone, discountCode, useWallet, idempotencyKey } = req.body;
+        const { items, vendorDeliveryFees, deliveryAddress, phone, discountCode, useWallet, idempotencyKey, deviceId } = req.body;
         const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip || "unknown";
         const userId = req.userId; // From auth middleware
 
@@ -1980,6 +2033,7 @@ export const createOrderController = async (req, res) => {
             paymentStatus: "pending", // Will be updated if wallet used
             idempotencyKey: idempotencyKey || null, // ← PASS THROUGH
             clientIp: clientIp,
+            deviceId: deviceId || req.headers["x-melachow-device-id"] || null,
         });
 
         // If paid via wallet, it's already fulfilled atomically in createOrderV2

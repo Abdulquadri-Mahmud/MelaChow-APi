@@ -1,5 +1,6 @@
 import Discount from "../../model/discount/Discount.js";
 import discountService from "../../services/discount.service.js";
+import { buildPromoIdentity } from "../../utils/promoIdentity.js";
 import Food from "../../model/vendor/food.model.js";
 
 const VALID_TYPES = ["PERCENTAGE", "FIXED"];
@@ -91,8 +92,12 @@ const syncFoodPromotions = async (discountId, oldFoodIds = [], newFoodIds = []) 
  */
 export const verifyDiscount = async (req, res) => {
     try {
-        const { code, vendorId, subtotal, items, deliveryFee } = req.body;
+        const { code, vendorId, subtotal, items, deliveryFee, deviceId, phone } = req.body;
         const userId = req.user ? req.user._id : null;
+        const promoIdentity = buildPromoIdentity({
+            deviceId: deviceId || req.headers["x-melachow-device-id"],
+            phone: phone || req.user?.phone,
+        });
 
         if (!code) {
             return res.status(400).json({ success: false, message: "Discount code is required" });
@@ -103,7 +108,9 @@ export const verifyDiscount = async (req, res) => {
             userId,
             vendorId,
             subtotal: Number(subtotal),
-            items: items || []
+            items: items || [],
+            hashedDeviceId: promoIdentity.hashedDeviceId,
+            phoneHash: promoIdentity.phoneHash,
         });
 
         if (!validation.valid) {

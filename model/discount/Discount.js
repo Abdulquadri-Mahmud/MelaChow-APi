@@ -79,6 +79,31 @@ const discountSchema = new mongoose.Schema(
             type: Number, // How many times a single user can use it
             default: 1,
         },
+        usedBy: [
+            {
+                userId: {
+                    type: mongoose.Schema.Types.ObjectId,
+                    ref: "User",
+                },
+                orderId: {
+                    type: mongoose.Schema.Types.ObjectId,
+                    ref: "Order",
+                },
+                hashedDeviceId: {
+                    type: String,
+                    select: false,
+                },
+                phoneHash: {
+                    type: String,
+                    select: false,
+                },
+                usedAt: {
+                    type: Date,
+                    default: Date.now,
+                },
+                _id: false,
+            },
+        ],
         // 👤 Funding (Accounting)
         fundedBy: {
             type: String,
@@ -93,6 +118,9 @@ const discountSchema = new mongoose.Schema(
 // Indexes for fast lookup
 discountSchema.index({ vendorId: 1 });
 discountSchema.index({ isActive: 1, startDate: 1, endDate: 1 });
+discountSchema.index({ code: 1, "usedBy.userId": 1 });
+discountSchema.index({ code: 1, "usedBy.hashedDeviceId": 1 });
+discountSchema.index({ code: 1, "usedBy.phoneHash": 1 });
 
 const Discount = mongoose.model("Discount", discountSchema);
 

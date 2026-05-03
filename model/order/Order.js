@@ -218,6 +218,8 @@ const orderSchema = new mongoose.Schema(
       promoId:             { type: mongoose.Schema.Types.ObjectId, ref: "FreeDeliveryPromo" },
       // SHA-256 of IP — select: false so it never appears in API responses
       hashedIp:            { type: String, select: false },
+      hashedDeviceId:      { type: String, select: false },
+      phoneHash:           { type: String, select: false },
       // The delivery fee that was waived (what platform is subsidising, in ₦)
       originalDeliveryFee: { type: Number, default: 0 },
       _id: false,
@@ -229,6 +231,8 @@ const orderSchema = new mongoose.Schema(
       claimed:             { type: Boolean, default: false },
       promoId:             { type: mongoose.Schema.Types.ObjectId, ref: "VendorDeliveryPromo" },
       vendorId:            { type: mongoose.Schema.Types.ObjectId, ref: "Vendor" },
+      hashedDeviceId:      { type: String, select: false },
+      phoneHash:           { type: String, select: false },
       originalDeliveryFee: { type: Number, default: 0 },
       _id: false,
     },

@@ -10,8 +10,10 @@ import { validateVendorLocation } from "../../services/locationService.js";
 import { redisClient, isRedisReady } from "../../config/redis.js";
 import City from "../../model/location/City.js";
 import VendorDeliveryPromo from "../../model/promo/VendorDeliveryPromo.js";
+import VendorDeliveryClaim from "../../model/promo/VendorDeliveryClaim.js";
+import { buildPromoIdentity } from "../../utils/promoIdentity.js";
 
-const getActiveVendorDeliveryPromoContext = async (vendorId) => {
+const getActiveVendorDeliveryPromoContext = async (vendorId, promoIdentity = {}) => {
   const now = new Date();
   const promo = await VendorDeliveryPromo.findOne({
     vendorId,
@@ -23,10 +25,27 @@ const getActiveVendorDeliveryPromoContext = async (vendorId) => {
       { $expr: { $lt: ["$usedOrders", "$maxOrders"] } },
     ],
   }).select("_id maxOrders usedOrders startsAt endsAt").lean();
+  const claimChecks = [];
+  if (promo?._id && promoIdentity.hashedDeviceId) {
+    claimChecks.push({
+      promoId: promo._id,
+      hashedDeviceId: promoIdentity.hashedDeviceId,
+    });
+  }
+  if (promo?._id && promoIdentity.phoneHash) {
+    claimChecks.push({
+      promoId: promo._id,
+      phoneHash: promoIdentity.phoneHash,
+    });
+  }
+  const usedPromo = claimChecks.length
+    ? await VendorDeliveryClaim.findOne({ $or: claimChecks }).select("_id").lean()
+    : null;
+  const isAvailableToThisDevice = !!promo && !usedPromo;
 
   return {
-    hasActiveDeliveryPromo: !!promo,
-    activeDeliveryPromo: promo
+    hasActiveDeliveryPromo: isAvailableToThisDevice,
+    activeDeliveryPromo: isAvailableToThisDevice
       ? {
           promoId: promo._id,
           maxOrders: promo.maxOrders,
@@ -40,7 +59,7 @@ const getActiveVendorDeliveryPromoContext = async (vendorId) => {
 };
 
 const resolvePublicDeliveryFee = async (vendor) => {
-  const promoContext = await getActiveVendorDeliveryPromoContext(vendor._id);
+  const promoContext = await getActiveVendorDeliveryPromoContext(vendor._id, vendor.promoIdentity);
   if (promoContext.hasActiveDeliveryPromo) {
     return { deliveryFee: 0, ...promoContext };
   }
@@ -242,6 +261,10 @@ export const getVendorForUserDisplay = async (req, res) => {
       });
     }
 
+    vendor.promoIdentity = buildPromoIdentity({
+      deviceId: req.headers["x-melachow-device-id"] || req.query?.deviceId,
+      phone: req.query?.phone,
+    });
     const deliveryContext = await resolvePublicDeliveryFee(vendor);
     const vendorData = {
       ...vendor,
