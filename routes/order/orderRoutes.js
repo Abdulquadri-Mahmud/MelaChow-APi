@@ -12,7 +12,10 @@ import {
   cancelOrder
 } from "../../controller/order/orderController.js";
 
-import { createOrderController } from "../../controller/order/createOrderV2.controller.js";
+import {
+  createOrderController,
+  getFreeDeliveryEligibility,
+} from "../../controller/order/createOrderV2.controller.js";
 
 const router = express.Router();
 
@@ -28,6 +31,7 @@ router.post("/create", auth, initializePayment);
 router.post("/verify/:reference", auth, verifyPayment);
 
 // V2 Routes (Enhanced Validation)
+router.post("/v2/free-delivery-eligibility", auth, getFreeDeliveryEligibility);
 router.post("/v2/create", auth, createOrderController);
 router.post("/v2/verify/:reference", auth, verifyPaymentV2);
 
