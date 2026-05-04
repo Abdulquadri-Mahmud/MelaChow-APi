@@ -312,12 +312,28 @@ export const markDelivered = async (orderId, riderId) => {
         let deliveryFee = 0;
         if (isAdminRider) {
             deliveryFee = Number(order.deliveryFee || 0);
+            
+            // ✅ PROMO FIX: If delivery fee is 0, use the original fee from the promo snapshot
+            if (deliveryFee === 0) {
+                deliveryFee = (order.freeDeliveryPromo?.originalDeliveryFee || 
+                              order.vendorDeliveryPromo?.originalDeliveryFee || 0);
+            }
             console.log(`👤 Admin-managed rider ${riderId}: using total order delivery fee ₦${deliveryFee}`);
         } else {
             const deliveryFeeEntry = order.vendorDeliveryFees?.find(
                 v => v.restaurantId?.toString() === riderVendorId
             );
             deliveryFee = Number(deliveryFeeEntry?.deliveryFee || 0);
+            
+            // ✅ PROMO FIX: If vendor delivery fee is 0, check if a promo covered it.
+            if (deliveryFee === 0) {
+                const vendorPromo = order.vendorDeliveryPromo;
+                if (vendorPromo?.applied && String(vendorPromo.vendorId) === riderVendorId) {
+                    deliveryFee = vendorPromo.originalDeliveryFee;
+                } else if (order.freeDeliveryPromo?.eligible) {
+                    deliveryFee = order.freeDeliveryPromo.originalDeliveryFee;
+                }
+            }
             console.log(`🚲 Vendor-managed rider ${riderId}: using vendor delivery fee ₦${deliveryFee}`);
         }
 
