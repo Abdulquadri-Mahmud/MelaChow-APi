@@ -1484,16 +1484,26 @@ export const updateVendorOrderStatus = async (req, res) => {
         console.error('❌ Customer Notification error:', notifError.message);
       }
 
-      // 🚨 ADMIN ALERT: Triggered when vendor marks order ready and delivery is admin-managed
-      if ((status === 'ready_for_pickup' || status === 'ready') && 
-          populatedOrder.restaurantId.deliveryManagedBy === 'admin') {
+      // Admin logistics alert: vendor has finished preparing the order.
+      // Do not depend on old restaurant.deliveryManagedBy metadata here; platform
+      // rider assignment starts from this ready transition.
+      const readyStatuses = ['ready_for_pickup', 'ready'];
+      const isReadyTransition = readyStatuses.includes(status) && !readyStatuses.includes(previousStatus);
+
+      if (isReadyTransition) {
           
           try {
               const { sendNotification } = await import('../../services/notification.service.js');
               await sendNotification(null, 'admin_order_ready', {
                   orderId: orderId,
                   orderDatabaseId: populatedOrder._id,
-                  restaurantName: restaurantName
+                  vendorOrderId: populatedOrder._id,
+                  restaurantName: restaurantName,
+                  url: `/admin/orders/${populatedOrder._id}`,
+                  additionalData: {
+                    vendorOrderId: populatedOrder._id,
+                    restaurantId: populatedOrder.restaurantId._id
+                  }
               }, 'admin');
               console.log('🚨 Admin Assignment Alert broadcasted successfully');
           } catch (adminNotifError) {

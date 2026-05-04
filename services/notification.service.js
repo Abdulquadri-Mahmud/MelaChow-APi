@@ -123,6 +123,13 @@ const NOTIFICATION_CONFIGS = {
         requireInteraction: true,
         vibrate: [500, 100, 500, 100, 500]
     },
+    rider_assignment_accepted: {
+        title: 'Rider Accepted Assignment',
+        getBody: (data) => `Rider ${data.riderName || 'assigned rider'} accepted Order #${data.orderId}. Delivery is now underway.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: false,
+        vibrate: [200, 100, 200]
+    },
     admin_order_delivered: {
         title: 'Order Delivery Completed',
         getBody: (data) => `Platform Order #${data.orderId || data._id?.slice(-6)} has been delivered correctly to the customer.`,

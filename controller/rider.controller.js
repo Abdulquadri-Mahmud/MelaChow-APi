@@ -253,10 +253,10 @@ export const updateRiderStatus = async (req, res, next) => {
                 // assigned the rider and needs confirmation the delivery is underway
                 try {
                     const { sendNotification } = await import("../services/notification.service.js");
-                    await sendNotification(null, 'admin_order_delivered', {
+                    await sendNotification(null, 'rider_assignment_accepted', {
                         orderId: acceptedOrder?.orderId || orderId,
                         orderDatabaseId: orderId,
-                        restaurantName: 'a restaurant',
+                        riderName: rider.name,
                         message: `Rider ${rider.name} accepted delivery assignment for Order #${acceptedOrder?.orderId || orderId}. Order is now in transit.`
                     }, 'admin');
                 } catch (notifErr) {
