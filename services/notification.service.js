@@ -220,7 +220,7 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
             image: data.image,
             url: data.url || (data.orderId ? (
                 role === 'vendor' ? `/vendors/orders/${data.orderDatabaseId || data.orderId}` :
-                role === 'rider' ? `/rider/dashboard` :
+                role === 'rider' ? `/rider/notifications` :
                 role === 'admin' ? `/admin/orders/${data.orderDatabaseId || data.orderId}` :
                 `/track-orders/${data.orderId}`
             ) : '/notifications'),
@@ -367,6 +367,7 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
                         url: notificationData.url,
                         orderId: notificationData.orderId,
                         type: notificationData.type,
+                        role: notificationData.role,
                         ...data.additionalData
                     }
                 };
@@ -479,7 +480,7 @@ export async function sendRiderNotification(riderId, orderId, type, data = {}) {
         orderId,
         orderDatabaseId: data.orderDatabaseId,
         restaurantName: data.restaurantName,
-        url: `/rider/dashboard`,
+        url: `/rider/notifications`,
         ...data
     }, 'rider');
 }
