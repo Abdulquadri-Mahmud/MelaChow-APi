@@ -23,12 +23,51 @@ import FreeDeliveryClaim  from "../../model/promo/FreeDeliveryClaim.js";
 import VendorDeliveryPromo from "../../model/promo/VendorDeliveryPromo.js";
 import VendorDeliveryClaim from "../../model/promo/VendorDeliveryClaim.js";
 import { buildPromoIdentity } from "../../utils/promoIdentity.js";
+import { orderAutoCancelQueue } from "../../config/queue.js";
 
 // Max number of claims allowed from the same IP address.
 // Set to 3 to allow legitimate students sharing campus/hostel WiFi
 // while still soft-blocking obvious multi-account abuse.
 const PROMO_MAX_CLAIMS_PER_IP = 5;
 const PROMO_RESERVATION_TTL_MS = 45 * 60 * 1000;
+const VENDOR_ORDER_AUTO_CANCEL_DELAY_MS =
+  Number(process.env.VENDOR_ORDER_AUTO_CANCEL_MINUTES || 5) * 60 * 1000;
+
+async function queueVendorOrderAutoCancelChecks(order, vendorOrderMapping = {}) {
+  const vendorOrderIds = Object.values(vendorOrderMapping).filter(Boolean);
+  if (!vendorOrderIds.length) return;
+
+  try {
+    for (const vendorOrderId of vendorOrderIds) {
+      await orderAutoCancelQueue.add(
+        "check-vendor-pending",
+        {
+          orderId: order._id.toString(),
+          orderCode: order.orderId,
+          vendorOrderId: vendorOrderId.toString(),
+        },
+        {
+          delay: VENDOR_ORDER_AUTO_CANCEL_DELAY_MS,
+          jobId: `vendor-timeout-${vendorOrderId}`,
+        }
+      );
+    }
+
+    logger.info(
+      {
+        orderId: order.orderId,
+        vendorOrderCount: vendorOrderIds.length,
+        delayMs: VENDOR_ORDER_AUTO_CANCEL_DELAY_MS,
+      },
+      "Vendor auto-cancel checks queued"
+    );
+  } catch (queueErr) {
+    logger.error(
+      { orderId: order.orderId, error: queueErr.message },
+      "Failed to queue vendor auto-cancel checks"
+    );
+  }
+}
 
 /**
  * ========================================
@@ -1486,6 +1525,10 @@ export const createOrderV2 = async ({
         console.log(`✅ Order created successfully: ${finalOrderId} (status: pending)`);
 
         // 🔔 Send notifications AFTER transaction commits
+        if (order.paymentStatus === 'paid') {
+            await queueVendorOrderAutoCancelChecks(order, vendorOrderMapping);
+        }
+
         try {
             const { sendOrderNotification, sendVendorNotification } = await import('../../services/notification.service.js');
 
@@ -1934,24 +1977,11 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
 
         console.log(`✅ Order ${order.orderId} updated to paid`);
 
-        // Queue auto-cancellation check — fires in 15 minutes if vendor hasn't responded
-        // The worker checks current order status before cancelling — safe if vendor accepts in time
+        // Queue vendor auto-cancellation checks after payment confirmation
+        // The worker checks each VendorOrder status before cancelling.
         try {
-            const vendorOrderIds = Object.values(vendorOrderMapping);
-            for (const vendorOrderId of vendorOrderIds) {
-                await orderAutoCancelQueue.add(
-                    'check-pending',
-                    {
-                        orderId: order._id.toString(),
-                        vendorOrderId: vendorOrderId.toString(),
-                    },
-                    {
-                        delay: 15 * 60 * 1000,             // 15 minutes
-                        jobId: `auto-cancel-${vendorOrderId}`,  // Unique per vendor order
-                    }
-                );
-            }
-            logger.info({ orderId: order.orderId }, '⏰ Auto-cancel job queued (15 min)');
+            await queueVendorOrderAutoCancelChecks(order, vendorOrderMapping);
+            logger.info({ orderId: order.orderId }, 'Vendor auto-cancel checks queued');
         } catch (queueErr) {
             // Non-fatal — log but don't block order confirmation
             logger.error({ orderId: order.orderId, error: queueErr.message }, '⚠️ Failed to queue auto-cancel job');
@@ -2099,3 +2129,4 @@ export const createOrderController = async (req, res) => {
         });
     }
 };
+
