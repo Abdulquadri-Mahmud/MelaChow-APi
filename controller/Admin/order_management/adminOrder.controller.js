@@ -345,14 +345,20 @@ export const adminOverrideOrderStatus = async (req, res) => {
  */
 export const getPlatformManagedOrders = async (req, res) => {
     try {
-        const { status, paymentStatus, startDate, endDate, search, page = 1, limit = 20 } = req.query;
+        const { status, statusGroup, paymentStatus, startDate, endDate, search, page = 1, limit = 20 } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
         // 1. All orders are platform-managed in this model.
         // 2. Build filters
         const filter = {};
 
-        if (status) filter.orderStatus = status;
+        if (status) {
+            filter.orderStatus = status;
+        } else if (statusGroup === "logistics") {
+            filter.orderStatus = {
+                $in: ["ready_for_pickup", "rider_assigned", "out_for_delivery", "delivered"]
+            };
+        }
         if (paymentStatus) filter.paymentStatus = paymentStatus;
         if (startDate || endDate) {
             filter.createdAt = {};
