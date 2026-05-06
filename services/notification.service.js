@@ -137,6 +137,13 @@ const NOTIFICATION_CONFIGS = {
         requireInteraction: false,
         vibrate: [200, 100, 200]
     },
+    rider_assignment_timeout: {
+        title: 'Rider Assignment Timed Out',
+        getBody: (data) => `Rider ${data.riderName || 'assigned rider'} did not respond to Order #${data.orderId}. Manual reassignment required.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: true,
+        vibrate: [500, 100, 500, 100, 500]
+    },
     admin_order_delivered: {
         title: 'Order Delivery Completed',
         getBody: (data) => `Platform Order #${data.orderId || data._id?.slice(-6)} has been delivered correctly to the customer.`,
@@ -308,7 +315,9 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
                     title: notificationData.title,
                     body: notificationData.body,
                     type: notificationData.type,
+                    orderId: notificationData.orderId,
                     url: notificationData.url,
+                    data: notificationData.data,
                     createdAt: savedNotification?.createdAt || new Date(),
                     read: false
                 });
