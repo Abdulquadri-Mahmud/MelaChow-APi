@@ -153,12 +153,14 @@ app.use((req, res, next) => {
 // portions, selected options, and metadata can exceed 10kb.
 // All other routes keep the strict 10kb limit.
 app.use((req, res, next) => {
+    if (req.path === '/api/orders/webhook') return next();
     const isOrderRoute =
         req.path.startsWith('/api/orders') ||
         req.path.startsWith('/v1/cart');
     express.json({ limit: isOrderRoute ? '100kb' : '10kb' })(req, res, next);
 });
 app.use((req, res, next) => {
+    if (req.path === '/api/orders/webhook') return next();
     const isOrderRoute =
         req.path.startsWith('/api/orders') ||
         req.path.startsWith('/v1/cart');
@@ -170,6 +172,7 @@ app.use(cookieParser()); // Parse cookies
 // req.query injection risk is minimal for Mongoose since queries are constructed
 // server-side, not passed raw from query strings.
 app.use((req, res, next) => {
+  if (req.path === '/api/orders/webhook') return next();
   if (req.body) {
     req.body = mongoSanitize.sanitize(req.body);
   }
