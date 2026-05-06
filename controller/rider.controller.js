@@ -199,7 +199,7 @@ export const getRiderOrderDetails = async (req, res, next) => {
 export const updateRiderStatus = async (req, res, next) => {
     try {
         const { riderId } = req.params;
-        const { status } = req.body;
+        const { status, reason } = req.body;
 
         // ✅ FIX: Was calling getSingleRiderForVendor(riderId, req.rider?.vendorId || "dummy")
         // which queries { _id: riderId, vendorId: "dummy" } for admin-managed riders
@@ -223,7 +223,7 @@ export const updateRiderStatus = async (req, res, next) => {
             console.warn("Socket.IO not initialized during rider status update", err.message);
         }
 
-        if (wasPending && orderId && io) {
+        if (wasPending && orderId) {
             if (status === "on_delivery") {
                 // ── RIDER ACCEPTED ────────────────────────────────────────────────
                 // Resolve vendorId from the order for admin-managed riders whose
@@ -236,7 +236,7 @@ export const updateRiderStatus = async (req, res, next) => {
                     acceptedOrder?.items?.[0]?.restaurantId?.toString() || null;
 
                 // Notify vendor via socket (works for both rider types)
-                if (resolvedVendorId) {
+                if (resolvedVendorId && io) {
                     io.to(SOCKET_ROOMS.vendor(resolvedVendorId)).emit(
                         SOCKET_EVENTS.ORDER_STATUS_UPDATE,
                         buildPayload.statusUpdate({
@@ -264,6 +264,11 @@ export const updateRiderStatus = async (req, res, next) => {
                 }
 
             } else if (status === "available") {
+                const isTimeout = reason === "timeout";
+                const actionStatus = isTimeout ? "rider_assignment_timeout" : "rider_rejected";
+                const actionMessage = isTimeout
+                    ? `Rider ${rider.name} did not respond before the assignment timer expired. Manual reassignment required.`
+                    : `Rider ${rider.name} rejected the assignment. Please assign another rider.`;
                 // ── RIDER REJECTED ────────────────────────────────────────────────
                 const OrderModel = (await import("../model/order/Order.js")).default;
                 const VendorOrder = (await import("../model/vendor/VendorOrder.js")).default;
@@ -275,7 +280,7 @@ export const updateRiderStatus = async (req, res, next) => {
                         riderId: null,
                         $push: {
                             statusLog: {
-                                status: "rider_rejected",
+                                status: actionStatus,
                                 changedBy: "rider",
                                 timestamp: new Date()
                             }
@@ -297,14 +302,14 @@ export const updateRiderStatus = async (req, res, next) => {
                     );
 
                     // Notify vendor via socket
-                    if (resolvedVendorId) {
+                    if (resolvedVendorId && io) {
                         io.to(SOCKET_ROOMS.vendor(resolvedVendorId)).emit(
                             SOCKET_EVENTS.ORDER_STATUS_UPDATE,
                             buildPayload.statusUpdate({
                                 orderId,
-                                status: "rider_rejected",
+                                status: actionStatus,
                                 changedBy: "rider",
-                                message: `Rider ${rider.name} rejected the assignment. Please assign another rider.`,
+                                message: actionMessage,
                                 riderName: rider.name
                             })
                         );
@@ -315,10 +320,20 @@ export const updateRiderStatus = async (req, res, next) => {
                     // high-priority alert config in notification.service.js.
                     try {
                         const { sendNotification } = await import("../services/notification.service.js");
-                        await sendNotification(null, 'rider_assignment_needed', {
+                        await sendNotification(null, isTimeout ? 'rider_assignment_timeout' : 'rider_assignment_needed', {
                             orderId: order.orderId || orderId,
                             orderDatabaseId: orderId,
-                            message: `Rider ${rider.name} rejected Order #${order.orderId}. Manual reassignment required.`
+                            riderName: rider.name,
+                            reason: isTimeout ? "timeout" : "rejected",
+                            additionalData: {
+                                orderDatabaseId: orderId,
+                                riderId: rider._id,
+                                riderName: rider.name,
+                                reason: isTimeout ? "timeout" : "rejected"
+                            },
+                            message: isTimeout
+                                ? `Rider ${rider.name} did not respond to Order #${order.orderId}. Manual reassignment required.`
+                                : `Rider ${rider.name} rejected Order #${order.orderId}. Manual reassignment required.`
                         }, 'admin');
                     } catch (notifErr) {
                         console.warn('⚠️ Admin notification failed for rider rejection:', notifErr.message);

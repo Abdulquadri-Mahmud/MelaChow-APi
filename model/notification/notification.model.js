@@ -48,6 +48,8 @@ const notificationSchema = new mongoose.Schema({
             'admin_order_ready',      // ✅ New Admin Type
             'admin_order_delivered',  // ✅ New Admin Type
             'rider_assignment_needed', // ✅ New Admin Type
+            'rider_assignment_accepted',
+            'rider_assignment_timeout',
             'vendor_review',           // ✅ New Admin Type
             'system',                  // ✅ New Admin Type
             'promo',
