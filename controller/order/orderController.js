@@ -1799,13 +1799,16 @@ const handleTransferReversed = async (data) => {
 // ---------- Paystack Webhook ----------
 export const paystackWebhook = async (req, res) => {
   const secret = process.env.PAYSTACK_SECRET_KEY;
+  const rawBody = Buffer.isBuffer(req.body)
+    ? req.body
+    : Buffer.from(JSON.stringify(req.body || {}));
 
   /* -------------------------------
    * 1️⃣ VERIFY SIGNATURE
    * ------------------------------- */
   const hash = crypto
     .createHmac("sha512", secret)
-    .update(JSON.stringify(req.body))
+    .update(rawBody)
     .digest("hex");
 
   if (hash !== req.headers["x-paystack-signature"]) {
@@ -1813,7 +1816,15 @@ export const paystackWebhook = async (req, res) => {
     return res.status(400).send("Invalid signature");
   }
 
-  const event = req.body;
+  let event;
+  try {
+    event = Buffer.isBuffer(req.body)
+      ? JSON.parse(req.body.toString("utf8"))
+      : req.body;
+  } catch (parseErr) {
+    console.warn("Invalid Paystack webhook payload:", parseErr.message);
+    return res.status(400).send("Invalid payload");
+  }
   const eventType = event.event;
 
   /* -------------------------------

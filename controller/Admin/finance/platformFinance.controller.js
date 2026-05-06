@@ -4,7 +4,12 @@ import VendorOrder from "../../../model/vendor/VendorOrder.js";
 import Vendor from "../../../model/vendor/vendor.model.js";
 import Refund from "../../../model/refund.model.js";
 import { getPlatformConfig } from "../../../services/platformConfig.service.js";
+import axios from "axios";
 import mongoose from "mongoose";
+import {
+    createVendorOrdersAndUpdateWallets,
+    updateOrderAfterPayment,
+} from "../../order/createOrderV2.controller.js";
 
 const buildTransactionDateMatch = (startDate, endDate) => {
     const match = {};
@@ -19,6 +24,70 @@ const buildTransactionDateMatch = (startDate, endDate) => {
 const getAdminWalletBalance = async () => {
     const wallet = await Wallet.findOne({ ownerModel: "Admin" }).select("balance").lean();
     return wallet?.balance || 0;
+};
+
+const getPaymentRecoveryState = (order, vendorOrderCount = 0) => {
+    if (!order) return "missing_order";
+    if (order.paymentStatus === "paid" && vendorOrderCount > 0) return "fulfilled";
+    if (order.paymentStatus === "paid" && vendorOrderCount === 0) return "fulfillment_missing";
+    if (order.paymentStatus === "pending" && order.paymentReference) return "awaiting_verification";
+    if (order.paymentStatus === "failed") return "failed";
+    if (order.paymentStatus === "refunded") return "refunded";
+    return "review";
+};
+
+const verifyPaystackReference = async (reference) => {
+    if (!reference) return null;
+    const verifyResp = await axios.get(
+        `https://api.paystack.co/transaction/verify/${reference}`,
+        {
+            headers: {
+                Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+            },
+        }
+    );
+    return verifyResp.data?.data || null;
+};
+
+const fulfillPaidOrderIfMissing = async (order) => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+
+    try {
+        const hydratedOrder = await Order.findById(order._id).session(session);
+        if (!hydratedOrder) throw new Error("Order not found during fulfillment recovery");
+
+        if (hydratedOrder.paymentStatus !== "paid") {
+            hydratedOrder.paymentStatus = "paid";
+        }
+        if (["pending", "failed", "cancelled"].includes(hydratedOrder.orderStatus)) {
+            hydratedOrder.orderStatus = "accepted";
+        }
+        await hydratedOrder.save({ session });
+
+        const existingCount = await VendorOrder.countDocuments({ userOrderId: hydratedOrder._id }).session(session);
+        let createdVendorOrders = false;
+
+        if (existingCount === 0) {
+            await createVendorOrdersAndUpdateWallets(hydratedOrder, session);
+            createdVendorOrders = true;
+        }
+
+        await session.commitTransaction();
+        session.endSession();
+
+        const recoveredOrder = await Order.findById(order._id).lean();
+        const recoveredCount = await VendorOrder.countDocuments({ userOrderId: order._id });
+        return {
+            order: recoveredOrder,
+            createdVendorOrders,
+            vendorOrderCount: recoveredCount,
+        };
+    } catch (error) {
+        if (session.inTransaction()) await session.abortTransaction();
+        session.endSession();
+        throw error;
+    }
 };
 
 const getAdminWalletTransactionStats = async ({ startDate, endDate } = {}) => {
@@ -708,5 +777,216 @@ export const getRefundsList = async (req, res) => {
         });
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * GET PAYMENT RECOVERY LIST
+ * Route: GET /api/admin/finance/payment-recovery
+ */
+export const getPaymentRecoveryList = async (req, res) => {
+    try {
+        const {
+            search,
+            status = "all",
+            page = 1,
+            limit = 25,
+            startDate,
+            endDate,
+        } = req.query;
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const query = {};
+
+        if (startDate || endDate) {
+            query.createdAt = {};
+            if (startDate) query.createdAt.$gte = new Date(startDate);
+            if (endDate) query.createdAt.$lte = new Date(endDate);
+        }
+
+        if (search) {
+            const regex = { $regex: search, $options: "i" };
+            query.$or = [
+                { orderId: regex },
+                { paymentReference: regex },
+                { phone: regex },
+                { "deliveryAddress.name": regex },
+                { "deliveryAddress.phone": regex },
+            ];
+        }
+
+        if (["pending", "paid", "failed", "refunded"].includes(status)) {
+            query.paymentStatus = status;
+        }
+
+        const total = await Order.countDocuments(query);
+        const orders = await Order.find(query)
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .populate("userId", "firstname lastname email phone")
+            .lean();
+
+        const vendorOrderCounts = await VendorOrder.aggregate([
+            { $match: { userOrderId: { $in: orders.map((order) => order._id) } } },
+            { $group: { _id: "$userOrderId", count: { $sum: 1 } } },
+        ]);
+        const countMap = vendorOrderCounts.reduce((acc, entry) => {
+            acc[String(entry._id)] = entry.count;
+            return acc;
+        }, {});
+
+        let payments = orders.map((order) => {
+            const vendorOrderCount = countMap[String(order._id)] || 0;
+            return {
+                ...order,
+                vendorOrderCount,
+                recoveryState: getPaymentRecoveryState(order, vendorOrderCount),
+            };
+        });
+
+        if (["awaiting_verification", "fulfillment_missing", "fulfilled", "review"].includes(status)) {
+            payments = payments.filter((order) => order.recoveryState === status);
+        }
+
+        const summaryMatch = startDate || endDate ? { createdAt: query.createdAt } : {};
+        const [paymentStats, vendorOrderStats] = await Promise.all([
+            Order.aggregate([
+                { $match: summaryMatch },
+                {
+                    $group: {
+                        _id: "$paymentStatus",
+                        count: { $sum: 1 },
+                        amount: { $sum: "$total" },
+                    },
+                },
+            ]),
+            VendorOrder.aggregate([
+                {
+                    $group: {
+                        _id: "$userOrderId",
+                        count: { $sum: 1 },
+                    },
+                },
+            ]),
+        ]);
+
+        const vendorOrderParentIds = new Set(vendorOrderStats.map((entry) => String(entry._id)).filter(Boolean));
+        const paidMissingFulfillment = await Order.countDocuments({
+            paymentStatus: "paid",
+            _id: { $nin: [...vendorOrderParentIds].filter((id) => mongoose.Types.ObjectId.isValid(id)).map((id) => new mongoose.Types.ObjectId(id)) },
+            ...summaryMatch,
+        });
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                payments,
+                summary: {
+                    byPaymentStatus: paymentStats.reduce((acc, entry) => {
+                        acc[entry._id || "unknown"] = {
+                            count: entry.count,
+                            amount: entry.amount,
+                        };
+                        return acc;
+                    }, {}),
+                    paidMissingFulfillment,
+                },
+                pagination: {
+                    total,
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    totalPages: Math.ceil(total / limit),
+                },
+            },
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * POST PAYMENT RECONCILIATION
+ * Route: POST /api/admin/finance/payment-recovery/:reference/reconcile
+ */
+export const reconcilePaymentReference = async (req, res) => {
+    try {
+        const { reference } = req.params;
+        if (!reference) {
+            return res.status(400).json({ success: false, message: "Payment reference is required" });
+        }
+
+        const order = await Order.findOne({
+            $or: [{ paymentReference: reference }, { orderId: reference }],
+        });
+
+        if (!order) {
+            return res.status(404).json({
+                success: false,
+                message: "No local order found for this payment reference. Check Paystack dashboard and refund or escalate manually.",
+                recoveryState: "missing_order",
+            });
+        }
+
+        let paystack = null;
+        if (order.paymentReference) {
+            paystack = await verifyPaystackReference(order.paymentReference);
+        }
+
+        if (paystack && paystack.status !== "success") {
+            order.paymentStatus = "failed";
+            order.orderStatus = "failed";
+            await order.save();
+            return res.status(200).json({
+                success: true,
+                message: "Payment was not successful on Paystack. Order marked failed.",
+                order,
+                paystack: {
+                    status: paystack.status,
+                    reference: paystack.reference,
+                    gateway_response: paystack.gateway_response,
+                },
+                recoveryState: "failed",
+            });
+        }
+
+        let recovered = { order, createdVendorOrders: false, vendorOrderCount: await VendorOrder.countDocuments({ userOrderId: order._id }) };
+
+        if (paystack?.status === "success" && order.paymentStatus !== "paid") {
+            if (order.paymentStatus === "pending") {
+                const updatedOrder = await updateOrderAfterPayment(order._id, order.paymentReference);
+                recovered = {
+                    order: updatedOrder,
+                    createdVendorOrders: true,
+                    vendorOrderCount: await VendorOrder.countDocuments({ userOrderId: order._id }),
+                };
+            } else {
+                recovered = await fulfillPaidOrderIfMissing(order);
+            }
+        } else if (order.paymentStatus === "paid" && recovered.vendorOrderCount === 0) {
+            recovered = await fulfillPaidOrderIfMissing(order);
+        }
+
+        const recoveryState = getPaymentRecoveryState(recovered.order, recovered.vendorOrderCount);
+
+        return res.status(200).json({
+            success: true,
+            message: recovered.createdVendorOrders
+                ? "Payment reconciled and vendor order fulfillment recovered."
+                : "Payment reconciliation completed. No fulfillment repair was needed.",
+            order: recovered.order,
+            paystack: paystack
+                ? {
+                    status: paystack.status,
+                    reference: paystack.reference,
+                    paid_at: paystack.paid_at,
+                    amount: paystack.amount ? paystack.amount / 100 : null,
+                }
+                : null,
+            vendorOrderCount: recovered.vendorOrderCount,
+            recoveryState,
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
