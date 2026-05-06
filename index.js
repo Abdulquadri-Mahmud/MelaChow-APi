@@ -88,6 +88,8 @@ const allowedOrigins = [
   'http://localhost:3001',
   'https://melachow-admin.vercel.app',
   'https://admin.melachow.com',
+  'https://vendor.melachow.com',
+  'https://rider.melachow.com',
   process.env.CLIENT_URL, // Dynamic from env
 ].filter(Boolean);
 
