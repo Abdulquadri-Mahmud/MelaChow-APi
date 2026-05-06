@@ -1394,6 +1394,14 @@ export const updateVendorOrderStatus = async (req, res) => {
 
     // ✅ Store previous status
     const previousStatus = vendorOrder.orderStatus;
+    const readyStatuses = ['ready_for_pickup', 'ready'];
+
+    if (status === 'cancelled' && readyStatuses.includes(previousStatus)) {
+      return res.status(409).json({
+        success: false,
+        message: "This order is already marked ready. Vendors can no longer cancel it; contact admin support if there is a serious issue.",
+      });
+    }
 
     // ✅ Update status
     vendorOrder.orderStatus = status;
@@ -1487,7 +1495,6 @@ export const updateVendorOrderStatus = async (req, res) => {
       // Admin logistics alert: vendor has finished preparing the order.
       // Do not depend on old restaurant.deliveryManagedBy metadata here; platform
       // rider assignment starts from this ready transition.
-      const readyStatuses = ['ready_for_pickup', 'ready'];
       const isReadyTransition = readyStatuses.includes(status) && !readyStatuses.includes(previousStatus);
 
       if (isReadyTransition) {

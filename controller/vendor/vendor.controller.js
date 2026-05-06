@@ -769,6 +769,13 @@ export const updateVendorOrderStatus = async (req, res) => {
       });
     }
 
+    if (status === "cancelled" && ["ready_for_pickup", "ready"].includes(vendorOrder.orderStatus)) {
+      return res.status(409).json({
+        success: false,
+        message: "This order is already marked ready. Vendors can no longer cancel it; contact admin support if there is a serious issue.",
+      });
+    }
+
     // Also update the main Order status
     userOrder.orderStatus = status;
     await userOrder.save();

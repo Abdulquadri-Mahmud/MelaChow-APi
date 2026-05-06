@@ -90,6 +90,13 @@ const NOTIFICATION_CONFIGS = {
         icon: '/icons/icon-192x192.png',
         requireInteraction: true
     },
+    vendor_order_timeout: {
+        title: 'Missed Order',
+        getBody: (data) => `Order #${data.orderId} was automatically cancelled because it was not accepted in time.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: true,
+        vibrate: [500, 100, 500, 100, 500]
+    },
     order_assigned: {
         title: 'New Job Assigned!',
         getBody: (data) => `Head to ${data.restaurantName || 'the store'} for pickup. Earn ₦${data.payout || 600}. Order #${data.orderId}`,
