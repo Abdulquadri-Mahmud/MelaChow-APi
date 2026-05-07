@@ -128,6 +128,18 @@ const vendorDeliveryFeeSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const appliedDiscountSchema = new mongoose.Schema(
+  {
+    code: { type: String, default: "" },
+    type: { type: String, default: "" }, // FIXED / PERCENTAGE
+    amount: { type: Number, default: 0 },
+    scope: { type: String, default: "" },
+    label: { type: String, default: "" },
+    fundedBy: { type: String, default: "" },
+  },
+  { _id: false }
+);
+
 /**
  * Delivery address
  */
@@ -202,13 +214,8 @@ const orderSchema = new mongoose.Schema(
 
     // 🏷️ Discount Snapshot (Added for Discount System)
     appliedDiscount: {
-      code: String,
-      type: String, // FIXED / PERCENTAGE
-      amount: Number,
-      scope: String,
-      label: String,
-      fundedBy: String,
-      _id: false // No ID needed for subdocument
+      type: appliedDiscountSchema,
+      default: null,
     },
 
     // 🎁 Free Delivery Promo — first-order subsidy tracking
