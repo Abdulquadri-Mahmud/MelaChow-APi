@@ -9,6 +9,7 @@ import MenuItem from "../../../model/menu/MenuItem.js";
 import ComboItem from "../../../model/menu/ComboItem.js";
 import { resolveVendorLocation } from "../../../services/locationService.js";
 import ActivityLog from "../../../model/ActivityLog.js";
+import { getVendorOpenStatus } from "../../../utils/vendorOpenStatus.js";
 
 
 /**
@@ -262,13 +263,20 @@ export const reactivateVendor = async (req, res) => {
 // Get all vendors (optionally filter by status, verified, suspended)
 export const getAllVendors = async (req, res) => {
   try {
-    const { verified, suspended, active, isApproved } = req.query;
+    const { verified, suspended, active, isApproved, search } = req.query;
     const filters = {};
 
     if (verified !== undefined) filters.verified = verified === "true";
     if (suspended !== undefined) filters.suspended = suspended === "true";
     if (active !== undefined) filters.active = active === "true";
     if (isApproved !== undefined) filters.isApproved = isApproved === "true";
+    if (search) {
+      filters.$or = [
+        { storeName: { $regex: search, $options: "i" } },
+        { email: { $regex: search, $options: "i" } },
+        { phone: { $regex: search, $options: "i" } },
+      ];
+    }
 
     const vendors = await vendorModel.find(filters)
       .select("+payoutDetails")
@@ -277,7 +285,12 @@ export const getAllVendors = async (req, res) => {
       .sort({ createdAt: -1 })
       .lean();
 
-    res.json({ success: true, count: vendors.length, vendors });
+    const vendorsWithOperations = vendors.map((vendor) => ({
+      ...vendor,
+      openStatus: getVendorOpenStatus(vendor.openingHours),
+    }));
+
+    res.json({ success: true, count: vendorsWithOperations.length, vendors: vendorsWithOperations });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

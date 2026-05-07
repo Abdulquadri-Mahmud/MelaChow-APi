@@ -353,6 +353,72 @@ export const updateVendor = async (req, res) => {
 };
 
 // ---------------------------------
+// UPDATE TODAY'S OPENING HOURS
+// ---------------------------------
+export const updateVendorTodayHours = async (req, res) => {
+  try {
+    if (!req.vendor) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized. Authentication required."
+      });
+    }
+
+    const days = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    const nowParts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "Africa/Lagos",
+      weekday: "long",
+    }).formatToParts(new Date());
+    const weekday = nowParts.find((part) => part.type === "weekday")?.value?.toLowerCase();
+    const today = days.includes(weekday) ? weekday : days[new Date().getDay()];
+
+    const { closed, close, open } = req.body || {};
+    const vendor = await vendorModel.findById(req.vendor._id);
+
+    if (!vendor) {
+      return res.status(404).json({ success: false, message: "Vendor not found" });
+    }
+
+    const currentDayHours = vendor.openingHours?.[today] || {};
+    const nextDayHours = {
+      open: open || currentDayHours.open || "09:00",
+      close: close || currentDayHours.close || "17:00",
+      closed: typeof closed === "boolean" ? closed : !!currentDayHours.closed,
+    };
+
+    if (!nextDayHours.closed && (!nextDayHours.open || !nextDayHours.close)) {
+      return res.status(400).json({
+        success: false,
+        message: "Opening and closing time are required when the restaurant is open.",
+      });
+    }
+
+    vendor.openingHours = {
+      ...(vendor.openingHours?.toObject?.() || vendor.openingHours || {}),
+      [today]: nextDayHours,
+    };
+
+    await vendor.save();
+
+    res.status(200).json({
+      success: true,
+      message: nextDayHours.closed
+        ? "Restaurant marked closed for today."
+        : "Today's closing time updated.",
+      data: vendor,
+      day: today,
+      todayHours: nextDayHours,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error updating today's hours",
+      error: error.message,
+    });
+  }
+};
+
+// ---------------------------------
 // DELETE VENDOR (Soft Delete)
 // ---------------------------------
 export const deleteVendor = async (req, res) => {

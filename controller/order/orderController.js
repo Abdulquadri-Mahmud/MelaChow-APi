@@ -22,6 +22,7 @@ import { refundOrderToWallet } from "../../services/refund.service.js";
 import logger from "../../config/logger.js";
 import { sendOrderNotification } from "../../services/notification.service.js";
 import { emitOrderStatusUpdate } from "../../socket/events/orderEvents.js";
+import { assertVendorIsOpen } from "../../utils/vendorOpenStatus.js";
 
 // Helper function to normalize metadata from Paystack (Object or String)
 // Kept for backward compatibility if needed, though pendingOrder strategy supercedes it.
@@ -583,6 +584,22 @@ export const createOrder = async ({
       };
     });
 
+    const uniqueRestaurantsInItems = [
+      ...new Set(normalizedItems.map((i) => i.restaurantId)),
+    ];
+
+    const vendorsForOrder = await Vendor.find({
+      _id: { $in: uniqueRestaurantsInItems },
+    }).select("storeName openingHours").session(session).lean();
+
+    if (vendorsForOrder.length !== uniqueRestaurantsInItems.length) {
+      throw new Error("One or more restaurants not found");
+    }
+
+    for (const vendor of vendorsForOrder) {
+      assertVendorIsOpen(vendor);
+    }
+
     // As `normalizedItems` map was synchronous but we need async ops (decrementStock which saves), 
     // we have a problem: the original map didn't await anything but `decrementStock` needs await to save.
     // Wait, `decrementStock` calls `food.save({session})`.
@@ -604,10 +621,6 @@ export const createOrder = async ({
       (sum, i) => sum + i.price * i.quantity,
       0
     );
-
-    const uniqueRestaurantsInItems = [
-      ...new Set(normalizedItems.map((i) => i.restaurantId)),
-    ];
 
     /* -------------------------------
      * 5️⃣ DELIVERY FEE MAP (STRICT)

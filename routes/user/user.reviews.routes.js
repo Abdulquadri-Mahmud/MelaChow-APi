@@ -4,6 +4,7 @@ import { adminAuth } from "../../middleware/adminAuth.js";
 import { 
   createReview,
   deleteReview,
+  getAllVendorReviews,
   getUserReviews,
   getVendorReviews
 } from "../../controller/user/user.reviews.controller.js";
@@ -18,6 +19,7 @@ router.post("/create-reviews",auth, createReview);
 router.get("/user-reviews", adminAuth, getUserReviews);
 
 // Public or admin gets reviews for a vendor
+router.get("/vendor-reviews/all", adminAuth, getAllVendorReviews);
 router.get("/vendor-reviews", adminAuth, getVendorReviews);
 
 // Delete a review

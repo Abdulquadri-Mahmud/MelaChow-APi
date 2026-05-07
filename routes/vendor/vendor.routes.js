@@ -11,6 +11,7 @@ import {
     getVendorOrderById,
     restoreVendor,
     updateVendor,
+    updateVendorTodayHours,
     getVendorPayoutDetails
 } from "../../controller/vendor/vendor.controller.js";
 import {
@@ -40,6 +41,7 @@ router.get("/orders", vendorAuth, getVendorOrders);         // Get vendor orders
 router.get("/orders/:vendorOrderId", vendorAuth, getVendorOrderById); // Get single vendor order
 router.patch("/orders/:vendorOrderId/update", vendorAuth, updateVendorOrderStatus); // Update order status
 router.patch("/orders/:vendorOrderId/complete", vendorAuth, completeVendorOrder); // Complete order status
+router.patch("/today-hours", vendorAuth, updateVendorTodayHours); // Update only today's opening hours
 router.patch("/update-vendor", vendorAuth, updateVendor);        // Update vendor
 router.delete("/delete-vendor", vendorAuth, deleteVendor);     // Soft delete
 router.patch("/restore-vendor", vendorAuth, restoreVendor); // Restore soft-deleted vendor

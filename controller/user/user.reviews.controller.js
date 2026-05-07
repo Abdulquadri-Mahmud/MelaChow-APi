@@ -127,6 +127,132 @@ export const getVendorReviews = async (req, res) => {
 };
 
 /**
+ * @desc Admin overview of all vendor reviews
+ * @route GET /api/admin/user/reviews/vendor-reviews/all
+ */
+export const getAllVendorReviews = async (req, res) => {
+  try {
+    const {
+      vendorId,
+      rating,
+      search,
+      page = 1,
+      limit = 50,
+    } = req.query;
+
+    const filters = {};
+    if (vendorId) filters.vendorId = vendorId;
+    if (rating && rating !== "all") filters.rating = Number(rating);
+
+    const safePage = Math.max(Number(page) || 1, 1);
+    const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
+    const skip = (safePage - 1) * safeLimit;
+
+    let vendorIdsFromSearch = [];
+    if (search) {
+      const vendors = await vendorModel.find({
+        $or: [
+          { storeName: { $regex: search, $options: "i" } },
+          { email: { $regex: search, $options: "i" } },
+        ],
+      }).select("_id").lean();
+      vendorIdsFromSearch = vendors.map((vendor) => vendor._id);
+
+      filters.$or = [
+        { comment: { $regex: search, $options: "i" } },
+        ...(vendorIdsFromSearch.length ? [{ vendorId: { $in: vendorIdsFromSearch } }] : []),
+      ];
+    }
+
+    const [reviews, total, ratingStats, vendorStats, affectedVendorIds] = await Promise.all([
+      Reviews.find(filters)
+        .populate("userId", "firstname lastname email phone")
+        .populate("vendorId", "storeName logo email phone rating ratingCount openingHours active suspended")
+        .populate("foodId", "name image_url rating")
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(safeLimit)
+        .lean(),
+      Reviews.countDocuments(filters),
+      Reviews.aggregate([
+        { $match: filters },
+        { $group: { _id: "$rating", count: { $sum: 1 } } },
+      ]),
+      Reviews.aggregate([
+        { $match: filters },
+        {
+          $group: {
+            _id: "$vendorId",
+            count: { $sum: 1 },
+            averageRating: { $avg: "$rating" },
+            lowRatings: {
+              $sum: { $cond: [{ $lte: ["$rating", 2] }, 1, 0] },
+            },
+          },
+        },
+        { $sort: { lowRatings: -1, count: -1 } },
+        { $limit: 8 },
+        {
+          $lookup: {
+            from: "vendors",
+            localField: "_id",
+            foreignField: "_id",
+            as: "vendor",
+          },
+        },
+        { $unwind: "$vendor" },
+        {
+          $project: {
+            count: 1,
+            averageRating: 1,
+            lowRatings: 1,
+            storeName: "$vendor.storeName",
+            logo: "$vendor.logo",
+          },
+        },
+      ]),
+      Reviews.distinct("vendorId", filters),
+    ]);
+
+    const ratingDistribution = ratingStats.reduce((acc, item) => {
+      acc[item._id] = item.count;
+      return acc;
+    }, { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 });
+
+    const averageRating = total
+      ? ratingStats.reduce((sum, item) => sum + Number(item._id || 0) * Number(item.count || 0), 0) / total
+      : 0;
+
+    res.status(200).json({
+      success: true,
+      data: {
+        reviews,
+        stats: {
+          total,
+          averageRating: Number(averageRating.toFixed(2)),
+          lowRatingCount: (ratingDistribution[1] || 0) + (ratingDistribution[2] || 0),
+          ratingDistribution,
+          vendorStats,
+          affectedVendorCount: affectedVendorIds.length,
+        },
+        pagination: {
+          total,
+          page: safePage,
+          limit: safeLimit,
+          totalPages: Math.ceil(total / safeLimit),
+        },
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error fetching vendor reviews",
+      error: error.message,
+    });
+  }
+};
+
+/**
  * @desc Delete a review (admin or user)
  * @route DELETE /api/reviews?reviewId=...
  */
