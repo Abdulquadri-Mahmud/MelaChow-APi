@@ -46,6 +46,8 @@ import socketHealthRoutes from './routes/socket.routes.js';
 import riderNotificationRoutes from './routes/riderNotification.routes.js';
 import publicPromoRoutes from "./routes/promo/publicPromo.routes.js";
 import platformConfigPublicRoutes from "./routes/public/platformConfig.public.routes.js";
+import supportTicketRoutes from "./routes/supportTicket.routes.js";
+import adminSupportTicketRoutes from "./routes/Admin/supportTicket.routes.js";
 import http from 'http';
 import redisClient from './config/redis.js';
 import './config/queue.js';
@@ -297,6 +299,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/socket', socketHealthRoutes);
 app.use("/api/promos", publicPromoRoutes);
 app.use("/api/public", platformConfigPublicRoutes);
+app.use("/api/support", supportTicketRoutes);
 
 // Vendors routes
 app.use("/api/vendors", vendorRoutes);
@@ -320,6 +323,7 @@ app.use('/api/admin/user/reviews', ReviewsRoutes);
 app.use('/api/admin/locations', adminLocationRoutes);
 app.use('/api/admin/orders', adminOrderRoutes);
 app.use('/api/admin/finance', platformFinanceRouter);
+app.use('/api/admin/support', adminSupportTicketRoutes);
 
 // Transactions
 app.use("/api/transactions", transactionRoutes);

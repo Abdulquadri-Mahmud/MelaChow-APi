@@ -187,6 +187,13 @@ const NOTIFICATION_CONFIGS = {
         icon: '/icons/icon-192x192.png',
         requireInteraction: true,
         vibrate: [500, 100, 500, 100, 500]
+    },
+    support_ticket: {
+        title: 'New Customer Complaint',
+        getBody: (data) => data.message || `Support ticket ${data.ticketNumber || ''} needs review.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: true,
+        vibrate: [400, 100, 400, 100, 400]
     }
 };
 
