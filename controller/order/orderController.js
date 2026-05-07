@@ -23,6 +23,10 @@ import logger from "../../config/logger.js";
 import { sendOrderNotification } from "../../services/notification.service.js";
 import { emitOrderStatusUpdate } from "../../socket/events/orderEvents.js";
 import { assertVendorIsOpen } from "../../utils/vendorOpenStatus.js";
+import {
+  recordPaymentAttemptEvent,
+  validateSuccessfulPaymentForOrder,
+} from "../../services/paymentHardening.service.js";
 
 // Helper function to normalize metadata from Paystack (Object or String)
 // Kept for backward compatibility if needed, though pendingOrder strategy supercedes it.
@@ -895,11 +899,43 @@ export const verifyPayment = async (req, res) => {
 
     const payData = verifyResp.data?.data;
 
+    if (payData?.status === "success") {
+      try {
+        await validateSuccessfulPaymentForOrder(order, payData);
+      } catch (validationErr) {
+        if (lockAcquired) {
+          await PaymentLock.deleteOne({ reference }).catch(e => console.error("Lock release failed:", e.message));
+        }
+        console.error(`Payment validation failed for Order ${order.orderId}:`, validationErr.message);
+        return res.status(validationErr.statusCode || 400).json({
+          success: false,
+          message: validationErr.message,
+          code: validationErr.code || "PAYMENT_VALIDATION_FAILED",
+          order,
+          paystack: {
+            reference: payData.reference,
+            status: payData.status,
+            amount: payData.amount ? payData.amount / 100 : null,
+          },
+        });
+      }
+    }
+
     if (!payData || payData.status !== "success") {
       // Payment failed
       if (lockAcquired) {
         await PaymentLock.deleteOne({ reference }).catch(e => console.error("Lock release failed:", e.message));
       }
+
+      await recordPaymentAttemptEvent({
+        reference,
+        order,
+        payData,
+        status: "failed",
+        recoveryState: "failed",
+        type: "customer_payment_verify_failed",
+        message: payData?.gateway_response || "Payment was not successful on provider",
+      });
 
       order.paymentStatus = "failed";
       order.orderStatus = "failed";
@@ -1046,11 +1082,43 @@ export const verifyPaymentV2 = async (req, res) => {
 
     const payData = verifyResp.data?.data;
 
+    if (payData?.status === "success") {
+      try {
+        await validateSuccessfulPaymentForOrder(order, payData);
+      } catch (validationErr) {
+        if (lockAcquired) {
+          await PaymentLock.deleteOne({ reference }).catch(e => console.error("Lock release failed:", e.message));
+        }
+        console.error(`[V2] Payment validation failed for Order ${order.orderId}:`, validationErr.message);
+        return res.status(validationErr.statusCode || 400).json({
+          success: false,
+          message: validationErr.message,
+          code: validationErr.code || "PAYMENT_VALIDATION_FAILED",
+          order,
+          paystack: {
+            reference: payData.reference,
+            status: payData.status,
+            amount: payData.amount ? payData.amount / 100 : null,
+          },
+        });
+      }
+    }
+
     if (!payData || payData.status !== "success") {
       // Payment failed
       if (lockAcquired) {
         await PaymentLock.deleteOne({ reference }).catch(e => console.error("Lock release failed:", e.message));
       }
+
+      await recordPaymentAttemptEvent({
+        reference,
+        order,
+        payData,
+        status: "failed",
+        recoveryState: "failed",
+        type: "customer_payment_verify_failed",
+        message: payData?.gateway_response || "Payment was not successful on provider",
+      });
 
       order.paymentStatus = "failed";
       order.orderStatus = "failed";
@@ -1889,6 +1957,12 @@ export const paystackWebhook = async (req, res) => {
       }
 
       console.log("✅ Webhook: Found existing order, updating...", reference);
+      try {
+        await validateSuccessfulPaymentForOrder(existingOrder, event.data);
+      } catch (validationErr) {
+        console.error("Webhook payment validation failed:", validationErr.message);
+        return res.status(200).send("Webhook payment validation recorded for manual review");
+      }
       await updateOrderAfterPayment(existingOrder._id, reference);
       return res.status(200).send("Webhook processed successfully");
     }
@@ -1922,6 +1996,15 @@ export const paystackWebhook = async (req, res) => {
     }
 
     console.warn("❌ Webhook: No Order or PendingOrder found for ref:", reference);
+    await recordPaymentAttemptEvent({
+      reference,
+      payData: event.data,
+      status: event.data?.status === "success" ? "review" : "failed",
+      recoveryState: "missing_order",
+      type: "webhook_missing_local_order",
+      message: "Paystack webhook arrived but no local order or pending order was found",
+    });
+
     return res.status(200).send("Order expired or not found");
 
   } catch (err) {
