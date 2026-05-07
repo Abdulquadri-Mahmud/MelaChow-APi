@@ -51,6 +51,7 @@ const notificationSchema = new mongoose.Schema({
             'rider_assignment_accepted',
             'rider_assignment_timeout',
             'vendor_review',           // ✅ New Admin Type
+            'support_ticket',
             'system',                  // ✅ New Admin Type
             'promo',
             'discount',
