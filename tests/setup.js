@@ -2,6 +2,11 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import mongoose from 'mongoose';
 import { jest } from '@jest/globals';
 
+process.env.NODE_ENV = process.env.NODE_ENV || 'test';
+process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
+process.env.RESEND_API_KEY = process.env.RESEND_API_KEY || 're_test_key';
+process.env.MONGOMS_MD5_CHECK = process.env.MONGOMS_MD5_CHECK || 'false';
+
 let mongod;
 
 // Start in-memory MongoDB before all tests
@@ -56,4 +61,3 @@ jest.mock('../config/queue.js', () => ({
 
 // Prevent workers from initializing during tests
 jest.mock('../workers/index.js', () => ({}));
-

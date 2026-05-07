@@ -2,7 +2,7 @@ export default {
     testEnvironment: 'node',
     moduleNameMapper: {
         // Mock ioredis with ioredis-mock for all tests
-        '^ioredis$': '<rootDir>/tests/__mocks__/ioredis.js',
+        '^ioredis$': '<rootDir>/tests/__mocks__/ioredis.cjs',
     },
     transform: {},
     testMatch: ['**/tests/**/*.test.js'],
