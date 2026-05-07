@@ -260,6 +260,46 @@ const orderLimiter = rateLimit({
   message: { success: false, message: 'Too many order requests, please slow down.' },
 });
 
+const supportLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 8,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many support requests, please wait before submitting again.' },
+});
+
+const discountLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 25,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many coupon checks, please try again shortly.' },
+});
+
+const transactionLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many payment requests, please try again shortly.' },
+});
+
+const notificationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 40,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many notification requests, please slow down.' },
+});
+
+const adminRecoveryLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many payment recovery requests, please slow down.' },
+});
+
 // Apply global limiter to all routes
 app.use(globalLimiter);
 
@@ -268,9 +308,18 @@ app.use('/api/auth', authLimiter);
 app.use('/api/user/auth', authLimiter);
 app.use('/api/vendor/auth', authLimiter);
 app.use('/api/admin/auth', authLimiter);
+app.use('/api/auth/rider', authLimiter);
 app.use('/api/wallet', walletLimiter);
 app.use('/api/order', orderLimiter);
 app.use('/api/orders', orderLimiter);
+app.use('/api/transactions', transactionLimiter);
+app.use('/api/discounts', discountLimiter);
+app.use('/api/support', supportLimiter);
+app.use('/api/notifications', notificationLimiter);
+app.use('/api/vendors/notifications', notificationLimiter);
+app.use('/api/admin/notifications', notificationLimiter);
+app.use('/api/riders/notifications', notificationLimiter);
+app.use('/api/admin/finance/payment-recovery', adminRecoveryLimiter);
 
 
 // console.log(cors(corsOptions))

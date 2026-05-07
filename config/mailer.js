@@ -1,6 +1,18 @@
 ﻿import { Resend } from 'resend';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
+let resend;
+
+const getResendClient = () => {
+    if (resend) return resend;
+
+    if (!process.env.RESEND_API_KEY) {
+        if (process.env.NODE_ENV === 'test') return null;
+        throw new Error('RESEND_API_KEY environment variable is required');
+    }
+
+    resend = new Resend(process.env.RESEND_API_KEY);
+    return resend;
+};
 
 /**
  * Send transactional email via Resend API.
@@ -13,7 +25,12 @@ const resend = new Resend(process.env.RESEND_API_KEY);
  * @param {string} options.html - HTML email body
  */
 export const sendMail = async ({ to, subject, html }) => {
-    const { data, error } = await resend.emails.send({
+    const client = getResendClient();
+    if (!client) {
+        return { id: 'test-message-id', to, subject };
+    }
+
+    const { data, error } = await client.emails.send({
         from: 'MelaChow <hello@contact.melachow.com>',
         to,
         subject,
@@ -26,4 +43,3 @@ export const sendMail = async ({ to, subject, html }) => {
 
     return data;
 };
-
