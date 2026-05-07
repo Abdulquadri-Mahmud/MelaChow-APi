@@ -32,10 +32,18 @@ const auth = async (req, res, next) => {
       return res.status(403).json({ message: "Invalid or expired token" });
     }
 
+    if (decoded.role && decoded.role !== "user") {
+      return res.status(403).json({ message: "Access denied. User role required." });
+    }
+
     const user = await User.findById(decoded.id).select("-password");
 
     if (!user) {
       return res.status(401).json({ message: "User not found or deleted" });
+    }
+
+    if (!user.isActive || user.suspended || user.banned) {
+      return res.status(403).json({ message: "User account is inactive, suspended, or banned." });
     }
 
     req.user = user;

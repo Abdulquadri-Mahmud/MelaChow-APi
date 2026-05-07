@@ -14,7 +14,7 @@ const optionalAuth = async (req, res, next) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     const user = await User.findById(decoded.id).select("-password");
-    if (user) {
+    if (user && (!decoded.role || decoded.role === "user") && user.isActive && !user.suspended && !user.banned) {
       req.user = user;
       req.userId = decoded.id;
     }

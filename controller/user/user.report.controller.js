@@ -1,7 +1,7 @@
-import Reports from "../models/reportModel.js";
-import userModel from "../models/userModel.js";
-import vendorModel from "../models/vendorModel.js";
-import foodModel from "../models/foodModel.js";
+import Reports from "../../model/reports/report.model.js";
+import userModel from "../../model/user.model.js";
+import vendorModel from "../../model/vendor/vendor.model.js";
+import foodModel from "../../model/vendor/food.model.js";
 
 /**
  * @desc Create a new report
@@ -10,7 +10,8 @@ import foodModel from "../models/foodModel.js";
  */
 export const createReport = async (req, res) => {
   try {
-    const { reporterId, targetType, targetId, reason } = req.body;
+    const { targetType, targetId, reason } = req.body;
+    const reporterId = req.userId;
 
     // Validate required fields
     if (!reporterId || !targetType || !targetId || !reason) {

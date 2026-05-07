@@ -201,6 +201,10 @@ export const updateRiderStatus = async (req, res, next) => {
         const { riderId } = req.params;
         const { status, reason } = req.body;
 
+        if (req.rider._id.toString() !== riderId) {
+            return res.status(403).json({ success: false, message: "Unauthorized to update this rider status" });
+        }
+
         // ✅ FIX: Was calling getSingleRiderForVendor(riderId, req.rider?.vendorId || "dummy")
         // which queries { _id: riderId, vendorId: "dummy" } for admin-managed riders
         // → always throws "Rider not found" BEFORE the status update happens.
@@ -367,6 +371,10 @@ export const markPickedUp = async (req, res, next) => {
     try {
         const { riderId } = req.params;
         const { orderId } = req.body;
+
+        if (req.rider._id.toString() !== riderId) {
+            return res.status(403).json({ success: false, message: "Unauthorized to update this order" });
+        }
 
         const order = await riderService.markPickedUp(orderId, riderId);
 
@@ -752,6 +760,11 @@ export const adminDeactivateRider = async (req, res, next) => {
 export const getRiderWallet = async (req, res, next) => {
     try {
         const { riderId } = req.params;
+
+        if (req.rider._id.toString() !== riderId) {
+            return res.status(403).json({ success: false, message: "Unauthorized to view this wallet" });
+        }
+
         const wallet = await riderService.getRiderWallet(riderId);
         res.status(200).json({ success: true, data: wallet });
     } catch (error) {
