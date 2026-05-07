@@ -4,12 +4,17 @@ import VendorOrder from "../../../model/vendor/VendorOrder.js";
 import Vendor from "../../../model/vendor/vendor.model.js";
 import Refund from "../../../model/refund.model.js";
 import { getPlatformConfig } from "../../../services/platformConfig.service.js";
-import axios from "axios";
 import mongoose from "mongoose";
+import PaymentAttempt from "../../../model/order/PaymentAttempt.js";
 import {
     createVendorOrdersAndUpdateWallets,
     updateOrderAfterPayment,
 } from "../../order/createOrderV2.controller.js";
+import {
+    recordPaymentAttemptEvent,
+    validateSuccessfulPaymentForOrder,
+    verifyPaystackReference as verifyPaystackReferenceStrict,
+} from "../../../services/paymentHardening.service.js";
 
 const buildTransactionDateMatch = (startDate, endDate) => {
     const match = {};
@@ -38,15 +43,7 @@ const getPaymentRecoveryState = (order, vendorOrderCount = 0) => {
 
 const verifyPaystackReference = async (reference) => {
     if (!reference) return null;
-    const verifyResp = await axios.get(
-        `https://api.paystack.co/transaction/verify/${reference}`,
-        {
-            headers: {
-                Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-            },
-        }
-    );
-    return verifyResp.data?.data || null;
+    return verifyPaystackReferenceStrict(reference);
 };
 
 const fulfillPaidOrderIfMissing = async (order) => {
@@ -71,6 +68,15 @@ const fulfillPaidOrderIfMissing = async (order) => {
         if (existingCount === 0) {
             await createVendorOrdersAndUpdateWallets(hydratedOrder, session);
             createdVendorOrders = true;
+            await recordPaymentAttemptEvent({
+                reference: hydratedOrder.paymentReference,
+                order: hydratedOrder,
+                status: "recovered",
+                recoveryState: "fulfilled",
+                type: "admin_fulfillment_recovered",
+                message: "Admin recovery created missing vendor fulfillment",
+                session,
+            });
         }
 
         await session.commitTransaction();
@@ -836,21 +842,72 @@ export const getPaymentRecoveryList = async (req, res) => {
             return acc;
         }, {});
 
+        const orderIds = orders.map((order) => order._id);
+        const references = orders.map((order) => order.paymentReference).filter(Boolean);
+        const attempts = await PaymentAttempt.find({
+            $or: [
+                { orderId: { $in: orderIds } },
+                { reference: { $in: references } },
+            ],
+        }).lean();
+        const attemptByOrderId = attempts.reduce((acc, attempt) => {
+            if (attempt.orderId) acc[String(attempt.orderId)] = attempt;
+            if (attempt.reference) acc[attempt.reference] = attempt;
+            return acc;
+        }, {});
+
         let payments = orders.map((order) => {
             const vendorOrderCount = countMap[String(order._id)] || 0;
+            const paymentAttempt = attemptByOrderId[String(order._id)] || attemptByOrderId[order.paymentReference] || null;
             return {
                 ...order,
                 vendorOrderCount,
-                recoveryState: getPaymentRecoveryState(order, vendorOrderCount),
+                paymentAttempt,
+                recoveryState: paymentAttempt?.recoveryState === "review"
+                    ? "review"
+                    : getPaymentRecoveryState(order, vendorOrderCount),
             };
         });
 
-        if (["awaiting_verification", "fulfillment_missing", "fulfilled", "review"].includes(status)) {
+        if (search) {
+            const regex = new RegExp(search, "i");
+            const orphanAttempts = await PaymentAttempt.find({
+                orderId: null,
+                $or: [
+                    { reference: regex },
+                    { orderCode: regex },
+                    { "orderSnapshot.orderId": regex },
+                ],
+            })
+                .sort({ createdAt: -1 })
+                .limit(10)
+                .lean();
+
+            payments = [
+                ...payments,
+                ...orphanAttempts.map((attempt) => ({
+                    _id: attempt._id,
+                    orderId: attempt.orderCode || attempt.orderSnapshot?.orderId || "Missing local order",
+                    paymentReference: attempt.reference,
+                    paymentStatus: attempt.status,
+                    orderStatus: "missing_order",
+                    total: attempt.expectedAmount || attempt.paidAmount || 0,
+                    createdAt: attempt.createdAt,
+                    userId: null,
+                    phone: "",
+                    vendorOrderCount: 0,
+                    paymentAttempt: attempt,
+                    recoveryState: "missing_order",
+                })),
+            ];
+        }
+
+        if (["awaiting_verification", "fulfillment_missing", "fulfilled", "review", "missing_order"].includes(status)) {
             payments = payments.filter((order) => order.recoveryState === status);
         }
 
         const summaryMatch = startDate || endDate ? { createdAt: query.createdAt } : {};
-        const [paymentStats, vendorOrderStats] = await Promise.all([
+        const [paymentStats, vendorOrderStats, attemptStats] = await Promise.all([
             Order.aggregate([
                 { $match: summaryMatch },
                 {
@@ -865,6 +922,14 @@ export const getPaymentRecoveryList = async (req, res) => {
                 {
                     $group: {
                         _id: "$userOrderId",
+                        count: { $sum: 1 },
+                    },
+                },
+            ]),
+            PaymentAttempt.aggregate([
+                {
+                    $group: {
+                        _id: "$status",
                         count: { $sum: 1 },
                     },
                 },
@@ -891,6 +956,10 @@ export const getPaymentRecoveryList = async (req, res) => {
                         return acc;
                     }, {}),
                     paidMissingFulfillment,
+                    byAttemptStatus: attemptStats.reduce((acc, entry) => {
+                        acc[entry._id || "unknown"] = entry.count;
+                        return acc;
+                    }, {}),
                 },
                 pagination: {
                     total,
@@ -921,9 +990,39 @@ export const reconcilePaymentReference = async (req, res) => {
         });
 
         if (!order) {
+            let paystack = null;
+            try {
+                paystack = await verifyPaystackReference(reference);
+                await recordPaymentAttemptEvent({
+                    reference,
+                    payData: paystack,
+                    status: paystack?.status === "success" ? "review" : "failed",
+                    recoveryState: "missing_order",
+                    type: "admin_reconcile_missing_order",
+                    message: "Admin reconciled provider reference with no matching local order",
+                });
+            } catch (verifyError) {
+                await recordPaymentAttemptEvent({
+                    reference,
+                    status: "review",
+                    recoveryState: "missing_order",
+                    type: "admin_reconcile_missing_order_verify_failed",
+                    message: verifyError.message,
+                });
+            }
+
             return res.status(404).json({
                 success: false,
-                message: "No local order found for this payment reference. Check Paystack dashboard and refund or escalate manually.",
+                message: paystack?.status === "success"
+                    ? "Paystack confirms payment, but no local order exists. Escalate for manual order reconstruction or refund."
+                    : "No local order found for this payment reference. Check Paystack dashboard and refund or escalate manually.",
+                paystack: paystack
+                    ? {
+                        status: paystack.status,
+                        reference: paystack.reference,
+                        amount: paystack.amount ? paystack.amount / 100 : null,
+                    }
+                    : null,
                 recoveryState: "missing_order",
             });
         }
@@ -934,6 +1033,15 @@ export const reconcilePaymentReference = async (req, res) => {
         }
 
         if (paystack && paystack.status !== "success") {
+            await recordPaymentAttemptEvent({
+                reference: order.paymentReference,
+                order,
+                payData: paystack,
+                status: "failed",
+                recoveryState: "failed",
+                type: "admin_reconcile_provider_failed",
+                message: paystack.gateway_response || "Provider payment was not successful",
+            });
             order.paymentStatus = "failed";
             order.orderStatus = "failed";
             await order.save();
@@ -953,6 +1061,24 @@ export const reconcilePaymentReference = async (req, res) => {
         let recovered = { order, createdVendorOrders: false, vendorOrderCount: await VendorOrder.countDocuments({ userOrderId: order._id }) };
 
         if (paystack?.status === "success" && order.paymentStatus !== "paid") {
+            try {
+                await validateSuccessfulPaymentForOrder(order, paystack);
+            } catch (validationErr) {
+                return res.status(validationErr.statusCode || 409).json({
+                    success: false,
+                    message: validationErr.message,
+                    code: validationErr.code || "PAYMENT_VALIDATION_FAILED",
+                    order,
+                    paystack: {
+                        status: paystack.status,
+                        reference: paystack.reference,
+                        paid_at: paystack.paid_at,
+                        amount: paystack.amount ? paystack.amount / 100 : null,
+                    },
+                    recoveryState: "review",
+                });
+            }
+
             if (order.paymentStatus === "pending") {
                 const updatedOrder = await updateOrderAfterPayment(order._id, order.paymentReference);
                 recovered = {

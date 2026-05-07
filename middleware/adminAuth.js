@@ -19,8 +19,15 @@ export const adminAuth = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (!["admin", "super-admin", "finance-admin"].includes(decoded.role)) {
+      return res.status(403).json({ success: false, message: "Access denied. Admin role required." });
+    }
+
     const admin = await Admin.findById(decoded.id);
     if (!admin) return res.status(401).json({ success: false, message: "Invalid token" });
+    if (!admin.isActive) {
+      return res.status(403).json({ success: false, message: "Admin account is inactive." });
+    }
 
     req.admin = admin;
     next();

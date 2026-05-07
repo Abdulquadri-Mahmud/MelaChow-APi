@@ -4,6 +4,8 @@ import Vendor from "../model/vendor/vendor.model.js";
 import Admin from "../model/Admin/admin.model.js";
 import { isTokenBlocked } from "./tokenBlocklist.js";
 
+const ADMIN_ROLES = ["admin", "super-admin", "finance-admin"];
+
 /**
  * Unified authentication middleware that supports Users, Vendors, and Admins.
  * It checks for tokens in their respective cookies and populates req.userId.
@@ -42,7 +44,7 @@ const multiAuth = async (req, res, next) => {
                 try {
                     const decoded = jwt.verify(userToken, process.env.JWT_SECRET);
                     const user = await User.findById(decoded.id).select("-password");
-                    if (user) {
+                    if (user && (!decoded.role || decoded.role === "user") && user.isActive && !user.suspended && !user.banned) {
                         req.user = user;
                         req.userId = decoded.id;
                         req.userType = 'user';
@@ -67,7 +69,7 @@ const multiAuth = async (req, res, next) => {
                 try {
                     const decoded = jwt.verify(vendorToken, process.env.JWT_SECRET);
                     const vendor = await Vendor.findById(decoded.id);
-                    if (vendor) {
+                    if (vendor && decoded.role === 'vendor' && vendor.active && !vendor.suspended && !vendor.deletedAt) {
                         req.vendor = vendor;
                         req.userId = decoded.id;
                         req.userType = 'vendor';
@@ -83,7 +85,7 @@ const multiAuth = async (req, res, next) => {
 
         // 3. Check for Admin token
         const adminToken = req.cookies.adminToken ||
-            (headerToken && headerTokenRole === 'admin' ? headerToken : null);
+            (headerToken && ADMIN_ROLES.includes(headerTokenRole) ? headerToken : null);
 
         if (adminToken) {
             const blocked = await isTokenBlocked(adminToken);
@@ -91,7 +93,7 @@ const multiAuth = async (req, res, next) => {
                 try {
                     const decoded = jwt.verify(adminToken, process.env.JWT_SECRET);
                     const admin = await Admin.findById(decoded.id);
-                    if (admin) {
+                    if (admin && ADMIN_ROLES.includes(decoded.role) && admin.isActive) {
                         req.admin = admin;
                         req.userId = decoded.id;
                         req.userType = 'admin';

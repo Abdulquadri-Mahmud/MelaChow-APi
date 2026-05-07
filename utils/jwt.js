@@ -1,9 +1,16 @@
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 
-export const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-change-in-production';
+export const JWT_SECRET = process.env.JWT_SECRET;
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d'; // 7 days
 const REFRESH_TOKEN_EXPIRES_IN = '30d'; // 30 days
+
+const requireJwtSecret = () => {
+    if (!JWT_SECRET) {
+        throw new Error('JWT_SECRET environment variable is required');
+    }
+    return JWT_SECRET;
+};
 
 /**
  * Generate access token (for cookie-based auth - longer lived)
@@ -18,7 +25,7 @@ export const generateAccessToken = (userId, role = 'user') => {
             role,
             type: 'access'
         },
-        JWT_SECRET,
+        requireJwtSecret(),
         { expiresIn: JWT_EXPIRES_IN }
     );
 };
@@ -36,7 +43,7 @@ export const generateRefreshToken = (userId, role = 'user') => {
             role,
             type: 'refresh'
         },
-        JWT_SECRET,
+        requireJwtSecret(),
         { expiresIn: REFRESH_TOKEN_EXPIRES_IN }
     );
 };
@@ -49,7 +56,7 @@ export const generateRefreshToken = (userId, role = 'user') => {
  */
 export const verifyToken = (token) => {
     try {
-        return jwt.verify(token, JWT_SECRET);
+        return jwt.verify(token, requireJwtSecret());
     } catch (error) {
         if (error.name === 'TokenExpiredError') {
             throw new Error('Token expired');

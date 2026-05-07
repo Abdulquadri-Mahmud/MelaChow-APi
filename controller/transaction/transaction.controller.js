@@ -11,7 +11,24 @@ const PAYSTACK_BASE_URL = "https://api.paystack.co";
 // Initialize payment
 export const initializePayment = async (req, res) => {
   try {
-    const { email, amount, userId, orderId, method = "card" } = req.body;
+    const { email, amount, orderId, method = "card" } = req.body;
+    const userId = req.userId;
+    const normalizedAmount = Number(amount);
+    const customerEmail = req.user?.email || email;
+
+    if (!customerEmail) {
+      return res.status(400).json({
+        status: false,
+        message: "Customer email is required to initialize payment",
+      });
+    }
+
+    if (!Number.isFinite(normalizedAmount) || normalizedAmount <= 0) {
+      return res.status(400).json({
+        status: false,
+        message: "A valid payment amount is required",
+      });
+    }
 
     const reference = `TRX_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
 
@@ -19,7 +36,7 @@ export const initializePayment = async (req, res) => {
     const transaction = await transactionModels.create({
       user: userId,
       order: orderId,
-      amount,
+      amount: normalizedAmount,
       type: "debit",
       method,
       reference,
@@ -29,7 +46,7 @@ export const initializePayment = async (req, res) => {
     // Initialize Paystack
     const response = await axios.post(
       `${PAYSTACK_BASE_URL}/transaction/initialize`,
-      { email, amount: amount * 100, reference },
+      { email: customerEmail, amount: Math.round(normalizedAmount * 100), reference },
       { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}` } }
     );
 
@@ -56,12 +73,9 @@ export const verifyPayment = async (req, res) => {
   try {
     const { reference } = req.query;
 
-    const response = await axios.get(
-      `${PAYSTACK_BASE_URL}/transaction/verify/${reference}`,
-      { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}` } }
-    );
-
-    const data = response.data.data;
+    if (!reference) {
+      return res.status(400).json({ status: false, message: "Payment reference is required" });
+    }
 
     const transaction = await transactionModels.findOne({ reference });
 
@@ -69,12 +83,33 @@ export const verifyPayment = async (req, res) => {
       return res.status(404).json({ status: false, message: "Transaction not found" });
     }
 
+    if (String(transaction.user) !== String(req.userId)) {
+      return res.status(403).json({ status: false, message: "This payment does not belong to this customer" });
+    }
+
+    const response = await axios.get(
+      `${PAYSTACK_BASE_URL}/transaction/verify/${reference}`,
+      { headers: { Authorization: `Bearer ${PAYSTACK_SECRET}` } }
+    );
+
+    const data = response.data.data;
+
     if (data.status === "success") {
+      const expectedAmount = Math.round(Number(transaction.amount) * 100);
+      const paidAmount = Number(data.amount);
+
+      if (paidAmount !== expectedAmount) {
+        transaction.status = "failed";
+        await transaction.save();
+
+        return res.status(409).json({
+          status: false,
+          message: "Payment amount mismatch. Please contact support.",
+        });
+      }
+
       transaction.status = "success";
       await transaction.save();
-
-      // Optional: update user wallet or order status
-      await User.findByIdAndUpdate(transaction.user, { lastLogin: new Date() });
 
       return res.status(200).json({
         status: true,
@@ -107,6 +142,11 @@ export const verifyPayment = async (req, res) => {
 //  */
 
 export const handlePaystackWebhook = async (req, res) => {
+  return res.status(410).json({
+    success: false,
+    message: "Legacy transaction webhook is disabled. Use /api/orders/webhook for order payments.",
+  });
+
   try {
     const event = req.body.event;
 

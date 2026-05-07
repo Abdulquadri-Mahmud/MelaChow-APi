@@ -25,6 +25,7 @@ import VendorDeliveryClaim from "../../model/promo/VendorDeliveryClaim.js";
 import { buildPromoIdentity } from "../../utils/promoIdentity.js";
 import { orderAutoCancelQueue } from "../../config/queue.js";
 import { assertVendorIsOpen } from "../../utils/vendorOpenStatus.js";
+import { recordPaymentAttemptEvent } from "../../services/paymentHardening.service.js";
 
 // Max number of claims allowed from the same IP address.
 // Set to 3 to allow legitimate students sharing campus/hostel WiFi
@@ -1948,6 +1949,19 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
         // 4. Create VendorOrders and update wallets
         const vendorOrderMapping = await createVendorOrdersAndUpdateWallets(order, session);
 
+        await recordPaymentAttemptEvent({
+            reference: paymentReference || order.paymentReference,
+            order,
+            status: "recovered",
+            recoveryState: "fulfilled",
+            type: "order_fulfillment_created",
+            message: "Order marked paid and vendor fulfillment created",
+            metadata: {
+                vendorOrderIds: Object.values(vendorOrderMapping).map((id) => String(id)),
+            },
+            session,
+        });
+
         // 🎁 Claim free delivery slot (Paystack-paid orders)
         // Non-fatal — payment confirmation proceeds regardless of promo outcome
         if (order.freeDeliveryPromo?.eligible && !order.freeDeliveryPromo?.claimed) {
@@ -2050,6 +2064,7 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
  */
 export const createOrderController = async (req, res) => {
     let order = null;
+    let reference = null;
     try {
         const { items, vendorDeliveryFees, deliveryAddress, phone, discountCode, useWallet, idempotencyKey, deviceId } = req.body;
         const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip || "unknown";
@@ -2082,9 +2097,28 @@ export const createOrderController = async (req, res) => {
 
         // 🔄 PAYSTACK FLOW (Default)
         // If not paid by wallet, initialize Paystack
-        const reference = `PSK_${order.orderId}_${Date.now()}`;
+        reference = `PSK_${order.orderId}_${Date.now()}`;
         order.paymentReference = reference;
         await order.save();
+
+        await recordPaymentAttemptEvent({
+            reference,
+            order,
+            status: "initialized",
+            recoveryState: "awaiting_verification",
+            type: "payment_initialized",
+            message: "Payment reference created before Paystack redirect",
+            cartSnapshot: {
+                items,
+                vendorDeliveryFees,
+                deliveryAddress,
+                phone,
+                discountCode,
+                useWallet,
+                idempotencyKey,
+                deviceId: deviceId || req.headers["x-melachow-device-id"] || null,
+            },
+        });
 
         const userEmail = req.user?.email || req.body.email;
         if (!userEmail) throw new Error("Email required for payment initialization");
@@ -2112,6 +2146,17 @@ export const createOrderController = async (req, res) => {
 
         const data = paystackResponse.data?.data;
 
+        await recordPaymentAttemptEvent({
+            reference: data.reference || reference,
+            order,
+            status: "pending",
+            recoveryState: "awaiting_verification",
+            type: "payment_provider_initialized",
+            message: "Paystack authorization URL generated",
+            authorizationUrl: data.authorization_url,
+            accessCode: data.access_code,
+        });
+
         return res.status(201).json({
             success: true,
             message: "Order created successfully. Proceed to payment.",
@@ -2121,6 +2166,20 @@ export const createOrderController = async (req, res) => {
         });
 
     } catch (error) {
+        if (reference && order?._id) {
+            await recordPaymentAttemptEvent({
+                reference,
+                order,
+                status: "failed",
+                recoveryState: "review",
+                type: "payment_initialization_failed",
+                message: error.response?.data?.message || error.message || "Payment initialization failed",
+                metadata: {
+                    providerError: error.response?.data || null,
+                },
+            }).catch((auditError) => logger.warn({ error: auditError.message }, "Failed to record payment initialization failure"));
+        }
+
         if (order?._id && order.paymentStatus !== "paid") {
             await releasePromoReservationsForOrder(order._id);
         }

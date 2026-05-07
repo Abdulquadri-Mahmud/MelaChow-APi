@@ -40,6 +40,13 @@ const authVendor = async (req, res, next) => {
       });
     }
 
+    if (decoded.role !== "vendor") {
+      return res.status(403).json({
+        success: false,
+        message: "Access denied. Vendor role required."
+      });
+    }
+
     // Fetch vendor from database
     const vendor = await vendorModel.findById(decoded.id);
 
@@ -52,10 +59,10 @@ const authVendor = async (req, res, next) => {
 
     // Check vendor is active and not soft-deleted
     // NOTE: Schema field is `active`, not `isActive`
-    if (!vendor.active || vendor.deletedAt) {
+    if (!vendor.active || vendor.suspended || vendor.deletedAt) {
       return res.status(403).json({
         success: false,
-        message: "Vendor account is inactive or has been removed"
+        message: "Vendor account is inactive, suspended, or has been removed"
       });
     }
 

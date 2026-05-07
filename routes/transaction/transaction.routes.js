@@ -6,14 +6,15 @@ import {
     verifyPayment
 
 } from "../../controller/transaction/transaction.controller.js";
+import auth from "../../middleware/auth.middleware.js";
 
 const router = express.Router();
 
 // Initialize a new transaction
-router.post("/initialize", initializePayment);
+router.post("/initialize", auth, initializePayment);
 
 // Verify transaction after Paystack redirect
-router.get("/verify", verifyPayment);
+router.get("/verify", auth, verifyPayment);
 
 // Paystack webhook
 router.post("/webhook", express.json({ type: "*/*" }), handlePaystackWebhook);
