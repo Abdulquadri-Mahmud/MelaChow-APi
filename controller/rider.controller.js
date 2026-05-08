@@ -4,12 +4,16 @@ import { getIO } from "../socket/socketServer.js";
 import Notification from "../model/notification/notification.model.js";
 import Order from "../model/order/Order.js";
 import Rider from "../model/rider.model.js";
+import RiderAssignment from "../model/riderAssignment.model.js";
 import { sendDeliveryOTP, verifyDeliveryOTP } from '../services/otp.service.js';
 
 export const createRider = async (req, res, next) => {
     try {
-        const vendorId = req.admin ? null : req.params.vendorId;
-        const rider = await riderService.createRider(req.body, vendorId);
+        const vendorId = req.params.vendorId || null;
+        const rider = await riderService.createRider(
+            { ...req.body, isVerified: false },
+            vendorId
+        );
         res.status(201).json({ success: true, data: rider.getPublicProfile() });
     } catch (error) {
         next(error);
@@ -236,6 +240,19 @@ export const updateRiderStatus = async (req, res, next) => {
                 const acceptedOrder = await OrderModel.findById(orderId)
                     .select("items userId orderId");
 
+                await OrderModel.findByIdAndUpdate(orderId, {
+                    $set: {
+                        "riderAssignment.status": "accepted",
+                        "riderAssignment.acceptedAt": new Date(),
+                        "riderAssignment.lastReason": ""
+                    }
+                });
+                await RiderAssignment.findOneAndUpdate(
+                    { riderId, orderId, status: "assigned" },
+                    { $set: { status: "accepted", respondedAt: new Date() } },
+                    { sort: { createdAt: -1 } }
+                );
+
                 const resolvedVendorId = vendorId ||
                     acceptedOrder?.items?.[0]?.restaurantId?.toString() || null;
 
@@ -276,12 +293,22 @@ export const updateRiderStatus = async (req, res, next) => {
                 // ── RIDER REJECTED ────────────────────────────────────────────────
                 const OrderModel = (await import("../model/order/Order.js")).default;
                 const VendorOrder = (await import("../model/vendor/VendorOrder.js")).default;
+                const previousOrder = await OrderModel.findById(orderId).select("riderAssignment");
 
                 const order = await OrderModel.findByIdAndUpdate(
                     orderId,
                     {
                         orderStatus: "ready_for_pickup",
                         riderId: null,
+                        riderAssignment: {
+                            status: isTimeout ? "timeout" : "rejected",
+                            assignedAt: previousOrder?.riderAssignment?.assignedAt || null,
+                            acceptedAt: null,
+                            rejectedAt: new Date(),
+                            expiresAt: null,
+                            lastReason: isTimeout ? "timeout" : "rejected",
+                            assignedBy: previousOrder?.riderAssignment?.assignedBy || null
+                        },
                         $push: {
                             statusLog: {
                                 status: actionStatus,
@@ -303,6 +330,18 @@ export const updateRiderStatus = async (req, res, next) => {
                     await VendorOrder.updateMany(
                         { userOrderId: order._id },
                         { $set: { orderStatus: "ready_for_pickup" } }
+                    );
+
+                    await RiderAssignment.findOneAndUpdate(
+                        { riderId, orderId, status: { $in: ["assigned", "accepted"] } },
+                        {
+                            $set: {
+                                status: isTimeout ? "timeout" : "rejected",
+                                respondedAt: new Date(),
+                                reason: isTimeout ? "timeout" : "rejected"
+                            }
+                        },
+                        { sort: { createdAt: -1 } }
                     );
 
                     // Notify vendor via socket
@@ -740,8 +779,34 @@ export const adminGetAllRiders = async (req, res, next) => {
 export const adminUpdateRider = async (req, res, next) => {
     try {
         const { riderId } = req.params;
-        const rider = await riderService.adminUpdateRider(riderId, req.body);
+        const rider = await riderService.adminUpdateRider(riderId, {
+            ...req.body,
+            approvedBy: req.admin?._id
+        });
         res.status(200).json({ success: true, data: rider });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const adminApproveRider = async (req, res, next) => {
+    try {
+        const { riderId } = req.params;
+        const rider = await riderService.adminApproveRider(riderId, req.admin?._id);
+        res.status(200).json({
+            success: true,
+            message: "Rider approved and can now access the rider app",
+            data: rider
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const adminGetAssignmentHistory = async (req, res, next) => {
+    try {
+        const assignments = await riderService.getAssignmentHistory(req.query);
+        res.status(200).json({ success: true, count: assignments.length, data: assignments });
     } catch (error) {
         next(error);
     }

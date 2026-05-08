@@ -4,6 +4,7 @@ import Vendor from "../../../model/vendor/vendor.model.js";
 import Wallet from "../../../model/wallet/wallet.mode.js";
 import User from "../../../model/user.model.js";
 import Rider from "../../../model/rider.model.js";
+import RiderAssignment from "../../../model/riderAssignment.model.js";
 import mongoose from "mongoose";
 import { getPlatformConfig } from "../../../services/platformConfig.service.js";
 
@@ -614,8 +615,7 @@ export const assignRiderToOrder = async (req, res) => {
         }
 
         // Step 4: Find and validate the Rider
-        const Rider = (await import("../../../model/rider.model.js")).default;
-        const rider = await Rider.findById(riderId);
+        let rider = await Rider.findById(riderId);
         if (!rider) {
             return res.status(404).json({
                 success: false,
@@ -623,8 +623,15 @@ export const assignRiderToOrder = async (req, res) => {
             });
         }
 
+        if (!rider.isVerified) {
+            return res.status(400).json({
+                success: false,
+                message: "This rider must be approved before dispatch"
+            });
+        }
+
         // Check availability (status virtual isAvailable: status === "available" && isActive && !deletedAt)
-        if (rider.status !== 'available' || !rider.isActive || rider.deletedAt) {
+        if (rider.status !== 'available' || !rider.isActive || rider.deletedAt || rider.currentOrderId) {
             return res.status(400).json({
                 success: false,
                 message: "This rider is currently unavailable or on another delivery"
@@ -632,50 +639,128 @@ export const assignRiderToOrder = async (req, res) => {
         }
 
         // Step 6: Find the Vendor
-        const vendor = await Vendor.findById(vendorOrder.restaurantId).select('storeName deliveryManagedBy');
+        const vendor = await Vendor.findById(vendorOrder.restaurantId).select('storeName deliveryManagedBy cityId stateId');
+        const cityIdForGuard = masterOrder.deliveryAddress?.cityId || vendor?.cityId || null;
+        const stateIdForGuard = masterOrder.deliveryAddress?.stateId || vendor?.stateId || null;
 
-        // Step 7: Perform the database updates atomically using Promise.allSettled
+        if (cityIdForGuard && rider.cityId?.toString() !== cityIdForGuard.toString()) {
+            return res.status(400).json({
+                success: false,
+                message: "This rider is not assigned to the same city as this order"
+            });
+        }
+
+        const assignmentExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
+        const platformConfig = await getPlatformConfig();
+        const riderPayout = platformConfig.riderFixedPayout || 600;
+
+        // Step 7: Lock the rider and order inside one database transaction.
+        const session = await mongoose.startSession();
+        session.startTransaction();
         const updatePromises = [
             // a) Update VendorOrder(s) — use updateMany to capture all vendors in the order
             VendorOrder.updateMany(
                 { userOrderId: masterOrder._id },
-                { $set: { orderStatus: 'rider_assigned', riderId: riderId } }
+                { $set: { orderStatus: 'rider_assigned', riderId: riderId } },
+                { session }
             ),
             // b) Update master Order
             Order.updateOne(
-                { _id: masterOrder._id },
-                { $set: { orderStatus: 'rider_assigned', riderId: riderId } } // Also set riderId on master order as seen in schema
+                { _id: masterOrder._id, riderId: null, orderStatus: { $in: ['ready_for_pickup', 'ready'] } },
+                {
+                    $set: {
+                        orderStatus: 'rider_assigned',
+                        riderId: riderId,
+                        riderAssignment: {
+                            status: 'assigned',
+                            assignedAt: new Date(),
+                            acceptedAt: null,
+                            rejectedAt: null,
+                            expiresAt: assignmentExpiresAt,
+                            lastReason: '',
+                            assignedBy: req.admin?._id || null
+                        }
+                    },
+                    $push: {
+                        statusLog: {
+                            status: 'rider_assigned',
+                            changedBy: `admin:${req.admin?._id || 'unknown'}`,
+                            timestamp: new Date()
+                        }
+                    }
+                },
+                { session }
             ),
             // c) Update Rider availability
             Rider.updateOne(
-                { _id: riderId },
+                {
+                    _id: riderId,
+                    status: 'available',
+                    isActive: true,
+                    isVerified: true,
+                    deletedAt: null,
+                    currentOrderId: null,
+                    ...(cityIdForGuard ? { cityId: cityIdForGuard } : {}),
+                    ...(stateIdForGuard ? { stateId: stateIdForGuard } : {}),
+                },
                 { 
                     $set: { 
                         status: 'pending_assignment', 
-                        currentOrderId: masterOrder._id // The schema says currentOrderId ref "Order"
+                        currentOrderId: masterOrder._id,
+                        assignmentExpiresAt
                     } 
-                }
+                },
+                { session }
             )
         ];
 
         const results = await Promise.allSettled(updatePromises);
 
         // Check critical updates (a and b)
-        if (results[0].status === 'rejected' || results[1].status === 'rejected') {
-            const error = results[0].reason || results[1].reason;
+        if (
+            results[0].status === 'rejected' ||
+            results[1].status === 'rejected' ||
+            results[2].status === 'rejected' ||
+            results[1].value?.modifiedCount !== 1 ||
+            results[2].value?.modifiedCount !== 1
+        ) {
+            await session.abortTransaction();
+            session.endSession();
+            const error = results[0].reason || results[1].reason || results[2].reason;
             console.error('❌ Critical database update failed:', error.message);
-            return res.status(500).json({
+            return res.status(409).json({
                 success: false,
                 message: 'Failed to assign rider to order',
-                error: error.message
+                error: error?.message || "Rider or order was already assigned"
             });
         }
 
-        if (results[2].status === 'rejected') {
+        if (false && results[2].status === 'rejected') {
             console.warn('⚠️ Rider availability update failed:', results[2].reason?.message);
         }
 
         console.log('✅ Database updates completed successfully');
+
+        await RiderAssignment.create([{
+            orderId: masterOrder._id,
+            vendorOrderId: vendorOrder._id,
+            riderId,
+            vendorId: vendorOrder.restaurantId,
+            stateId: stateIdForGuard,
+            cityId: cityIdForGuard,
+            status: 'assigned',
+            assignedBy: req.admin?._id || null,
+            expiresAt: assignmentExpiresAt,
+            metadata: {
+                restaurantName: vendor?.storeName || '',
+                orderReadableId: masterOrder.orderId || ''
+            }
+        }], { session });
+
+        await session.commitTransaction();
+        session.endSession();
+
+        console.log('Rider assignment transaction committed successfully');
 
         // Step 8: Fire socket events (non-fatal)
         const { emitToRestaurant, emitToOrder, emitToAdmin, emitToRider } = await import("../../../socket/socketServer.js");
@@ -693,7 +778,7 @@ export const assignRiderToOrder = async (req, res) => {
                 customerName: masterOrder.deliveryAddress?.name || "Customer",
                 customerPhone: masterOrder.deliveryAddress?.phone,
                 note: masterOrder.note,
-                payout: 600
+                payout: riderPayout
             }));
             console.log(`✅ Socket: Order assigned event emitted to rider:${riderId}`);
         } catch (e) { console.error('⚠️ Socket error (rider):', e.message); }
@@ -704,7 +789,8 @@ export const assignRiderToOrder = async (req, res) => {
             await sendRiderNotification(rider._id, masterOrder._id, "order_assigned", {
                 restaurantName: vendor?.storeName,
                 orderDatabaseId: masterOrder._id,
-                payout: 600
+                payout: riderPayout,
+                assignmentExpiresAt
             });
             console.log(`✅ Socket + Push: Order assigned event emitted/sent to rider:${riderId}`);
         } catch (e) { console.error('⚠️ Notification error (rider):', e.message); }

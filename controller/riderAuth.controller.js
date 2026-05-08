@@ -24,6 +24,15 @@ export const loginRider = async (req, res, next) => {
             });
         }
 
+        if (!rider.isActive || !rider.isVerified) {
+            return res.status(403).json({
+                success: false,
+                message: rider.isVerified
+                    ? "Rider account is inactive"
+                    : "Rider account is pending admin approval"
+            });
+        }
+
         const isMatch = await rider.comparePassword(password);
         if (!isMatch) {
             await rider.incLoginAttempts();
