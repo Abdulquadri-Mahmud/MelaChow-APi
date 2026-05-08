@@ -66,6 +66,13 @@ export const requireRiderAuth = async (req, res, next) => {
             });
         }
 
+        if (!rider.isVerified) {
+            return res.status(403).json({
+                success: false,
+                message: "Rider account is pending admin approval"
+            });
+        }
+
         req.rider = rider;
         next();
     } catch (err) {

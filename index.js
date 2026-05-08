@@ -54,6 +54,7 @@ import './config/queue.js';
 import './workers/index.js';
 import { initializeSocket } from './socket/socketServer.js';
 import { scheduledPayoutWorker, triggerScheduledPayouts } from "./jobs/scheduledPayout.job.js";
+import { expireStaleRiderAssignments } from "./jobs/riderAssignmentTimeout.job.js";
 import cron from "node-cron";
 
 // Environment loaded via ./config/env.js import above
@@ -505,6 +506,20 @@ const startServer = async () => {
     );
 
     console.log("✅ Scheduled payout cron registered (8 PM WAT daily)");
+
+    cron.schedule(
+        "* * * * *",
+        async () => {
+            try {
+                await expireStaleRiderAssignments();
+            } catch (err) {
+                logger.warn({ err: err.message }, "Rider assignment timeout sweep failed");
+            }
+        },
+        { timezone: "Africa/Lagos" }
+    );
+
+    console.log("Rider assignment timeout sweep registered (every minute)");
 
     // 5. Graceful shutdown
     // Render sends SIGTERM before stopping the instance

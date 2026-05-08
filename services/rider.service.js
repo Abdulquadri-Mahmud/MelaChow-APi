@@ -1,4 +1,5 @@
 import Rider from "../model/rider.model.js";
+import RiderAssignment from "../model/riderAssignment.model.js";
 import Vendor from "../model/vendor/vendor.model.js";
 import Order from "../model/order/Order.js";
 import VendorOrder from "../model/vendor/VendorOrder.js";
@@ -53,6 +54,8 @@ export const createRider = async (riderData, vendorId = null) => {
         managedBy: vendorId ? "vendor" : "admin",
         status: "offline",
         isActive: true,
+        isVerified: Boolean(riderData.isVerified),
+        approvedAt: riderData.isVerified ? new Date() : null,
         payoutDetails: finalPayoutDetails
     });
 
@@ -181,6 +184,7 @@ export const assignRiderToOrder = async (orderId, riderId, vendorId) => {
         const rider = await Rider.findById(riderId).session(session);
         if (!rider) throw new Error("Rider not found");
         if (!rider.vendorId || rider.vendorId.toString() !== vendorId) throw new Error("Rider does not belong to this vendor");
+        if (!rider.isVerified) throw new Error("Rider must be approved before assignment");
         
         // Only enforce 'available' status check for platform-managed riders.
         // For vendor-managed riders, we allow assignment regardless of status per user requirement.
@@ -205,7 +209,7 @@ export const assignRiderToOrder = async (orderId, riderId, vendorId) => {
 
         await Rider.findByIdAndUpdate(
             riderId,
-            { status: "pending_assignment", currentOrderId: orderId },
+            { status: "pending_assignment", currentOrderId: orderId, assignmentExpiresAt: new Date(Date.now() + 5 * 60 * 1000) },
             { session }
         );
 
@@ -244,6 +248,11 @@ export const markPickedUp = async (orderId, riderId) => {
     if (!rider) throw new Error("Rider not found");
 
     order.orderStatus = "out_for_delivery";
+    order.riderAssignment = {
+        ...(order.riderAssignment || {}),
+        status: "picked_up",
+        lastReason: ""
+    };
     order.statusLog.push({
         status: "out_for_delivery",
         changedBy: "rider",
@@ -261,6 +270,11 @@ export const markPickedUp = async (orderId, riderId) => {
 
     // Move rider to on_delivery
     await Rider.findByIdAndUpdate(riderId, { status: "on_delivery" });
+    await RiderAssignment.findOneAndUpdate(
+        { riderId, orderId: order._id, status: { $in: ["assigned", "accepted"] } },
+        { $set: { status: "picked_up", respondedAt: new Date() } },
+        { sort: { createdAt: -1 } }
+    );
 
     // Notification handled in controller — service is data-only
 
@@ -288,6 +302,11 @@ export const markDelivered = async (orderId, riderId) => {
         if (!rider) throw new Error("Rider not found");
 
         order.orderStatus = "delivered";
+        order.riderAssignment = {
+            ...(order.riderAssignment || {}),
+            status: "delivered",
+            lastReason: ""
+        };
         order.statusLog.push({
             status: "delivered",
             changedBy: "rider",
@@ -368,6 +387,13 @@ export const markDelivered = async (orderId, riderId) => {
         await order.save({ session });
 
         await rider.freeUp(riderEarningsToRecord);
+        rider.assignmentExpiresAt = null;
+        await rider.save({ session });
+        await RiderAssignment.findOneAndUpdate(
+            { riderId, orderId: order._id, status: { $in: ["assigned", "accepted", "picked_up"] } },
+            { $set: { status: "delivered", respondedAt: new Date() } },
+            { session, sort: { createdAt: -1 } }
+        );
         await session.commitTransaction();
 
         // Capture values needed after session closes
@@ -515,6 +541,10 @@ export const updateRiderStatus = async (riderId, status) => {
         throw new Error("Invalid status update");
     }
 
+    if (!rider.isVerified && status === "available") {
+        throw new Error("Your rider account is pending admin approval");
+    }
+
     if (rider.currentOrderId && status === "offline") {
         throw new Error("Cannot go offline while assigned to an order");
     }
@@ -526,7 +556,12 @@ export const updateRiderStatus = async (riderId, status) => {
     }
 
     if (status === "available" && rider.status === "pending_assignment") {
+        await RiderAssignment.findOneAndUpdate(
+            { riderId, orderId: rider.currentOrderId, status: "assigned" },
+            { $set: { status: "rejected", respondedAt: new Date(), reason: "rider_released_assignment" } }
+        );
         rider.currentOrderId = null;
+        rider.assignmentExpiresAt = null;
     }
 
     rider.status = status;
@@ -603,15 +638,23 @@ export const getAllRiders = async (filters = {}) => {
     if (filters.status) query.status = filters.status;
     if (filters.vendorId) query.vendorId = filters.vendorId;
     if (filters.managedBy) query.managedBy = filters.managedBy;
+    if (filters.cityId) query.cityId = filters.cityId;
+    if (filters.stateId) query.stateId = filters.stateId;
+    if (filters.isVerified !== undefined) query.isVerified = filters.isVerified === true || filters.isVerified === "true";
     if (filters.isActive !== undefined) query.isActive = filters.isActive;
     
     // Support filtering for available riders (for assignment modals)
     if (filters.available === 'true' || filters.available === true) {
         query.status = 'available';
         query.isActive = true;
+        query.isVerified = true;
+        query.currentOrderId = null;
     }
 
-    return Rider.find(query).populate("vendorId", "storeName email phone");
+    return Rider.find(query)
+        .populate("vendorId", "storeName email phone")
+        .populate("stateId", "name")
+        .populate("cityId", "name stateId");
 };
 
 /**
@@ -621,12 +664,31 @@ export const adminUpdateRider = async (riderId, updateData) => {
     const rider = await Rider.findById(riderId);
     if (!rider) throw new Error("Rider not found");
 
-    const allowedUpdates = ["name", "phone", "notes", "isActive", "avatar", "metadata", "vendorId", "status"];
+    const allowedUpdates = [
+        "name", "phone", "notes", "isActive", "avatar", "metadata",
+        "vendorId", "status", "stateId", "cityId", "serviceZones", "isVerified"
+    ];
+
+    if (rider.currentOrderId && (updateData.status || updateData.vendorId !== undefined || updateData.cityId !== undefined || updateData.stateId !== undefined)) {
+        throw new Error("Cannot change rider status, vendor, or city while the rider has an active assignment");
+    }
+
     allowedUpdates.forEach(key => {
         if (updateData[key] !== undefined) {
             rider[key] = key === "vendorId" && !updateData[key] ? null : updateData[key];
         }
     });
+
+    if (updateData.isVerified === true && !rider.approvedAt) {
+        rider.approvedAt = new Date();
+        rider.approvedBy = updateData.approvedBy || null;
+    }
+
+    if (updateData.isVerified === false) {
+        rider.approvedAt = null;
+        rider.approvedBy = null;
+        if (rider.status === "available") rider.status = "offline";
+    }
 
     if (updateData.vendorId === null || updateData.vendorId === "") {
         rider.managedBy = "admin";
@@ -669,6 +731,37 @@ export const adminUpdateRider = async (riderId, updateData) => {
 
     await rider.save();
     return rider.getPublicProfile();
+};
+
+export const adminApproveRider = async (riderId, adminId) => {
+    const rider = await Rider.findById(riderId);
+    if (!rider) throw new Error("Rider not found");
+    if (!rider.isActive || rider.deletedAt) throw new Error("Cannot approve an inactive rider");
+    if (!rider.cityId || !rider.stateId) throw new Error("Assign the rider's state and city before approval");
+
+    rider.isVerified = true;
+    rider.approvedAt = new Date();
+    rider.approvedBy = adminId || null;
+    if (rider.status === "available" && rider.currentOrderId) {
+        rider.status = "offline";
+    }
+    await rider.save();
+    return rider.getPublicProfile();
+};
+
+export const getAssignmentHistory = async (filters = {}) => {
+    const query = {};
+    if (filters.riderId) query.riderId = filters.riderId;
+    if (filters.orderId) query.orderId = filters.orderId;
+    if (filters.status) query.status = filters.status;
+    if (filters.cityId) query.cityId = filters.cityId;
+    return RiderAssignment.find(query)
+        .populate("riderId", "name phone status cityId stateId")
+        .populate("vendorId", "storeName")
+        .populate("cityId", "name")
+        .populate("stateId", "name")
+        .sort({ createdAt: -1 })
+        .limit(Number(filters.limit || 100));
 };
 
 /**

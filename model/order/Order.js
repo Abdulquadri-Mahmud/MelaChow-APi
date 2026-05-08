@@ -292,6 +292,20 @@ const orderSchema = new mongoose.Schema(
       ref: "Rider",
       default: null,
     },
+    riderAssignment: {
+      status: {
+        type: String,
+        enum: ["none", "assigned", "accepted", "rejected", "timeout", "picked_up", "delivered"],
+        default: "none",
+        index: true,
+      },
+      assignedAt: { type: Date, default: null },
+      acceptedAt: { type: Date, default: null },
+      rejectedAt: { type: Date, default: null },
+      expiresAt: { type: Date, default: null, index: true },
+      lastReason: { type: String, default: "" },
+      assignedBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin", default: null },
+    },
 
     // Rider's actual payout for this delivery.
     // Set at delivery confirmation time in markDelivered.

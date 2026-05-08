@@ -14,6 +14,22 @@ const riderSchema = new mongoose.Schema(
             default: null,
             index: true
         },
+        stateId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "State",
+            default: null,
+            index: true
+        },
+        cityId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "City",
+            default: null,
+            index: true
+        },
+        serviceZones: {
+            type: [String],
+            default: []
+        },
         managedBy: {
             type: String,
             enum: ["vendor", "admin"],
@@ -40,6 +56,13 @@ const riderSchema = new mongoose.Schema(
         currentOrderId: {
             type: mongoose.Schema.Types.ObjectId,
             ref: "Order",
+            default: null
+        },
+        assignmentExpiresAt: { type: Date, default: null, index: true },
+        approvedAt: { type: Date, default: null },
+        approvedBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "Admin",
             default: null
         },
         isActive: { type: Boolean, default: true },
@@ -75,10 +98,15 @@ const riderSchema = new mongoose.Schema(
 // Compound Indexes
 riderSchema.index({ vendorId: 1, status: 1 });
 riderSchema.index({ vendorId: 1, isActive: 1, deletedAt: 1 });
+riderSchema.index({ cityId: 1, status: 1, isActive: 1, isVerified: 1 });
+riderSchema.index(
+    { currentOrderId: 1 },
+    { unique: true, partialFilterExpression: { currentOrderId: { $type: "objectId" } } }
+);
 
 // Virtuals
 riderSchema.virtual("isAvailable").get(function () {
-    return this.status === "available" && this.isActive && !this.deletedAt;
+    return this.status === "available" && this.isActive && this.isVerified && !this.deletedAt && !this.currentOrderId;
 });
 
 // Instance Methods
