@@ -666,7 +666,7 @@ export const adminUpdateRider = async (riderId, updateData) => {
 
     const allowedUpdates = [
         "name", "phone", "notes", "isActive", "avatar", "metadata",
-        "vendorId", "status", "stateId", "cityId", "serviceZones", "isVerified"
+        "vendorId", "status", "stateId", "cityId", "serviceZones", "vehicleOwnership", "vehicleType", "isVerified"
     ];
 
     if (rider.currentOrderId && (updateData.status || updateData.vendorId !== undefined || updateData.cityId !== undefined || updateData.stateId !== undefined)) {
@@ -796,4 +796,59 @@ export const getRiderWallet = async (riderId) => {
     }
 
     return wallet;
+};
+
+export const getRiderHistorySummary = async (riderId, filters = {}) => {
+    const rider = await Rider.findById(riderId).populate('cityId stateId');
+    if (!rider) throw new Error('Rider not found');
+
+    const config = await getPlatformConfig();
+    const payoutHour = Number(filters.payoutHour ?? config.riderPayoutHour ?? 10);
+    const now = new Date();
+
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+
+    const payoutCutoff = new Date(todayStart);
+    payoutCutoff.setHours(payoutHour, 0, 0, 0);
+
+    const nextPayout = new Date(payoutCutoff);
+    if (now >= payoutCutoff) {
+        nextPayout.setDate(nextPayout.getDate() + 1);
+    }
+
+    const wallet = await Wallet.findOne({ ownerId: riderId, ownerModel: 'Rider' }).lean();
+    const transactions = wallet?.transactions || [];
+
+    const payoutsToday = transactions.filter((tx) =>
+        tx.transactionType === 'rider_payout' &&
+        new Date(tx.date) >= todayStart &&
+        new Date(tx.date) <= now
+    );
+
+    const payoutsBeforeCutoff = payoutsToday.filter((tx) => new Date(tx.date) < payoutCutoff);
+    const ridesBeforePayout = new Set(payoutsBeforeCutoff.map((tx) => tx.orderId?.toString())).size;
+    const earningsBeforePayout = payoutsBeforeCutoff.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
+
+    const payoutsAfterCutoff = payoutsToday.filter((tx) => new Date(tx.date) >= payoutCutoff);
+    const ridesAfterCutoff = new Set(payoutsAfterCutoff.map((tx) => tx.orderId?.toString())).size;
+    const earningsAfterCutoff = payoutsAfterCutoff.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
+
+    return {
+        rider: rider.getPublicProfile ? rider.getPublicProfile() : rider,
+        payoutHour,
+        payoutCutoff,
+        nextPayout,
+        earnings: {
+            totalToday: payoutsToday.reduce((sum, tx) => sum + Number(tx.amount || 0), 0),
+            beforePayout: earningsBeforePayout,
+            afterPayout: earningsAfterCutoff,
+        },
+        rides: {
+            today: new Set(payoutsToday.map((tx) => tx.orderId?.toString())).size,
+            beforePayout: ridesBeforePayout,
+            afterPayout: ridesAfterCutoff,
+        },
+        transactions: payoutsToday.sort((a, b) => new Date(b.date) - new Date(a.date)),
+    };
 };
