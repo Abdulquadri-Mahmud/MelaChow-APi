@@ -812,6 +812,16 @@ export const adminGetAssignmentHistory = async (req, res, next) => {
     }
 };
 
+export const adminGetRiderHistory = async (req, res, next) => {
+    try {
+        const { riderId } = req.params;
+        const history = await riderService.getRiderHistorySummary(riderId, req.query);
+        res.status(200).json({ success: true, data: history });
+    } catch (error) {
+        next(error);
+    }
+};
+
 export const adminDeactivateRider = async (req, res, next) => {
     try {
         const { riderId } = req.params;

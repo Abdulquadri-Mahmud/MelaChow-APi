@@ -643,10 +643,24 @@ export const assignRiderToOrder = async (req, res) => {
         const cityIdForGuard = masterOrder.deliveryAddress?.cityId || vendor?.cityId || null;
         const stateIdForGuard = masterOrder.deliveryAddress?.stateId || vendor?.stateId || null;
 
-        if (cityIdForGuard && rider.cityId?.toString() !== cityIdForGuard.toString()) {
+        if (!cityIdForGuard || !stateIdForGuard) {
+            return res.status(400).json({
+                success: false,
+                message: "This order must have a defined city and state before assigning a rider. Verify the delivery location or vendor settings."
+            });
+        }
+
+        if (rider.cityId?.toString() !== cityIdForGuard.toString()) {
             return res.status(400).json({
                 success: false,
                 message: "This rider is not assigned to the same city as this order"
+            });
+        }
+
+        if (rider.stateId?.toString() !== stateIdForGuard.toString()) {
+            return res.status(400).json({
+                success: false,
+                message: "This rider is not assigned to the same state as this order"
             });
         }
 

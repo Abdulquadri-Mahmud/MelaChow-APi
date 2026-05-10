@@ -15,6 +15,7 @@ export const getPlatformConfig = async () => {
   if (!config) {
     return {
       riderFixedPayout: 600,
+      riderPayoutHour: 10,
       commissionEnabled: false,
       commissionRate: 0,
       serviceFeeEnabled: false,

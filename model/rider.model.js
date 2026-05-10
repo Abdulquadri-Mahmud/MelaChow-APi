@@ -30,6 +30,16 @@ const riderSchema = new mongoose.Schema(
             type: [String],
             default: []
         },
+        vehicleOwnership: {
+            type: String,
+            enum: ["own", "platform"],
+            default: "own"
+        },
+        vehicleType: {
+            type: String,
+            enum: ["bicycle", "motorbike"],
+            default: "bicycle"
+        },
         managedBy: {
             type: String,
             enum: ["vendor", "admin"],

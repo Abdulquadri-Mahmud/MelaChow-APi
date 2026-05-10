@@ -75,6 +75,14 @@ const platformConfigSchema = new mongoose.Schema(
       min: [0, "Service fee cap cannot be negative"],
     },
 
+    // ── Rider payout schedule ─────────────────────────────────────────────
+    riderPayoutHour: {
+      type: Number,
+      default: 10,
+      min: [0, "Payout hour cannot be negative"],
+      max: [23, "Payout hour must be a valid hour"]
+    },
+
     // ── Audit ─────────────────────────────────────────────────────────────
     lastUpdatedBy: {
       type: mongoose.Schema.Types.ObjectId,
