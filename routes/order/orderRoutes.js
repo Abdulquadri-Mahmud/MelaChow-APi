@@ -16,6 +16,7 @@ import {
   createOrderController,
   getFreeDeliveryEligibility,
 } from "../../controller/order/createOrderV2.controller.js";
+import { getMyInvoice, listMyInvoices } from "../../controller/invoice.controller.js";
 
 const router = express.Router();
 
@@ -37,6 +38,8 @@ router.post("/v2/verify/:reference", auth, verifyPaymentV2);
 
 // Order Routes
 router.get("/my-orders", auth, getUserOrders);
+router.get("/invoices", auth, listMyInvoices);
+router.get("/invoices/:invoiceId", auth, getMyInvoice);
 
 // GET /api/orders/:orderId
 router.get("/:orderId", auth, getSingleOrder);

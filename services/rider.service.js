@@ -5,6 +5,9 @@ import Order from "../model/order/Order.js";
 import VendorOrder from "../model/vendor/VendorOrder.js";
 import Admin from "../model/Admin/admin.model.js";
 import Wallet from "../model/wallet/wallet.mode.js";
+import PlatformVehicle from "../model/platformVehicle.model.js";
+import State from "../model/location/State.js";
+import City from "../model/location/City.js";
 import mongoose from "mongoose";
 import { releaseEscrowToVendor } from '../controller/order/createOrderV2.controller.js';
 import { escrowReleaseQueue } from '../config/queue.js';
@@ -27,6 +30,42 @@ export const createRider = async (riderData, vendorId = null) => {
     const existingRider = await Rider.findOne({ phone: riderData.phone });
     if (existingRider) {
         throw new Error("A rider with this phone number already exists");
+    }
+
+    if (riderData.stateId || riderData.cityId) {
+        if (!riderData.stateId || !riderData.cityId) {
+            throw new Error("State and city must be selected together");
+        }
+
+        if (!mongoose.Types.ObjectId.isValid(riderData.stateId) || !mongoose.Types.ObjectId.isValid(riderData.cityId)) {
+            throw new Error("Selected rider state or city is invalid");
+        }
+
+        const [state, city] = await Promise.all([
+            State.findOne({ _id: riderData.stateId, isActive: true }),
+            City.findOne({ _id: riderData.cityId, stateId: riderData.stateId, isActive: true }),
+        ]);
+
+        if (!state || !city) {
+            throw new Error("Selected rider state or city is not active");
+        }
+    }
+
+    if (riderData.vehicleOwnership === "platform") {
+        if (!riderData.platformVehicleId) {
+            throw new Error("Select an available platform vehicle for this rider");
+        }
+        const vehicle = await PlatformVehicle.findOne({
+            _id: riderData.platformVehicleId,
+            status: "available",
+            vehicleType: riderData.vehicleType,
+            assignedRiderId: null,
+        });
+        if (!vehicle) {
+            throw new Error("Selected platform vehicle is unavailable or does not match rider vehicle type");
+        }
+    } else {
+        riderData.platformVehicleId = null;
     }
 
     // Create Paystack recipient if bank details provided
@@ -58,6 +97,13 @@ export const createRider = async (riderData, vendorId = null) => {
         approvedAt: riderData.isVerified ? new Date() : null,
         payoutDetails: finalPayoutDetails
     });
+
+    if (rider.vehicleOwnership === "platform" && rider.platformVehicleId) {
+        await PlatformVehicle.findByIdAndUpdate(rider.platformVehicleId, {
+            status: "assigned",
+            assignedRiderId: rider._id,
+        });
+    }
 
     // Auto-create wallet for rider
     try {
@@ -127,17 +173,30 @@ export const getActiveOrder = async (riderId) => {
     const rider = await Rider.findById(riderId);
     if (!rider) throw new Error("Rider not found");
 
-    // No active order assigned
-    if (!rider.currentOrderId) return null;
+    let activeOrderId = rider.currentOrderId;
 
-    const order = await Order.findById(rider.currentOrderId)
+    if (!activeOrderId && rider.status === "pending_assignment") {
+        const pendingAssignment = await RiderAssignment.findOne({
+            riderId,
+            status: "assigned",
+            expiresAt: { $gt: new Date() },
+        }).sort({ createdAt: -1 });
+        activeOrderId = pendingAssignment?.orderId || null;
+    }
+
+    // No active order assigned
+    if (!activeOrderId) return null;
+
+    const order = await Order.findById(activeOrderId)
         .populate({ path: "items.restaurantId", select: "storeName address phone location coords" })
         .populate("userId", "firstname lastname name fullName phone email");
 
     if (!order) {
         // Order was deleted or currentOrderId is stale — clean it up
-        rider.currentOrderId = null;
-        await rider.save();
+        if (rider.currentOrderId) {
+            rider.currentOrderId = null;
+            await rider.save();
+        }
         return null;
     }
 
@@ -627,7 +686,16 @@ export const deactivateRider = async (riderId, vendorId) => {
 
     rider.isActive = false;
     rider.deletedAt = new Date();
-    return rider.save();
+    const vehicleId = rider.platformVehicleId;
+    rider.platformVehicleId = null;
+    await rider.save();
+    if (vehicleId) {
+        await PlatformVehicle.findByIdAndUpdate(vehicleId, {
+            status: "available",
+            assignedRiderId: null,
+        });
+    }
+    return rider;
 };
 
 /**
@@ -654,7 +722,8 @@ export const getAllRiders = async (filters = {}) => {
     return Rider.find(query)
         .populate("vendorId", "storeName email phone")
         .populate("stateId", "name")
-        .populate("cityId", "name stateId");
+        .populate("cityId", "name stateId")
+        .populate("platformVehicleId", "label identifier vehicleType status");
 };
 
 /**
@@ -666,11 +735,29 @@ export const adminUpdateRider = async (riderId, updateData) => {
 
     const allowedUpdates = [
         "name", "phone", "notes", "isActive", "avatar", "metadata",
-        "vendorId", "status", "stateId", "cityId", "serviceZones", "vehicleOwnership", "vehicleType", "isVerified"
+        "vendorId", "status", "stateId", "cityId", "serviceZones", "vehicleOwnership", "vehicleType", "platformVehicleId", "isVerified"
     ];
 
     if (rider.currentOrderId && (updateData.status || updateData.vendorId !== undefined || updateData.cityId !== undefined || updateData.stateId !== undefined)) {
         throw new Error("Cannot change rider status, vendor, or city while the rider has an active assignment");
+    }
+
+    const previousVehicleId = rider.platformVehicleId?.toString() || null;
+    const nextVehicleOwnership = updateData.vehicleOwnership ?? rider.vehicleOwnership;
+    const nextVehicleType = updateData.vehicleType ?? rider.vehicleType;
+    const nextVehicleId = nextVehicleOwnership === "platform" ? (updateData.platformVehicleId ?? rider.platformVehicleId) : null;
+
+    if (nextVehicleOwnership === "platform") {
+        if (!nextVehicleId) throw new Error("Select an available platform vehicle for this rider");
+        const vehicle = await PlatformVehicle.findOne({
+            _id: nextVehicleId,
+            vehicleType: nextVehicleType,
+            $or: [
+                { status: "available", assignedRiderId: null },
+                { assignedRiderId: rider._id },
+            ],
+        });
+        if (!vehicle) throw new Error("Selected platform vehicle is unavailable or does not match rider vehicle type");
     }
 
     allowedUpdates.forEach(key => {
@@ -678,6 +765,10 @@ export const adminUpdateRider = async (riderId, updateData) => {
             rider[key] = key === "vendorId" && !updateData[key] ? null : updateData[key];
         }
     });
+
+    if (nextVehicleOwnership !== "platform") {
+        rider.platformVehicleId = null;
+    }
 
     if (updateData.isVerified === true && !rider.approvedAt) {
         rider.approvedAt = new Date();
@@ -730,6 +821,19 @@ export const adminUpdateRider = async (riderId, updateData) => {
     }
 
     await rider.save();
+    const savedVehicleId = rider.platformVehicleId?.toString() || null;
+    if (previousVehicleId && previousVehicleId !== savedVehicleId) {
+        await PlatformVehicle.findByIdAndUpdate(previousVehicleId, {
+            status: "available",
+            assignedRiderId: null,
+        });
+    }
+    if (savedVehicleId) {
+        await PlatformVehicle.findByIdAndUpdate(savedVehicleId, {
+            status: "assigned",
+            assignedRiderId: rider._id,
+        });
+    }
     return rider.getPublicProfile();
 };
 

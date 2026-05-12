@@ -26,6 +26,7 @@ import { buildPromoIdentity } from "../../utils/promoIdentity.js";
 import { orderAutoCancelQueue } from "../../config/queue.js";
 import { assertVendorIsOpen } from "../../utils/vendorOpenStatus.js";
 import { recordPaymentAttemptEvent } from "../../services/paymentHardening.service.js";
+import { generateOrderInvoice } from "../../services/invoice.service.js";
 
 // Max number of claims allowed from the same IP address.
 // Set to 3 to allow legitimate students sharing campus/hostel WiFi
@@ -1521,6 +1522,7 @@ export const createOrderV2 = async ({
         let vendorOrderMapping = {};
         if (useWallet) {
             vendorOrderMapping = await createVendorOrdersAndUpdateWallets(order, session);
+            await generateOrderInvoice(order, { session });
         }
 
         await session.commitTransaction();
@@ -1948,6 +1950,7 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
 
         // 4. Create VendorOrders and update wallets
         const vendorOrderMapping = await createVendorOrdersAndUpdateWallets(order, session);
+        await generateOrderInvoice(order, { session });
 
         await recordPaymentAttemptEvent({
             reference: paymentReference || order.paymentReference,

@@ -5,6 +5,7 @@ import Notification from "../model/notification/notification.model.js";
 import Order from "../model/order/Order.js";
 import Rider from "../model/rider.model.js";
 import RiderAssignment from "../model/riderAssignment.model.js";
+import PlatformVehicle from "../model/platformVehicle.model.js";
 import { sendDeliveryOTP, verifyDeliveryOTP } from '../services/otp.service.js';
 
 export const createRider = async (req, res, next) => {
@@ -15,6 +16,49 @@ export const createRider = async (req, res, next) => {
             vendorId
         );
         res.status(201).json({ success: true, data: rider.getPublicProfile() });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const registerRider = async (req, res, next) => {
+    try {
+        const {
+            name,
+            phone,
+            email,
+            password,
+            stateId,
+            cityId,
+            serviceZones,
+            vehicleType,
+        } = req.body;
+
+        if (!name || !phone || !password || !stateId || !cityId) {
+            return res.status(400).json({
+                success: false,
+                message: "Name, phone, password, state and city are required",
+            });
+        }
+
+        const rider = await riderService.createRider({
+            name,
+            phone,
+            email: email || undefined,
+            password,
+            stateId,
+            cityId,
+            serviceZones: Array.isArray(serviceZones) ? serviceZones : [],
+            vehicleOwnership: "own",
+            vehicleType: ["bicycle", "motorbike"].includes(vehicleType) ? vehicleType : "motorbike",
+            isVerified: false,
+        });
+
+        res.status(201).json({
+            success: true,
+            message: "Rider account registered successfully. Your account is pending admin approval.",
+            data: rider.getPublicProfile(),
+        });
     } catch (error) {
         next(error);
     }
@@ -219,7 +263,15 @@ export const updateRiderStatus = async (req, res, next) => {
         }
 
         const wasPending = oldRider.status === "pending_assignment";
-        const orderId = oldRider.currentOrderId?._id || oldRider.currentOrderId;
+        let orderId = oldRider.currentOrderId?._id || oldRider.currentOrderId;
+        if (wasPending && !orderId) {
+            const pendingAssignment = await RiderAssignment.findOne({
+                riderId,
+                status: "assigned",
+                expiresAt: { $gt: new Date() },
+            }).sort({ createdAt: -1 });
+            orderId = pendingAssignment?.orderId || null;
+        }
 
         const rider = await riderService.updateRiderStatus(riderId, status);
         const vendorId = rider.vendorId?.toString();
@@ -240,18 +292,63 @@ export const updateRiderStatus = async (req, res, next) => {
                 const acceptedOrder = await OrderModel.findById(orderId)
                     .select("items userId orderId");
 
-                await OrderModel.findByIdAndUpdate(orderId, {
-                    $set: {
-                        "riderAssignment.status": "accepted",
-                        "riderAssignment.acceptedAt": new Date(),
-                        "riderAssignment.lastReason": ""
-                    }
+                const acceptedOrderUpdate = await OrderModel.findOneAndUpdate(
+                    {
+                        _id: orderId,
+                        riderId: null,
+                        "riderAssignment.status": "assigned",
+                    },
+                    {
+                        $set: {
+                            riderId,
+                            "riderAssignment.status": "accepted",
+                            "riderAssignment.acceptedAt": new Date(),
+                            "riderAssignment.lastReason": ""
+                        }
+                    },
+                    { new: true }
+                );
+
+                if (!acceptedOrderUpdate) {
+                    await Rider.findByIdAndUpdate(riderId, {
+                        $set: { status: "available", assignmentExpiresAt: null },
+                        $unset: { currentOrderId: "" }
+                    });
+                    await RiderAssignment.findOneAndUpdate(
+                        { riderId, orderId, status: "assigned" },
+                        { $set: { status: "rejected", respondedAt: new Date(), reason: "order_already_taken" } },
+                        { sort: { createdAt: -1 } }
+                    );
+                    return res.status(409).json({
+                        success: false,
+                        message: "This order has already been accepted by another rider"
+                    });
+                }
+
+                await Rider.findByIdAndUpdate(riderId, {
+                    $set: { status: "on_delivery", currentOrderId: orderId, assignmentExpiresAt: null }
                 });
                 await RiderAssignment.findOneAndUpdate(
                     { riderId, orderId, status: "assigned" },
                     { $set: { status: "accepted", respondedAt: new Date() } },
                     { sort: { createdAt: -1 } }
                 );
+                const losingAssignments = await RiderAssignment.find({
+                    orderId,
+                    riderId: { $ne: riderId },
+                    status: "assigned"
+                }).select("riderId");
+                const losingRiderIds = losingAssignments.map((assignment) => assignment.riderId);
+                if (losingRiderIds.length) {
+                    await RiderAssignment.updateMany(
+                        { orderId, riderId: { $in: losingRiderIds }, status: "assigned" },
+                        { $set: { status: "cancelled", respondedAt: new Date(), reason: "accepted_by_another_rider" } }
+                    );
+                    await Rider.updateMany(
+                        { _id: { $in: losingRiderIds }, status: "pending_assignment", currentOrderId: null },
+                        { $set: { status: "available", assignmentExpiresAt: null } }
+                    );
+                }
 
                 const resolvedVendorId = vendorId ||
                     acceptedOrder?.items?.[0]?.restaurantId?.toString() || null;
@@ -294,31 +391,49 @@ export const updateRiderStatus = async (req, res, next) => {
                 const OrderModel = (await import("../model/order/Order.js")).default;
                 const VendorOrder = (await import("../model/vendor/VendorOrder.js")).default;
                 const previousOrder = await OrderModel.findById(orderId).select("riderAssignment");
-
-                const order = await OrderModel.findByIdAndUpdate(
-                    orderId,
+                await RiderAssignment.findOneAndUpdate(
+                    { riderId, orderId, status: { $in: ["assigned", "accepted"] } },
                     {
-                        orderStatus: "ready_for_pickup",
-                        riderId: null,
-                        riderAssignment: {
+                        $set: {
                             status: isTimeout ? "timeout" : "rejected",
-                            assignedAt: previousOrder?.riderAssignment?.assignedAt || null,
-                            acceptedAt: null,
-                            rejectedAt: new Date(),
-                            expiresAt: null,
-                            lastReason: isTimeout ? "timeout" : "rejected",
-                            assignedBy: previousOrder?.riderAssignment?.assignedBy || null
-                        },
-                        $push: {
-                            statusLog: {
-                                status: actionStatus,
-                                changedBy: "rider",
-                                timestamp: new Date()
-                            }
+                            respondedAt: new Date(),
+                            reason: isTimeout ? "timeout" : "rejected"
                         }
                     },
-                    { new: true }
+                    { sort: { createdAt: -1 } }
                 );
+                const remainingOffers = await RiderAssignment.countDocuments({
+                    orderId,
+                    status: "assigned",
+                    expiresAt: { $gt: new Date() }
+                });
+
+                const order = remainingOffers > 0
+                    ? await OrderModel.findById(orderId)
+                    : await OrderModel.findByIdAndUpdate(
+                        orderId,
+                        {
+                            orderStatus: "ready_for_pickup",
+                            riderId: null,
+                            riderAssignment: {
+                                status: isTimeout ? "timeout" : "rejected",
+                                assignedAt: previousOrder?.riderAssignment?.assignedAt || null,
+                                acceptedAt: null,
+                                rejectedAt: new Date(),
+                                expiresAt: null,
+                                lastReason: isTimeout ? "timeout" : "rejected",
+                                assignedBy: previousOrder?.riderAssignment?.assignedBy || null
+                            },
+                            $push: {
+                                statusLog: {
+                                    status: actionStatus,
+                                    changedBy: "rider",
+                                    timestamp: new Date()
+                                }
+                            }
+                        },
+                        { new: true }
+                    );
 
                 if (order) {
                     // Resolve vendorId from the order for admin-managed riders
@@ -327,22 +442,12 @@ export const updateRiderStatus = async (req, res, next) => {
 
                     // Update VendorOrder back to ready_for_pickup
                     // updateMany works for both rider types (null vendorId safe)
-                    await VendorOrder.updateMany(
-                        { userOrderId: order._id },
-                        { $set: { orderStatus: "ready_for_pickup" } }
-                    );
-
-                    await RiderAssignment.findOneAndUpdate(
-                        { riderId, orderId, status: { $in: ["assigned", "accepted"] } },
-                        {
-                            $set: {
-                                status: isTimeout ? "timeout" : "rejected",
-                                respondedAt: new Date(),
-                                reason: isTimeout ? "timeout" : "rejected"
-                            }
-                        },
-                        { sort: { createdAt: -1 } }
-                    );
+                    if (remainingOffers === 0) {
+                        await VendorOrder.updateMany(
+                            { userOrderId: order._id },
+                            { $set: { orderStatus: "ready_for_pickup" } }
+                        );
+                    }
 
                     // Notify vendor via socket
                     if (resolvedVendorId && io) {
@@ -817,6 +922,49 @@ export const adminGetRiderHistory = async (req, res, next) => {
         const { riderId } = req.params;
         const history = await riderService.getRiderHistorySummary(riderId, req.query);
         res.status(200).json({ success: true, data: history });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const adminGetPlatformVehicles = async (req, res, next) => {
+    try {
+        const query = {};
+        if (req.query.status) query.status = req.query.status;
+        if (req.query.vehicleType) query.vehicleType = req.query.vehicleType;
+        if (req.query.cityId) query.cityId = req.query.cityId;
+        if (req.query.available === "true") {
+            query.status = "available";
+            query.assignedRiderId = null;
+        }
+        const vehicles = await PlatformVehicle.find(query)
+            .sort({ createdAt: -1 })
+            .populate("stateId", "name")
+            .populate("cityId", "name")
+            .populate("assignedRiderId", "name phone");
+        res.status(200).json({ success: true, data: vehicles });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const adminCreatePlatformVehicle = async (req, res, next) => {
+    try {
+        const vehicle = await PlatformVehicle.create(req.body);
+        res.status(201).json({ success: true, data: vehicle });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const adminUpdatePlatformVehicle = async (req, res, next) => {
+    try {
+        const vehicle = await PlatformVehicle.findByIdAndUpdate(req.params.vehicleId, req.body, {
+            new: true,
+            runValidators: true,
+        });
+        if (!vehicle) return res.status(404).json({ success: false, message: "Vehicle not found" });
+        res.status(200).json({ success: true, data: vehicle });
     } catch (error) {
         next(error);
     }

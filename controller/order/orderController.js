@@ -17,6 +17,7 @@ import {
   releasePromoReservationsForOrder,
 } from "./createOrderV2.controller.js";
 import { getPlatformConfig } from "../../services/platformConfig.service.js";
+import { offerOrderToAvailableRiders } from "../../services/riderAssignment.service.js";
 import PaymentLock from "../../model/order/PaymentLock.js";
 import { refundOrderToWallet } from "../../services/refund.service.js";
 import logger from "../../config/logger.js";
@@ -1596,6 +1597,28 @@ export const updateVendorOrderStatus = async (req, res) => {
               console.log('🚨 Admin Assignment Alert broadcasted successfully');
           } catch (adminNotifError) {
               console.error('❌ Admin Notification error:', adminNotifError.message);
+          }
+
+          try {
+              const platformConfig = await getPlatformConfig();
+              if (platformConfig.riderAssignmentMode === "automatic") {
+                  const assignmentResult = await offerOrderToAvailableRiders({
+                      vendorOrderId: populatedOrder._id,
+                      assignedBy: null,
+                  });
+                  if (!assignmentResult.success) {
+                      const { sendNotification } = await import('../../services/notification.service.js');
+                      await sendNotification(null, 'rider_assignment_needed', {
+                          orderId,
+                          orderDatabaseId: populatedOrder.userOrderId._id,
+                          vendorOrderId: populatedOrder._id,
+                          reason: assignmentResult.reason,
+                          message: `Automatic rider assignment could not run for Order #${orderId}. Manual assignment required.`,
+                      }, 'admin');
+                  }
+              }
+          } catch (autoAssignError) {
+              console.error('Automatic rider assignment error:', autoAssignError.message);
           }
       }
 

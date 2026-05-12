@@ -24,6 +24,7 @@ export const createTestUser = async (overrides = {}) => {
 
 export const createTestVendor = async (overrides = {}) => {
     const vendor = await Vendor.create({
+        name: 'Test Restaurant',
         storeName: 'Test Restaurant',
         email: `vendor-${Date.now()}@melachow.com`,
         password: await bcrypt.hash('password123', 10),
