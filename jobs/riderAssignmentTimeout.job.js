@@ -27,7 +27,6 @@ export async function expireStaleRiderAssignments() {
                     {
                         _id: assignment.riderId,
                         status: "pending_assignment",
-                        currentOrderId: assignment.orderId,
                     },
                     {
                         $set: { status: "available", assignmentExpiresAt: null },
@@ -36,38 +35,7 @@ export async function expireStaleRiderAssignments() {
                     { session }
                 );
 
-                order = await Order.findOneAndUpdate(
-                    {
-                        _id: assignment.orderId,
-                        orderStatus: "rider_assigned",
-                        riderId: assignment.riderId,
-                    },
-                    {
-                        $set: {
-                            orderStatus: "ready_for_pickup",
-                            riderId: null,
-                            riderAssignment: {
-                                status: "timeout",
-                                assignedAt: assignment.assignedAt,
-                                acceptedAt: null,
-                                rejectedAt: now,
-                                expiresAt: null,
-                                lastReason: "timeout",
-                                assignedBy: assignment.assignedBy || null,
-                            },
-                        },
-                        $push: {
-                            statusLog: {
-                                status: "rider_assignment_timeout",
-                                changedBy: "system",
-                                timestamp: now,
-                            },
-                        },
-                    },
-                    { new: true, session }
-                );
-
-                if (!order || riderUpdate.modifiedCount !== 1) {
+                if (riderUpdate.modifiedCount !== 1) {
                     await RiderAssignment.updateOne(
                         { _id: assignment._id, status: "assigned" },
                         { $set: { status: "timeout", respondedAt: now, reason: "expired_or_already_changed" } },
@@ -76,17 +44,57 @@ export async function expireStaleRiderAssignments() {
                     return;
                 }
 
-                await VendorOrder.updateMany(
-                    { userOrderId: assignment.orderId },
-                    { $set: { orderStatus: "ready_for_pickup", riderId: null } },
-                    { session }
-                );
-
                 await RiderAssignment.updateOne(
                     { _id: assignment._id, status: "assigned" },
                     { $set: { status: "timeout", respondedAt: now, reason: "assignment_expired" } },
                     { session }
                 );
+
+                const remainingOffers = await RiderAssignment.countDocuments({
+                    orderId: assignment.orderId,
+                    status: "assigned",
+                    expiresAt: { $gt: now },
+                }).session(session);
+
+                if (remainingOffers === 0) {
+                    order = await Order.findOneAndUpdate(
+                        {
+                            _id: assignment.orderId,
+                            orderStatus: "rider_assigned",
+                            riderId: null,
+                        },
+                        {
+                            $set: {
+                                orderStatus: "ready_for_pickup",
+                                riderAssignment: {
+                                    status: "timeout",
+                                    assignedAt: assignment.assignedAt,
+                                    acceptedAt: null,
+                                    rejectedAt: now,
+                                    expiresAt: null,
+                                    lastReason: "timeout",
+                                    assignedBy: assignment.assignedBy || null,
+                                },
+                            },
+                            $push: {
+                                statusLog: {
+                                    status: "rider_assignment_timeout",
+                                    changedBy: "system",
+                                    timestamp: now,
+                                },
+                            },
+                        },
+                        { new: true, session }
+                    );
+
+                    await VendorOrder.updateMany(
+                        { userOrderId: assignment.orderId },
+                        { $set: { orderStatus: "ready_for_pickup", riderId: null } },
+                        { session }
+                    );
+                } else {
+                    order = await Order.findById(assignment.orderId).session(session);
+                }
 
                 expired += 1;
             });

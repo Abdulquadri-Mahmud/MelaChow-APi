@@ -30,6 +30,12 @@ const platformConfigSchema = new mongoose.Schema(
       min: [0, "Rider payout cannot be negative"],
     },
 
+    riderAssignmentMode: {
+      type: String,
+      enum: ["manual", "automatic"],
+      default: "manual",
+    },
+
     // ── Commission ────────────────────────────────────────────────────────
     // Percentage of vendor food subtotal taken by platform.
     // Currently disabled (commissionEnabled: false, rate: 0).

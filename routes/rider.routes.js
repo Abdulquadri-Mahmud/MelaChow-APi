@@ -13,6 +13,9 @@ import { adminAuth } from "../middleware/adminAuth.js";
 
 const router = express.Router();
 
+// Public rider self-registration. Accounts remain pending until admin approval.
+router.post("/riders/register", riderController.registerRider);
+
 // Vendor manages their riders (DISABLED - Admins now manage riders)
 // router.post("/vendors/:vendorId/riders", authVendor, riderController.createRider);
 // router.get("/vendors/:vendorId/riders", authVendor, riderController.getVendorRiders);
@@ -62,5 +65,8 @@ router.get("/admin/riders/:riderId/history", adminAuth, riderController.adminGet
 router.post("/admin/riders", adminAuth, riderController.createRider); // ✅ NEW: Create platform-wide rider
 router.post("/admin/vendors/:vendorId/riders", adminAuth, riderController.createRider); // Tie to specific vendor
 router.get("/admin/rider-assignments", adminAuth, riderController.adminGetAssignmentHistory);
+router.get("/admin/platform-vehicles", adminAuth, riderController.adminGetPlatformVehicles);
+router.post("/admin/platform-vehicles", adminAuth, riderController.adminCreatePlatformVehicle);
+router.patch("/admin/platform-vehicles/:vehicleId", adminAuth, riderController.adminUpdatePlatformVehicle);
 
 export default router;

@@ -144,8 +144,15 @@ const fetchPayouts = (Model, filter, actorType, take) =>
         .sort({ createdAt: -1 })
         .limit(take)
         .select("-recipientCode")
+        .populate(actorType === "vendor" ? "vendorId" : "riderId", actorType === "vendor" ? "storeName email phone" : "name phone email")
         .lean()
-        .then((rows) => rows.map((row) => ({ ...row, actorType })));
+        .then((rows) => rows.map((row) => ({
+            ...row,
+            actorType,
+            actorName: actorType === "vendor" ? row.vendorId?.storeName : row.riderId?.name,
+            actorPhone: actorType === "vendor" ? row.vendorId?.phone : row.riderId?.phone,
+            isAutomaticPayout: String(row.paystackReference || "").startsWith(`AUTO_${actorType.toUpperCase()}_`),
+        })));
 
 /**
  * GET /api/admin/finance/wallet-breakdown

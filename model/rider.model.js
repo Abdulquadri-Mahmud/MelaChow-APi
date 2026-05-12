@@ -40,6 +40,12 @@ const riderSchema = new mongoose.Schema(
             enum: ["bicycle", "motorbike"],
             default: "bicycle"
         },
+        platformVehicleId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "PlatformVehicle",
+            default: null,
+            index: true
+        },
         managedBy: {
             type: String,
             enum: ["vendor", "admin"],

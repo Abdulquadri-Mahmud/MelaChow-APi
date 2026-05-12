@@ -1,6 +1,7 @@
 import Wallet from "../../model/wallet/wallet.mode.js";
 import axios from "axios";
 import crypto from "crypto";
+import { generateWalletFundingInvoice } from "../../services/invoice.service.js";
 
 // =======================
 // GET USER WALLET
@@ -117,7 +118,8 @@ export const verifyWalletFunding = async (req, res) => {
 
         const existingTx = wallet.transactions.find(t => t.description === description);
         if (existingTx) {
-            return res.status(200).json({ success: true, message: "Wallet already credited", wallet });
+            const invoice = await generateWalletFundingInvoice({ userId, amount: amountPaid, reference });
+            return res.status(200).json({ success: true, message: "Wallet already credited", wallet, invoice });
         }
 
         // 5. Credit Wallet
@@ -130,11 +132,13 @@ export const verifyWalletFunding = async (req, res) => {
         });
 
         await wallet.save();
+        const invoice = await generateWalletFundingInvoice({ userId, amount: amountPaid, reference });
 
         return res.status(200).json({
             success: true,
             message: "Wallet funded successfully",
-            wallet
+            wallet,
+            invoice
         });
 
     } catch (error) {
