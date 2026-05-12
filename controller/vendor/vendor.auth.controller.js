@@ -5,6 +5,7 @@ import { sendTokenCookie } from '../../utils/sendTokenCookie.js';
 import jwt from "jsonwebtoken";
 import { blockToken } from "../../middleware/tokenBlocklist.js";
 import { createTransferRecipient } from '../../services/bank.service.js';
+import { validateVendorLocation } from '../../services/locationService.js';
 
 // ============================================
 // VENDOR REGISTRATION (with OTP verification)
@@ -51,12 +52,24 @@ export const registerVendor = async (req, res) => {
       if (storeDescription) existingVendor.storeDescription = storeDescription;
       if (logo) existingVendor.logo = logo;
       if (cuisineTypes?.length) existingVendor.cuisineTypes = cuisineTypes;
-      if (address) existingVendor.address = {
-        street: address?.street || existingVendor.address?.street || "",
-        city: address?.city || existingVendor.address?.city || "",
-        state: address?.state || existingVendor.address?.state || "",
-        postalCode: address?.postalCode || existingVendor.address?.postalCode || "",
-      };
+      if (address) {
+        existingVendor.address = {
+          street: address?.street || existingVendor.address?.street || "",
+          city: address?.city || existingVendor.address?.city || "",
+          state: address?.state || existingVendor.address?.state || "",
+          postalCode: address?.postalCode || existingVendor.address?.postalCode || "",
+        };
+        // Validate location and set cityId/stateId
+        const locationData = await validateVendorLocation(
+          address?.state || existingVendor.address?.state,
+          address?.city || existingVendor.address?.city
+        );
+        existingVendor.stateId = locationData.stateId || null;
+        existingVendor.cityId = locationData.cityId || null;
+        existingVendor.locationStatus = locationData.locationStatus;
+        existingVendor.requestedState = locationData.requestedState || "";
+        existingVendor.requestedCity = locationData.requestedCity || "";
+      }
       if (openingHours) existingVendor.openingHours = openingHours;
       if (payoutDetails) {
         let recipientCode = existingVendor.payoutDetails?.recipientCode || "";
@@ -106,6 +119,12 @@ export const registerVendor = async (req, res) => {
         }
       }
 
+      // Validate location and get cityId/stateId
+      let locationData = { stateId: null, cityId: null, locationStatus: null, requestedState: "", requestedCity: "" };
+      if (address?.state && address?.city) {
+        locationData = await validateVendorLocation(address.state, address.city);
+      }
+
       // Create new vendor
       await Vendor.create({
         email,
@@ -121,6 +140,11 @@ export const registerVendor = async (req, res) => {
           state: address?.state || "",
           postalCode: address?.postalCode || "",
         },
+        stateId: locationData.stateId || null,
+        cityId: locationData.cityId || null,
+        locationStatus: locationData.locationStatus,
+        requestedState: locationData.requestedState || "",
+        requestedCity: locationData.requestedCity || "",
         openingHours: openingHours || undefined,
         payoutDetails: {
           bankName: payoutDetails?.bankName || "",
