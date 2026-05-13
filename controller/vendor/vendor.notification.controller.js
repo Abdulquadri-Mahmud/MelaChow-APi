@@ -49,7 +49,7 @@ export const getVendorNotifications = async (req, res) => {
 
         if (type && type !== 'all') {
             if (type === 'orders') {
-                query.type = { $regex: 'order_', $options: 'i' };
+                query.type = { $in: ['vendor_new_order', 'new_order', /^order_/i] };
             } else if (type === 'system') {
                 query.type = { $in: ['system', 'account_update'] };
             } else {
