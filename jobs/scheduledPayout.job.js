@@ -175,111 +175,126 @@ scheduledPayoutWorker.on("failed", (job, err) => {
     console.error(`❌ [ScheduledPayout] Job ${job?.id} failed: ${err.message}`);
 });
 
-// ── Trigger function — called by cron at 8 PM WAT ────────────────────────────
+const enqueueVendorPayouts = async (today) => {
+    let vendorCount = 0;
+
+    const vendorWallets = await Wallet.find({
+        ownerModel: "Vendor",
+        balance: { $gte: MIN_PAYOUT_BALANCE },
+    }).select("_id ownerId balance");
+
+    for (const wallet of vendorWallets) {
+        try {
+            const vendor = await Vendor.findById(wallet.ownerId).select("+payoutDetails");
+            if (!vendor?.payoutDetails?.payoutEnabled || !vendor?.payoutDetails?.recipientCode) {
+                continue;
+            }
+
+            const hasActive = await Withdrawal.exists({
+                vendorId: wallet.ownerId,
+                status: { $in: ["pending", "processing"] },
+            });
+            if (hasActive) continue;
+
+            await scheduledPayoutQueue.add(
+                `vendor-${wallet.ownerId}`,
+                {
+                    actorId: wallet.ownerId.toString(),
+                    actorType: "vendor",
+                    walletId: wallet._id.toString(),
+                    recipientCode: vendor.payoutDetails.recipientCode,
+                    displayName: vendor.storeName || "Vendor",
+                    bankName: vendor.payoutDetails.bankName || "",
+                    accountNumber: vendor.payoutDetails.accountNumber || "",
+                    accountName: vendor.payoutDetails.accountName || "",
+                },
+                {
+                    jobId: `vendor-payout-${wallet.ownerId}-${today}`,
+                }
+            );
+            vendorCount++;
+        } catch (err) {
+            console.error(
+                `❌ [ScheduledPayout] Failed to enqueue vendor ${wallet.ownerId}:`,
+                err.message
+            );
+        }
+    }
+
+    return vendorCount;
+};
+
+const enqueueRiderPayouts = async (today) => {
+    let riderCount = 0;
+
+    const riderWallets = await Wallet.find({
+        ownerModel: "Rider",
+        balance: { $gte: MIN_PAYOUT_BALANCE },
+    }).select("_id ownerId balance");
+
+    for (const wallet of riderWallets) {
+        try {
+            const rider = await Rider.findById(wallet.ownerId).select(
+                "+payoutDetails.recipientCode payoutDetails"
+            );
+            if (!rider?.payoutDetails?.payoutEnabled || !rider?.payoutDetails?.recipientCode) {
+                continue;
+            }
+
+            const hasActive = await RiderWithdrawal.exists({
+                riderId: wallet.ownerId,
+                status: { $in: ["pending", "processing"] },
+            });
+            if (hasActive) continue;
+
+            await scheduledPayoutQueue.add(
+                `rider-${wallet.ownerId}`,
+                {
+                    actorId: wallet.ownerId.toString(),
+                    actorType: "rider",
+                    walletId: wallet._id.toString(),
+                    recipientCode: rider.payoutDetails.recipientCode,
+                    displayName: rider.name || "Rider",
+                    bankName: rider.payoutDetails.bankName || "",
+                    accountNumber: rider.payoutDetails.accountNumber || "",
+                    accountName: rider.payoutDetails.accountName || "",
+                },
+                {
+                    jobId: `rider-payout-${wallet.ownerId}-${today}`,
+                }
+            );
+            riderCount++;
+        } catch (err) {
+            console.error(
+                `❌ [ScheduledPayout] Failed to enqueue rider ${wallet.ownerId}:`,
+                err.message
+            );
+        }
+    }
+
+    return riderCount;
+};
+
+// ── Trigger functions — riders at 7:30 PM WAT, vendors at 8 PM WAT ───────────
 /**
- * Finds all vendors and riders with balance >= ₦1,500 and a verified
- * bank account, then enqueues one BullMQ job per actor.
+ * Finds actors with balance >= ₦1,500 and a verified bank account,
+ * then enqueues one BullMQ job per actor.
  * jobId deduplication ensures only one job per actor per calendar day.
  */
-export const triggerScheduledPayouts = async () => {
-    console.log("🕗 [ScheduledPayout] Starting 8 PM payout sweep...");
-
-    let vendorCount = 0;
-    let riderCount = 0;
+export const triggerScheduledPayouts = async (actorType = "all") => {
+    console.log(`🕗 [ScheduledPayout] Starting ${actorType} payout sweep...`);
     const today = new Date().toDateString(); // e.g. "Sat Apr 19 2026"
 
     try {
-        // ── Vendors ───────────────────────────────────────────────────────────
-        const vendorWallets = await Wallet.find({
-            ownerModel: "Vendor",
-            balance: { $gte: MIN_PAYOUT_BALANCE },
-        }).select("_id ownerId balance");
+        let vendorCount = 0;
+        let riderCount = 0;
 
-        for (const wallet of vendorWallets) {
-            try {
-                const vendor = await Vendor.findById(wallet.ownerId).select("+payoutDetails");
-                if (!vendor?.payoutDetails?.payoutEnabled || !vendor?.payoutDetails?.recipientCode) {
-                    continue; // No verified bank — skip silently
-                }
-
-                // Skip if a withdrawal is already in progress
-                const hasActive = await Withdrawal.exists({
-                    vendorId: wallet.ownerId,
-                    status: { $in: ["pending", "processing"] },
-                });
-                if (hasActive) continue;
-
-                await scheduledPayoutQueue.add(
-                    `vendor-${wallet.ownerId}`,
-                    {
-                        actorId: wallet.ownerId.toString(),
-                        actorType: "vendor",
-                        walletId: wallet._id.toString(),
-                        recipientCode: vendor.payoutDetails.recipientCode,
-                        displayName: vendor.storeName || "Vendor",
-                        bankName: vendor.payoutDetails.bankName || "",
-                        accountNumber: vendor.payoutDetails.accountNumber || "",
-                        accountName: vendor.payoutDetails.accountName || "",
-                    },
-                    {
-                        jobId: `vendor-payout-${wallet.ownerId}-${today}`,
-                        // BullMQ deduplicates by jobId — safe to call triggerScheduledPayouts
-                        // multiple times without double-paying anyone
-                    }
-                );
-                vendorCount++;
-            } catch (err) {
-                console.error(
-                    `❌ [ScheduledPayout] Failed to enqueue vendor ${wallet.ownerId}:`,
-                    err.message
-                );
-            }
+        if (actorType === "vendor" || actorType === "all") {
+            vendorCount = await enqueueVendorPayouts(today);
         }
 
-        // ── Riders ────────────────────────────────────────────────────────────
-        const riderWallets = await Wallet.find({
-            ownerModel: "Rider",
-            balance: { $gte: MIN_PAYOUT_BALANCE },
-        }).select("_id ownerId balance");
-
-        for (const wallet of riderWallets) {
-            try {
-                const rider = await Rider.findById(wallet.ownerId).select(
-                    "+payoutDetails.recipientCode payoutDetails"
-                );
-                if (!rider?.payoutDetails?.payoutEnabled || !rider?.payoutDetails?.recipientCode) {
-                    continue;
-                }
-
-                const hasActive = await RiderWithdrawal.exists({
-                    riderId: wallet.ownerId,
-                    status: { $in: ["pending", "processing"] },
-                });
-                if (hasActive) continue;
-
-                await scheduledPayoutQueue.add(
-                    `rider-${wallet.ownerId}`,
-                    {
-                        actorId: wallet.ownerId.toString(),
-                        actorType: "rider",
-                        walletId: wallet._id.toString(),
-                        recipientCode: rider.payoutDetails.recipientCode,
-                        displayName: rider.name || "Rider",
-                        bankName: rider.payoutDetails.bankName || "",
-                        accountNumber: rider.payoutDetails.accountNumber || "",
-                        accountName: rider.payoutDetails.accountName || "",
-                    },
-                    {
-                        jobId: `rider-payout-${wallet.ownerId}-${today}`,
-                    }
-                );
-                riderCount++;
-            } catch (err) {
-                console.error(
-                    `❌ [ScheduledPayout] Failed to enqueue rider ${wallet.ownerId}:`,
-                    err.message
-                );
-            }
+        if (actorType === "rider" || actorType === "all") {
+            riderCount = await enqueueRiderPayouts(today);
         }
 
         console.log(

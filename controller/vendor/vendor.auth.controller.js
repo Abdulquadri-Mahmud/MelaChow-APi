@@ -7,6 +7,16 @@ import { blockToken } from "../../middleware/tokenBlocklist.js";
 import { createTransferRecipient } from '../../services/bank.service.js';
 import { validateVendorLocation } from '../../services/locationService.js';
 
+const CURRENT_VENDOR_TERMS_VERSION = "vendor-terms-2026-05-12";
+
+const getRequestIp = (req) => {
+  const forwardedFor = req.headers["x-forwarded-for"];
+  if (typeof forwardedFor === "string" && forwardedFor.trim()) {
+    return forwardedFor.split(",")[0].trim();
+  }
+  return req.ip || req.socket?.remoteAddress || "";
+};
+
 // ============================================
 // VENDOR REGISTRATION (with OTP verification)
 // ============================================
@@ -24,12 +34,29 @@ export const registerVendor = async (req, res) => {
       address,
       openingHours,
       payoutDetails,
+      termsAccepted,
+      termsVersion,
     } = req.body;
 
     // Validate input
     if (!email || !name || !storeName || !cuisineTypes || cuisineTypes.length === 0) {
       return res.status(400).json({ message: 'Email, Name, Store Name, and at least one Cuisine Type are required' });
     }
+
+    if (termsAccepted !== true) {
+      return res.status(400).json({
+        message: "You must accept the MelaChow Vendor Terms and Policy before registration",
+      });
+    }
+
+    const termsAcceptance = {
+      accepted: true,
+      acceptedAt: new Date(),
+      version: termsVersion || CURRENT_VENDOR_TERMS_VERSION,
+      source: "registration",
+      ipAddress: getRequestIp(req),
+      userAgent: req.headers["user-agent"] || "",
+    };
 
     // Check if vendor exists
     const existingVendor = await Vendor.findOne({ email });
@@ -103,6 +130,7 @@ export const registerVendor = async (req, res) => {
 
       // Delivery management is strictly platform-managed
       existingVendor.deliveryManagedBy = "admin";
+      existingVendor.termsAcceptance = termsAcceptance;
 
       await existingVendor.save();
     } else {
@@ -159,6 +187,7 @@ export const registerVendor = async (req, res) => {
         otpExpires,
         verified: false,
         deliveryManagedBy: "admin",
+        termsAcceptance,
       });
     }
 

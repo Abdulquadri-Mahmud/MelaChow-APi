@@ -494,18 +494,26 @@ const startServer = async () => {
       logger.info('🔌 Socket.IO ready for connections');
     });
 
-    // ── Scheduled Payout: Daily at 8:00 PM Nigeria time (WAT = UTC+1) ─────────
-    // Cron pattern "0 19 * * *" = 19:00 UTC = 20:00 WAT
+    // ── Scheduled Payouts: riders 7:30 PM WAT, vendors 8:00 PM WAT ────────────
     cron.schedule(
-        "0 19 * * *",
+        "30 19 * * *",
         async () => {
-            console.log("🕗 [CRON] 8 PM WAT payout sweep triggered...");
-            await triggerScheduledPayouts();
+            console.log("🕢 [CRON] 7:30 PM WAT rider payout sweep triggered...");
+            await triggerScheduledPayouts("rider");
         },
         { timezone: "Africa/Lagos" }
     );
 
-    console.log("✅ Scheduled payout cron registered (8 PM WAT daily)");
+    cron.schedule(
+        "0 20 * * *",
+        async () => {
+            console.log("🕗 [CRON] 8 PM WAT vendor payout sweep triggered...");
+            await triggerScheduledPayouts("vendor");
+        },
+        { timezone: "Africa/Lagos" }
+    );
+
+    console.log("✅ Scheduled payout crons registered (riders 7:30 PM WAT, vendors 8 PM WAT daily)");
 
     cron.schedule(
         "* * * * *",

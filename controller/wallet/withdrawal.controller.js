@@ -14,8 +14,8 @@ export const initiateWithdrawal = async (req, res) => {
     if (isNaN(amount) || amount <= 0) {
       return res.status(400).json({ message: "Invalid withdrawal amount" });
     }
-    if (amount < 1000) {
-      return res.status(400).json({ message: "Minimum withdrawal amount is ₦1,000" });
+    if (amount < 1500) {
+      return res.status(400).json({ message: "Minimum withdrawal amount is ₦1,500" });
     }
     if (amount > 1000000) {
       return res.status(400).json({ message: "Maximum withdrawal amount is ₦1,000,000" });

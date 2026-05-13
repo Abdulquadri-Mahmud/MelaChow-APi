@@ -3,24 +3,43 @@ import axios from "axios";
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const PAYSTACK_BASE_URL = "https://api.paystack.co";
 
+const requirePaystackSecret = () => {
+    if (!PAYSTACK_SECRET_KEY) {
+        throw new Error("PAYSTACK_SECRET_KEY is not configured");
+    }
+};
+
+const getAvailableNgnBalance = (payload) => {
+    const data = payload?.data;
+
+    if (Array.isArray(data)) {
+        const ngnBalance = data.find((item) => item.currency === "NGN") || data[0];
+        return Number(ngnBalance?.balance || 0);
+    }
+
+    return Number(data?.balance || 0);
+};
+
 /**
  * Check if the platform Paystack balance is sufficient for a transfer.
  * Returns { sufficient: boolean, available: number (kobo) }
  * Fails open on API error — logs but does not block payout attempt.
  */
 export const checkPaystackBalance = async (requiredAmountKobo) => {
+    requirePaystackSecret();
+
     try {
         const response = await axios.get(`${PAYSTACK_BASE_URL}/balance`, {
             headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` },
         });
-        const available = response.data?.data?.balance || 0;
+        const available = getAvailableNgnBalance(response.data);
         return {
             sufficient: available >= requiredAmountKobo,
             available,
         };
     } catch (err) {
         console.error("❌ Paystack balance check failed:", err.response?.data || err.message);
-        return { sufficient: true, available: 0 }; // Fail open
+        throw new Error("Paystack balance check failed");
     }
 };
 
@@ -39,6 +58,8 @@ export const initiatePaystackTransfer = async ({
     reference,
     reason,
 }) => {
+    requirePaystackSecret();
+
     const response = await axios.post(
         `${PAYSTACK_BASE_URL}/transfer`,
         {
@@ -72,6 +93,8 @@ export const initiatePaystackTransfer = async ({
  * @returns {string} recipient_code
  */
 export const createTransferRecipient = async ({ name, accountNumber, bankCode }) => {
+    requirePaystackSecret();
+
     const response = await axios.post(
         `${PAYSTACK_BASE_URL}/transferrecipient`,
         {
