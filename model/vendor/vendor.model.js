@@ -122,6 +122,14 @@ const vendorSchema = new Schema(
     // Status flags
     verified: { type: Boolean, default: false, index: true }, // Email verification
     isApproved: { type: Boolean, default: false, index: true }, // Admin approval
+    termsAcceptance: {
+      accepted: { type: Boolean, default: false, index: true },
+      acceptedAt: { type: Date, default: null },
+      version: { type: String, default: "" },
+      source: { type: String, enum: ["registration", "dashboard", "manual", ""], default: "" },
+      ipAddress: { type: String, default: "" },
+      userAgent: { type: String, default: "" },
+    },
     suspended: { type: Boolean, default: false },
     active: { type: Boolean, default: true },
     // Denormalized promo flag — flipped by admin when activating/deactivating
