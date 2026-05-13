@@ -26,6 +26,14 @@ const riderSchema = new mongoose.Schema(
             default: null,
             index: true
         },
+        locationStatus: {
+            type: String,
+            enum: ["approved", "pending_review", null],
+            default: null,
+            index: true,
+        },
+        requestedState: { type: String, default: "" },
+        requestedCity: { type: String, default: "" },
         serviceZones: {
             type: [String],
             default: []
