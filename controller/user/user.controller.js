@@ -479,6 +479,7 @@ export const addAddress = async (req, res) => {
       }
       newAddress.cityId = cityId;
       newAddress.cityName = cityDoc.name;
+      newAddress.city = cityDoc.name; // Legacy support
     } else {
       newAddress.cityName = city;
       newAddress.city = city; // Legacy support
@@ -492,6 +493,7 @@ export const addAddress = async (req, res) => {
       }
       newAddress.stateId = stateId;
       newAddress.stateName = stateDoc.name;
+      newAddress.state = stateDoc.name; // Legacy support
     } else {
       newAddress.stateName = state;
       newAddress.state = state; // Legacy support
@@ -591,9 +593,11 @@ export const updateAddress = async (req, res) => {
         }
         addr.cityId = cityId;
         addr.cityName = cityDoc.name;
+        addr.city = cityDoc.name; // Legacy support
       } else {
         addr.cityId = undefined;
         addr.cityName = undefined;
+        addr.city = undefined;
       }
     } else if (city !== undefined) {
       addr.cityName = city;
@@ -609,9 +613,11 @@ export const updateAddress = async (req, res) => {
         }
         addr.stateId = stateId;
         addr.stateName = stateDoc.name;
+        addr.state = stateDoc.name; // Legacy support
       } else {
         addr.stateId = undefined;
         addr.stateName = undefined;
+        addr.state = undefined;
       }
     } else if (state !== undefined) {
       addr.stateName = state;
