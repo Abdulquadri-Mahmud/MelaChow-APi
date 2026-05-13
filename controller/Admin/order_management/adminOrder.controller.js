@@ -7,6 +7,7 @@ import Rider from "../../../model/rider.model.js";
 import RiderAssignment from "../../../model/riderAssignment.model.js";
 import mongoose from "mongoose";
 import { getPlatformConfig } from "../../../services/platformConfig.service.js";
+import { expireStaleRiderAssignmentOffers } from "../../../services/riderAssignment.service.js";
 
 /**
  * GET ALL ORDERS
@@ -387,7 +388,7 @@ export const getPlatformManagedOrders = async (req, res) => {
         // Get vendor orders for each for context
         const ordersWithVendorContext = await Promise.all(orders.map(async (order) => {
             const vendorOrders = await VendorOrder.find({ userOrderId: order._id })
-                .populate("restaurantId", "storeName logo")
+                .populate("restaurantId", "storeName logo cityId stateId")
                 .lean();
             return { ...order, vendorOrders };
         }));
@@ -613,6 +614,7 @@ export const assignRiderToOrder = async (req, res) => {
         if (platformConfig.riderAssignmentMode === "automatic") {
             return res.status(409).json({
                 success: false,
+                code: "AUTOMATIC_ASSIGNMENT_ENABLED",
                 message: "Automatic rider assignment is enabled. Manual rider assignment is disabled for this order."
             });
         }
@@ -651,15 +653,17 @@ export const assignRiderToOrder = async (req, res) => {
             });
         }
 
+        await expireStaleRiderAssignmentOffers(uniqueRiderIds);
+
         const activeAssignments = await RiderAssignment.find({
             riderId: { $in: uniqueRiderIds },
-            status: "assigned",
-            expiresAt: { $gt: new Date() }
+            status: "assigned"
         }).populate("riderId", "name");
         if (activeAssignments.length) {
             const riderName = activeAssignments[0].riderId?.name || "A selected rider";
             return res.status(409).json({
                 success: false,
+                code: "RIDER_HAS_PENDING_ASSIGNMENT",
                 message: `${riderName} already has a pending assignment offer`
             });
         }
@@ -771,6 +775,7 @@ export const assignRiderToOrder = async (req, res) => {
             console.error('❌ Critical database update failed:', error.message);
             return res.status(409).json({
                 success: false,
+                code: "ASSIGNMENT_STATE_CONFLICT",
                 message: 'Failed to assign rider to order',
                 error: error?.message || "Rider or order was already assigned"
             });

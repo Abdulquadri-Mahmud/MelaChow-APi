@@ -6,6 +6,39 @@ import Rider from "../model/rider.model.js";
 import RiderAssignment from "../model/riderAssignment.model.js";
 import { getPlatformConfig } from "./platformConfig.service.js";
 
+export const expireStaleRiderAssignmentOffers = async (riderIds = []) => {
+    const ids = [...new Set(riderIds.map((id) => id?.toString()).filter(Boolean))];
+    if (!ids.length) return { expiredCount: 0, riderIds: [] };
+
+    const staleAssignments = await RiderAssignment.find({
+        riderId: { $in: ids },
+        status: "assigned",
+        expiresAt: { $lte: new Date() },
+    }).select("riderId orderId");
+
+    if (!staleAssignments.length) return { expiredCount: 0, riderIds: [] };
+
+    const staleRiderIds = [...new Set(staleAssignments.map((assignment) => assignment.riderId.toString()))];
+
+    await RiderAssignment.updateMany(
+        { _id: { $in: staleAssignments.map((assignment) => assignment._id) } },
+        { $set: { status: "timeout", respondedAt: new Date(), reason: "assignment_expired" } }
+    );
+
+    await Rider.updateMany(
+        {
+            _id: { $in: staleRiderIds },
+            status: "pending_assignment",
+        },
+        {
+            $set: { status: "available", assignmentExpiresAt: null },
+            $unset: { currentOrderId: "" },
+        }
+    );
+
+    return { expiredCount: staleAssignments.length, riderIds: staleRiderIds };
+};
+
 export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = null }) => {
     const vendorOrder = await VendorOrder.findById(vendorOrderId).populate("userOrderId");
     if (!vendorOrder?.userOrderId) {
@@ -31,6 +64,8 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
         deletedAt: null,
         currentOrderId: null,
     });
+
+    await expireStaleRiderAssignmentOffers(candidateRiders.map((rider) => rider._id));
 
     const activeAssignments = await RiderAssignment.find({
         riderId: { $in: candidateRiders.map((rider) => rider._id) },
