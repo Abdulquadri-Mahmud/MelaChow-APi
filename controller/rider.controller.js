@@ -372,8 +372,8 @@ export const updateRiderStatus = async (req, res, next) => {
                         { $set: { status: "cancelled", respondedAt: new Date(), reason: "accepted_by_another_rider" } }
                     );
                     await Rider.updateMany(
-                        { _id: { $in: losingRiderIds }, status: "pending_assignment", currentOrderId: null },
-                        { $set: { status: "available", assignmentExpiresAt: null } }
+                        { _id: { $in: losingRiderIds }, status: "pending_assignment" },
+                        { $set: { status: "available", assignmentExpiresAt: null }, $unset: { currentOrderId: "" } }
                     );
                 }
 

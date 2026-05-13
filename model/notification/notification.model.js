@@ -45,6 +45,7 @@ const notificationSchema = new mongoose.Schema({
             'rider_order_rejected',
             'vendor_new_order',
             'vendor_order_cancelled',
+            'vendor_rider_assigned',
             'admin_order_ready',      // ✅ New Admin Type
             'admin_order_delivered',  // ✅ New Admin Type
             'rider_assignment_needed', // ✅ New Admin Type

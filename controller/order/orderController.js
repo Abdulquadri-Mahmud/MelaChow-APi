@@ -1566,6 +1566,9 @@ export const updateVendorOrderStatus = async (req, res) => {
             orderDatabaseId: populatedOrder._id, // ✅ Track specific vendor order
             restaurantName: restaurantName,
             totalAmount: populatedOrder.userOrderId.total,
+            cancellationReason: status === 'cancelled'
+              ? 'The restaurant cancelled this order. Your payment will be returned to your MelaChow wallet.'
+              : undefined,
             items: populatedOrder.items
           }
         );
