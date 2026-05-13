@@ -4,7 +4,7 @@ import { sendMail } from '../../config/mailer.js';
 import { sendTokenCookie } from '../../utils/sendTokenCookie.js';
 import jwt from "jsonwebtoken";
 import { blockToken } from "../../middleware/tokenBlocklist.js";
-import { createTransferRecipient } from '../../services/bank.service.js';
+import { createTransferRecipient, resolveBankAccount } from '../../services/bank.service.js';
 import { validateVendorLocation } from '../../services/locationService.js';
 
 const CURRENT_VENDOR_TERMS_VERSION = "vendor-terms-2026-05-12";
@@ -15,6 +15,43 @@ const getRequestIp = (req) => {
     return forwardedFor.split(",")[0].trim();
   }
   return req.ip || req.socket?.remoteAddress || "";
+};
+
+const normalizeText = (value) => (typeof value === "string" ? value.trim() : "");
+
+const resolveAndBuildPayoutDetails = async (payoutDetails = {}) => {
+  const bankName = normalizeText(payoutDetails.bankName);
+  const bankCode = normalizeText(payoutDetails.bankCode);
+  const accountNumber = normalizeText(payoutDetails.accountNumber).replace(/\D/g, "");
+
+  if (!bankName || !bankCode || !accountNumber) {
+    throw new Error("Bank name, bank code, and account number are required");
+  }
+
+  if (!/^\d{10}$/.test(accountNumber)) {
+    throw new Error("Account number must be 10 digits");
+  }
+
+  const accountName = await resolveBankAccount(accountNumber, bankCode);
+  if (!accountName) {
+    throw new Error("Could not verify bank account details");
+  }
+
+  const recipientCode = await createTransferRecipient({
+    name: accountName,
+    account_number: accountNumber,
+    bank_code: bankCode,
+  });
+
+  return {
+    bankName,
+    bankCode,
+    accountName,
+    accountNumber,
+    recipientCode,
+    payoutMethod: "paystack",
+    payoutEnabled: true,
+  };
 };
 
 // ============================================
@@ -38,9 +75,37 @@ export const registerVendor = async (req, res) => {
       termsVersion,
     } = req.body;
 
+    const normalizedEmail = normalizeText(email).toLowerCase();
+    const normalizedName = normalizeText(name);
+    const normalizedPhone = normalizeText(phone);
+    const normalizedStoreName = normalizeText(storeName);
+    const normalizedStoreDescription = normalizeText(storeDescription);
+    const normalizedAddress = {
+      street: normalizeText(address?.street),
+      city: normalizeText(address?.city),
+      state: normalizeText(address?.state),
+      postalCode: normalizeText(address?.postalCode),
+    };
+
     // Validate input
-    if (!email || !name || !storeName || !cuisineTypes || cuisineTypes.length === 0) {
-      return res.status(400).json({ message: 'Email, Name, Store Name, and at least one Cuisine Type are required' });
+    if (!normalizedEmail || !normalizedName || !normalizedPhone || !normalizedStoreName) {
+      return res.status(400).json({ message: 'Email, name, phone, and store name are required' });
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      return res.status(400).json({ message: "Enter a valid email address" });
+    }
+
+    if (!normalizedStoreDescription) {
+      return res.status(400).json({ message: 'Store description is required' });
+    }
+
+    if (!logo || !Array.isArray(cuisineTypes) || cuisineTypes.length === 0) {
+      return res.status(400).json({ message: 'Store logo and at least one cuisine type are required' });
+    }
+
+    if (!normalizedAddress.street || !normalizedAddress.city || !normalizedAddress.state) {
+      return res.status(400).json({ message: 'Street address, city, and state are required' });
     }
 
     if (termsAccepted !== true) {
@@ -59,7 +124,16 @@ export const registerVendor = async (req, res) => {
     };
 
     // Check if vendor exists
-    const existingVendor = await Vendor.findOne({ email });
+    let verifiedPayoutDetails;
+    try {
+      verifiedPayoutDetails = await resolveAndBuildPayoutDetails(payoutDetails);
+    } catch (error) {
+      return res.status(400).json({
+        message: error.message || "Bank account verification failed. Please check the bank and account number.",
+      });
+    }
+
+    const existingVendor = await Vendor.findOne({ email: normalizedEmail });
     if (existingVendor && existingVendor.verified) {
       return res.status(400).json({ message: 'Email already registered' });
     }
@@ -72,24 +146,24 @@ export const registerVendor = async (req, res) => {
       // Update existing unverified vendor
       existingVendor.otp = otp;
       existingVendor.otpExpires = otpExpires;
-      existingVendor.name = name || existingVendor.name;
-      existingVendor.phone = phone || existingVendor.phone;
-      existingVendor.storeName = storeName || existingVendor.storeName;
+      existingVendor.name = normalizedName || existingVendor.name;
+      existingVendor.phone = normalizedPhone || existingVendor.phone;
+      existingVendor.storeName = normalizedStoreName || existingVendor.storeName;
 
-      if (storeDescription) existingVendor.storeDescription = storeDescription;
+      if (normalizedStoreDescription) existingVendor.storeDescription = normalizedStoreDescription;
       if (logo) existingVendor.logo = logo;
       if (cuisineTypes?.length) existingVendor.cuisineTypes = cuisineTypes;
       if (address) {
         existingVendor.address = {
-          street: address?.street || existingVendor.address?.street || "",
-          city: address?.city || existingVendor.address?.city || "",
-          state: address?.state || existingVendor.address?.state || "",
-          postalCode: address?.postalCode || existingVendor.address?.postalCode || "",
+          street: normalizedAddress.street || existingVendor.address?.street || "",
+          city: normalizedAddress.city || existingVendor.address?.city || "",
+          state: normalizedAddress.state || existingVendor.address?.state || "",
+          postalCode: normalizedAddress.postalCode || existingVendor.address?.postalCode || "",
         };
         // Validate location and set cityId/stateId
         const locationData = await validateVendorLocation(
-          address?.state || existingVendor.address?.state,
-          address?.city || existingVendor.address?.city
+          normalizedAddress.state || existingVendor.address?.state,
+          normalizedAddress.city || existingVendor.address?.city
         );
         existingVendor.stateId = locationData.stateId || null;
         existingVendor.cityId = locationData.cityId || null;
@@ -98,35 +172,7 @@ export const registerVendor = async (req, res) => {
         existingVendor.requestedCity = locationData.requestedCity || "";
       }
       if (openingHours) existingVendor.openingHours = openingHours;
-      if (payoutDetails) {
-        let recipientCode = existingVendor.payoutDetails?.recipientCode || "";
-        
-        // If bank details changed, generate new recipient code
-        if (payoutDetails.accountNumber && payoutDetails.bankCode && 
-           (payoutDetails.accountNumber !== existingVendor.payoutDetails?.accountNumber || 
-            payoutDetails.bankCode !== existingVendor.payoutDetails?.bankCode)) {
-          try {
-            recipientCode = await createTransferRecipient({
-              name: payoutDetails.accountName,
-              account_number: payoutDetails.accountNumber,
-              bank_code: payoutDetails.bankCode
-            });
-          } catch (err) {
-            console.error("Failed to create Paystack recipient during registration update:", err.message);
-            // Non-fatal, but recipientCode remains empty
-          }
-        }
-
-        existingVendor.payoutDetails = {
-          bankName: payoutDetails?.bankName || existingVendor.payoutDetails?.bankName || "",
-          bankCode: payoutDetails?.bankCode || existingVendor.payoutDetails?.bankCode || "",
-          accountName: payoutDetails?.accountName || existingVendor.payoutDetails?.accountName || "",
-          accountNumber: payoutDetails?.accountNumber || existingVendor.payoutDetails?.accountNumber || "",
-          recipientCode: recipientCode,
-          payoutMethod: payoutDetails?.payoutMethod || existingVendor.payoutDetails?.payoutMethod || "paystack",
-          payoutEnabled: payoutDetails?.payoutEnabled ?? existingVendor.payoutDetails?.payoutEnabled ?? true,
-        };
-      }
+      existingVendor.payoutDetails = verifiedPayoutDetails;
 
       // Delivery management is strictly platform-managed
       existingVendor.deliveryManagedBy = "admin";
@@ -134,39 +180,26 @@ export const registerVendor = async (req, res) => {
 
       await existingVendor.save();
     } else {
-      let recipientCode = "";
-      if (payoutDetails?.accountNumber && payoutDetails?.bankCode) {
-        try {
-          recipientCode = await createTransferRecipient({
-            name: payoutDetails.accountName,
-            account_number: payoutDetails.accountNumber,
-            bank_code: payoutDetails.bankCode
-          });
-        } catch (err) {
-          // Failed to create recipient
-        }
-      }
-
       // Validate location and get cityId/stateId
       let locationData = { stateId: null, cityId: null, locationStatus: null, requestedState: "", requestedCity: "" };
-      if (address?.state && address?.city) {
-        locationData = await validateVendorLocation(address.state, address.city);
+      if (normalizedAddress.state && normalizedAddress.city) {
+        locationData = await validateVendorLocation(normalizedAddress.state, normalizedAddress.city);
       }
 
       // Create new vendor
       await Vendor.create({
-        email,
-        name,
-        phone,
-        storeName,
-        storeDescription: storeDescription || "",
+        email: normalizedEmail,
+        name: normalizedName,
+        phone: normalizedPhone,
+        storeName: normalizedStoreName,
+        storeDescription: normalizedStoreDescription,
         logo: logo || "",
         cuisineTypes: cuisineTypes || [],
         address: {
-          street: address?.street || "",
-          city: address?.city || "",
-          state: address?.state || "",
-          postalCode: address?.postalCode || "",
+          street: normalizedAddress.street,
+          city: normalizedAddress.city,
+          state: normalizedAddress.state,
+          postalCode: normalizedAddress.postalCode,
         },
         stateId: locationData.stateId || null,
         cityId: locationData.cityId || null,
@@ -174,15 +207,7 @@ export const registerVendor = async (req, res) => {
         requestedState: locationData.requestedState || "",
         requestedCity: locationData.requestedCity || "",
         openingHours: openingHours || undefined,
-        payoutDetails: {
-          bankName: payoutDetails?.bankName || "",
-          bankCode: payoutDetails?.bankCode || "",
-          accountName: payoutDetails?.accountName || "",
-          accountNumber: payoutDetails?.accountNumber || "",
-          recipientCode: recipientCode,
-          payoutMethod: payoutDetails?.payoutMethod || "paystack",
-          payoutEnabled: payoutDetails?.payoutEnabled ?? true,
-        },
+        payoutDetails: verifiedPayoutDetails,
         otp,
         otpExpires,
         verified: false,
@@ -193,7 +218,7 @@ export const registerVendor = async (req, res) => {
 
     // Send OTP email
     await sendMail({
-      to: email,
+      to: normalizedEmail,
       subject: 'Verify Your Vendor Account - MelaChow',
       html: `
       <div style="font-family: Arial, sans-serif; background-color: #f4f7fb; padding: 40px;">
@@ -236,7 +261,7 @@ export const registerVendor = async (req, res) => {
 
     res.status(200).json({
       message: 'Verification code sent to your email',
-      email
+      email: normalizedEmail
     });
 
   } catch (error) {

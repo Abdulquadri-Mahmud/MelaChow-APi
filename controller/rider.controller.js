@@ -7,6 +7,7 @@ import Rider from "../model/rider.model.js";
 import RiderAssignment from "../model/riderAssignment.model.js";
 import PlatformVehicle from "../model/platformVehicle.model.js";
 import { sendDeliveryOTP, verifyDeliveryOTP } from '../services/otp.service.js';
+import { validateVendorLocation } from "../services/locationService.js";
 
 export const createRider = async (req, res, next) => {
     try {
@@ -30,15 +31,36 @@ export const registerRider = async (req, res, next) => {
             password,
             stateId,
             cityId,
+            state,
+            city,
+            requestedState,
+            requestedCity,
             serviceZones,
             vehicleType,
         } = req.body;
 
-        if (!name || !phone || !password || !stateId || !cityId) {
+        const stateName = (requestedState || state || "").trim();
+        const cityName = (requestedCity || city || "").trim();
+        const hasKnownLocation = Boolean(stateId && cityId);
+        const hasRequestedLocation = Boolean(stateName && cityName);
+
+        if (!name || !phone || !password || (!hasKnownLocation && !hasRequestedLocation)) {
             return res.status(400).json({
                 success: false,
                 message: "Name, phone, password, state and city are required",
             });
+        }
+
+        let locationData = {
+            stateId: hasKnownLocation ? stateId : null,
+            cityId: hasKnownLocation ? cityId : null,
+            locationStatus: hasKnownLocation ? "approved" : null,
+            requestedState: "",
+            requestedCity: "",
+        };
+
+        if (hasRequestedLocation) {
+            locationData = await validateVendorLocation(stateName, cityName);
         }
 
         const rider = await riderService.createRider({
@@ -46,9 +68,14 @@ export const registerRider = async (req, res, next) => {
             phone,
             email: email || undefined,
             password,
-            stateId,
-            cityId,
-            serviceZones: Array.isArray(serviceZones) ? serviceZones : [],
+            stateId: locationData.stateId,
+            cityId: locationData.cityId,
+            locationStatus: locationData.locationStatus,
+            requestedState: locationData.requestedState || "",
+            requestedCity: locationData.requestedCity || "",
+            serviceZones: Array.isArray(serviceZones)
+                ? serviceZones
+                : (locationData.requestedCity ? [locationData.requestedCity] : []),
             vehicleOwnership: "own",
             vehicleType: ["bicycle", "motorbike"].includes(vehicleType) ? vehicleType : "motorbike",
             isVerified: false,

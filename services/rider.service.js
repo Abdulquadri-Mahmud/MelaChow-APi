@@ -735,7 +735,8 @@ export const adminUpdateRider = async (riderId, updateData) => {
 
     const allowedUpdates = [
         "name", "phone", "notes", "isActive", "avatar", "metadata",
-        "vendorId", "status", "stateId", "cityId", "serviceZones", "vehicleOwnership", "vehicleType", "platformVehicleId", "isVerified"
+        "vendorId", "status", "stateId", "cityId", "serviceZones", "vehicleOwnership", "vehicleType", "platformVehicleId", "isVerified",
+        "locationStatus", "requestedState", "requestedCity"
     ];
 
     if (rider.currentOrderId && (updateData.status || updateData.vendorId !== undefined || updateData.cityId !== undefined || updateData.stateId !== undefined)) {
@@ -765,6 +766,12 @@ export const adminUpdateRider = async (riderId, updateData) => {
             rider[key] = key === "vendorId" && !updateData[key] ? null : updateData[key];
         }
     });
+
+    if (updateData.stateId && updateData.cityId) {
+        rider.locationStatus = "approved";
+        rider.requestedState = "";
+        rider.requestedCity = "";
+    }
 
     if (nextVehicleOwnership !== "platform") {
         rider.platformVehicleId = null;
@@ -844,6 +851,9 @@ export const adminApproveRider = async (riderId, adminId) => {
     if (!rider.cityId || !rider.stateId) throw new Error("Assign the rider's state and city before approval");
 
     rider.isVerified = true;
+    rider.locationStatus = "approved";
+    rider.requestedState = "";
+    rider.requestedCity = "";
     rider.approvedAt = new Date();
     rider.approvedBy = adminId || null;
     if (rider.status === "available" && rider.currentOrderId) {

@@ -33,6 +33,7 @@ import {
     suspendVendor,
     toggleVendorStatus,
     updateCommission,
+    updatePendingVendor,
     updateVendorDeliveryMode,
 } from "../../controller/Admin/vendors_management/vendor.controller.js";
 import vendorPromoRoutes from "./vendorPromo.routes.js";
@@ -71,6 +72,7 @@ router.get("/users/metrics", adminAuth, getUserMetrics);
 // Vendor Management Routes (Admin Protected)
 router.get("/vendors/metrics", adminAuth, getVendorMetrics);
 router.patch("/vendors/approve", adminAuth, approveVendor);
+router.patch("/vendors/pending/update", adminAuth, updatePendingVendor);
 router.patch("/vendors/reject", adminAuth, rejectVendor);
 router.patch("/vendors/suspend", adminAuth, suspendVendor);
 router.patch("/vendors/reactivate", adminAuth, reactivateVendor);

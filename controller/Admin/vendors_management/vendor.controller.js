@@ -113,6 +113,75 @@ export const approveVendor = async (req, res) => {
   }
 };
 
+/**
+ * Update details on a vendor that is still pending approval.
+ * This lets admins correct state/city after reviewing a typed location request.
+ */
+export const updatePendingVendor = async (req, res) => {
+  try {
+    const { vendorId } = req.query;
+    const { state, city, street, postalCode, createLocation = false } = req.body;
+
+    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails");
+    if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
+    if (vendor.isApproved) {
+      return res.status(400).json({ success: false, message: "Approved vendors cannot be updated from pending review" });
+    }
+
+    const stateName = typeof state === "string" ? state.trim() : "";
+    const cityName = typeof city === "string" ? city.trim() : "";
+
+    if (stateName || cityName) {
+      if (!stateName || !cityName) {
+        return res.status(400).json({ success: false, message: "Both state and city are required when updating location" });
+      }
+
+      try {
+        const locationData = await resolveVendorLocation(stateName, cityName, createLocation);
+        vendor.stateId = locationData.stateId;
+        vendor.cityId = locationData.cityId;
+        vendor.locationStatus = "approved";
+        vendor.requestedState = "";
+        vendor.requestedCity = "";
+      } catch (error) {
+        vendor.stateId = null;
+        vendor.cityId = null;
+        vendor.locationStatus = "pending_review";
+        vendor.requestedState = stateName;
+        vendor.requestedCity = cityName;
+      }
+
+      vendor.address.state = stateName;
+      vendor.address.city = cityName;
+    }
+
+    if (typeof street === "string") vendor.address.street = street.trim();
+    if (typeof postalCode === "string") vendor.address.postalCode = postalCode.trim();
+
+    await vendor.save();
+
+    await ActivityLog.create({
+      adminId: req.admin._id,
+      action: "UPDATE_PENDING_VENDOR",
+      targetType: "Vendor",
+      targetId: vendor._id,
+      details: `Updated pending vendor details: ${vendor.storeName}`,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Pending vendor details updated",
+      vendor,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Error updating pending vendor",
+      error: error.message,
+    });
+  }
+};
+
 // REJECT VENDOR
 export const rejectVendor = async (req, res) => {
   try {
