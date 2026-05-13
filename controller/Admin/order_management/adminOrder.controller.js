@@ -313,7 +313,8 @@ export const adminOverrideOrderStatus = async (req, res) => {
             
             // 1. Notify Customer
             await sendOrderNotification(order.userId, order.orderId, status, {
-                orderDatabaseId: order._id
+                orderDatabaseId: order._id,
+                cancellationReason: status === 'cancelled' ? reason : undefined
             });
 
             // 2. Notify all Vendors in this order
@@ -608,6 +609,14 @@ export const assignRiderToOrder = async (req, res) => {
             });
         }
 
+        const platformConfig = await getPlatformConfig();
+        if (platformConfig.riderAssignmentMode === "automatic") {
+            return res.status(409).json({
+                success: false,
+                message: "Automatic rider assignment is enabled. Manual rider assignment is disabled for this order."
+            });
+        }
+
         // Step 3: Validate the order is in the correct state
         const validStatuses = ['ready_for_pickup', 'ready'];
         if (!validStatuses.includes(vendorOrder.orderStatus)) {
@@ -642,6 +651,19 @@ export const assignRiderToOrder = async (req, res) => {
             });
         }
 
+        const activeAssignments = await RiderAssignment.find({
+            riderId: { $in: uniqueRiderIds },
+            status: "assigned",
+            expiresAt: { $gt: new Date() }
+        }).populate("riderId", "name");
+        if (activeAssignments.length) {
+            const riderName = activeAssignments[0].riderId?.name || "A selected rider";
+            return res.status(409).json({
+                success: false,
+                message: `${riderName} already has a pending assignment offer`
+            });
+        }
+
         // Step 6: Find the Vendor
         const vendor = await Vendor.findById(vendorOrder.restaurantId).select('storeName deliveryManagedBy cityId stateId');
         const cityIdForGuard = masterOrder.deliveryAddress?.cityId || vendor?.cityId || null;
@@ -671,7 +693,6 @@ export const assignRiderToOrder = async (req, res) => {
         }
 
         const assignmentExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
-        const platformConfig = await getPlatformConfig();
         const riderPayout = platformConfig.riderFixedPayout || 600;
         const riderNames = riders.map((rider) => rider.name).filter(Boolean).join(", ");
 
@@ -726,6 +747,7 @@ export const assignRiderToOrder = async (req, res) => {
                 { 
                     $set: { 
                         status: 'pending_assignment',
+                        currentOrderId: masterOrder._id,
                         assignmentExpiresAt
                     } 
                 },

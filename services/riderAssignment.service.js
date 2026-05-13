@@ -21,7 +21,7 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
         return { success: false, reason: "missing_location", riderCount: 0 };
     }
 
-    const riders = await Rider.find({
+    const candidateRiders = await Rider.find({
         managedBy: "admin",
         cityId,
         stateId,
@@ -31,6 +31,14 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
         deletedAt: null,
         currentOrderId: null,
     });
+
+    const activeAssignments = await RiderAssignment.find({
+        riderId: { $in: candidateRiders.map((rider) => rider._id) },
+        status: "assigned",
+        expiresAt: { $gt: new Date() },
+    }).select("riderId");
+    const busyRiderIds = new Set(activeAssignments.map((assignment) => assignment.riderId.toString()));
+    const riders = candidateRiders.filter((rider) => !busyRiderIds.has(rider._id.toString()));
 
     if (!riders.length) {
         return { success: false, reason: "no_available_riders", riderCount: 0 };
@@ -85,7 +93,7 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
                 cityId,
                 stateId,
             },
-            { $set: { status: "pending_assignment", assignmentExpiresAt } },
+            { $set: { status: "pending_assignment", currentOrderId: masterOrder._id, assignmentExpiresAt } },
             { session }
         );
 

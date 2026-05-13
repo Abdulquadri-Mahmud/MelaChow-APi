@@ -62,7 +62,11 @@ const NOTIFICATION_CONFIGS = {
     },
     order_cancelled: {
         title: 'Order Cancelled',
-        getBody: (data) => `Your order #${data.orderId} from ${data.restaurantName || 'the restaurant'} has been cancelled.`,
+        getBody: (data) => {
+            const reason = data.cancellationReason || data.reason || data.customMessage;
+            const reasonPart = reason ? ` Reason: ${reason}.` : '';
+            return `Your order #${data.orderId} from ${data.restaurantName || 'the restaurant'} has been cancelled.${reasonPart}`;
+        },
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
@@ -89,6 +93,12 @@ const NOTIFICATION_CONFIGS = {
         getBody: (data) => `Order #${data.orderId} has been cancelled by ${data.customerName || 'the customer'}.`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: true
+    },
+    vendor_rider_assigned: {
+        title: 'Rider Offer Sent',
+        getBody: (data) => `Rider assignment offer${data.riderName ? ` sent to ${data.riderName}` : ' has been sent'} for Order #${data.orderId}.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: false
     },
     vendor_order_timeout: {
         title: 'Missed Order',
@@ -235,6 +245,8 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
                 restaurantName: data.restaurantName,
                 customerName: data.customerName,
                 location: data.location,
+                cancellationReason: data.cancellationReason,
+                reason: data.reason,
                 customMessage: data.customMessage
             }),
             icon: data.icon || config.icon,
