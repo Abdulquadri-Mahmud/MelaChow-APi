@@ -240,7 +240,7 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
             icon: data.icon || config.icon,
             image: data.image,
             url: data.url || (data.orderId ? (
-                role === 'vendor' ? `/vendors/orders/${data.orderDatabaseId || data.orderId}` :
+                role === 'vendor' ? `/vendors/order/${data.orderDatabaseId || data.orderId}` :
                 role === 'rider' ? `/rider/notifications` :
                 role === 'admin' ? `/admin/orders/${data.orderDatabaseId || data.orderId}` :
                 `/track-orders/${data.orderId}`
@@ -521,7 +521,7 @@ export async function sendVendorNotification(restaurantId, orderId, type, data =
     console.log(`Sending vendor notification: Restaurant ${restaurantIdString}, Order ${orderId}, Type: ${type}`);
 
     // Deep Link Consistency Fix: 
-    // Vendors deep-link to /vendors/orders/[VendorOrder._id]. 
+    // Vendors deep-link to /vendors/order/[VendorOrder._id]. 
     // If orderDatabaseId is missing, we auto-resolve it from the parent Order.
     if (!data.orderDatabaseId && orderId) {
         try {
@@ -559,7 +559,7 @@ export async function sendVendorNotification(restaurantId, orderId, type, data =
         customerName: data.customerName,
         location: data.location,
         restaurantId: restaurantIdString,
-        url: `/vendors/orders/${data.orderDatabaseId || orderId}`,
+        url: `/vendors/order/${data.orderDatabaseId || orderId}`,
         ...data
     }, 'vendor');
     
@@ -604,7 +604,7 @@ export async function sendVendorNotification(restaurantId, orderId, type, data =
                 sendNotification(String(ownerId), type, {
                     orderId,
                     restaurantId: restaurantIdString,
-                    url: `/vendors/orders/${data.orderDatabaseId || orderId}`,
+                    url: `/vendors/order/${data.orderDatabaseId || orderId}`,
                     ...data
                 }, 'user')
             );
