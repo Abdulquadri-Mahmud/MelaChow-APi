@@ -1617,9 +1617,10 @@ export const updateVendorOrderStatus = async (req, res) => {
                   const { sendNotification } = await import('../../services/notification.service.js');
                   await sendNotification(null, 'rider_assignment_needed', {
                       orderId,
-                      orderDatabaseId: populatedOrder.userOrderId._id,
+                      orderDatabaseId: populatedOrder._id,
                       vendorOrderId: populatedOrder._id,
                       reason: assignmentResult.reason,
+                      url: `/admin/orders/${populatedOrder._id}`,
                       message: `Automatic broadcast assignment could not find available riders for Order #${orderId}. Admin attention required.`,
                   }, 'admin');
               }
