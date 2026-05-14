@@ -77,6 +77,40 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
     };
 
     console.log(`🔍 [Broadcast Assignment] Searching for riders with query:`, riderQuery);
+    
+    // 💡 SELF-HEALING: Reset riders stuck in 'pending_assignment' but with no active RiderAssignment record
+    const stuckRiders = await Rider.find({
+        cityId,
+        stateId,
+        status: "pending_assignment",
+        currentOrderId: null
+    }).select("_id");
+
+    if (stuckRiders.length > 0) {
+        const stuckIds = stuckRiders.map(r => r._id);
+        const activeAssignmentCount = await RiderAssignment.countDocuments({
+            riderId: { $in: stuckIds },
+            status: "assigned",
+            expiresAt: { $gt: new Date() }
+        });
+
+        // If number of active assignments is less than stuck riders, some need resetting
+        if (activeAssignmentCount < stuckIds.length) {
+            console.log(`🧹 [Broadcast Assignment] Found potentially stuck riders. Reconciling...`);
+            for (const riderId of stuckIds) {
+                const hasActive = await RiderAssignment.exists({
+                    riderId,
+                    status: "assigned",
+                    expiresAt: { $gt: new Date() }
+                });
+                if (!hasActive) {
+                    await Rider.updateOne({ _id: riderId }, { $set: { status: "available" } });
+                    console.log(`✅ [Broadcast Assignment] Reset stuck rider ${riderId} to 'available'`);
+                }
+            }
+        }
+    }
+
     const candidateRiders = await Rider.find(riderQuery);
     console.log(`🔍 [Broadcast Assignment] Found ${candidateRiders.length} candidate riders.`);
 
