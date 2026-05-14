@@ -487,7 +487,7 @@ const startServer = async () => {
     const server = http.createServer(app);
     const io     = await initializeSocket(server);
     app.set("io", io);
-
+    
     // 4. Start listening
     server.listen(PORT, () => {
       logger.info({ port: PORT, env: process.env.NODE_ENV || "development" }, '🚀 Server running');
