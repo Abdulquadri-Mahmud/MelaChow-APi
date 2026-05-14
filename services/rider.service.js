@@ -261,11 +261,32 @@ export const getRiderOrderDetails = async (riderId, orderId) => {
 
         const orderObj = order.toObject();
         
-        // Populate flattened fields for the Rider UI
+        // 1. Resolve Potential Earnings (Rider's Share)
+        if (!orderObj.riderEarnings) {
+            const { getPlatformConfig } = await import("./platformConfig.service.js");
+            const config = await getPlatformConfig();
+            orderObj.riderEarnings = config.riderFixedPayout || 600;
+        }
+
+        // 2. Resolve Restaurant Details and Address
         const firstRestaurant = order.items?.[0]?.restaurantId;
-        orderObj.restaurantId = firstRestaurant?._id || firstRestaurant || order.vendorId || null;
-        orderObj.restaurantName = firstRestaurant?.storeName || "Partner Merchant";
-        orderObj.restaurantLogo = firstRestaurant?.logo || null;
+        const restaurantId = firstRestaurant?._id || firstRestaurant || order.vendorId;
+        
+        if (restaurantId) {
+            const Vendor = mongoose.model("Vendor");
+            const restaurant = await Vendor.findById(restaurantId).select("storeName address phone location");
+            if (restaurant) {
+                orderObj.restaurantId = restaurant;
+                orderObj.restaurantName = restaurant.storeName || "Partner Merchant";
+                
+                // Flatten the address for the UI
+                const rAddr = restaurant.address;
+                orderObj.restaurantAddress = rAddr?.fullAddress || rAddr?.street || 
+                    (typeof rAddr === 'string' ? rAddr : "Restaurant Address");
+            }
+        }
+
+        if (!orderObj.restaurantName) orderObj.restaurantName = "Partner Merchant";
 
         const user = order.userId;
         orderObj.userName = user?.fullName || (user ? `${user.firstname || ""} ${user.lastname || ""}`.trim() : null) || "Customer";
@@ -597,11 +618,23 @@ export const updateRiderStatus = async (riderId, status) => {
         throw new Error("You can only transition to on_delivery from pending_assignment");
     }
 
+    // ✅ IMPROVED: If rider is rejecting a broadcast offer (pending_assignment)
     if (status === "available" && rider.status === "pending_assignment") {
-        await RiderAssignment.findOneAndUpdate(
-            { riderId, orderId: rider.currentOrderId, status: "assigned" },
-            { $set: { status: "rejected", respondedAt: new Date(), reason: "rider_released_assignment" } }
-        );
+        // Find the active assignment they are rejecting
+        const activeAssignment = await RiderAssignment.findOne({
+            riderId,
+            status: "assigned",
+            expiresAt: { $gt: new Date() }
+        }).sort({ createdAt: -1 });
+
+        if (activeAssignment) {
+            await RiderAssignment.updateOne(
+                { _id: activeAssignment._id },
+                { $set: { status: "rejected", respondedAt: new Date(), reason: reason || "rider_rejected_broadcast" } }
+            );
+            console.log(`❌ Rider ${riderId} rejected broadcast for Order ${activeAssignment.orderId}`);
+        }
+        
         rider.currentOrderId = null;
         rider.assignmentExpiresAt = null;
     }
