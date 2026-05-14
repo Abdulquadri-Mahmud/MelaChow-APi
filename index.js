@@ -89,6 +89,7 @@ const allowedOrigins = [
   'https://melachow.com',
   'http://localhost:3000',
   'http://localhost:3001',
+  'http://localhost:3002',
   'https://melachow-admin.vercel.app',
   'https://admin.melachow.com',
   'https://vendor.melachow.com',
