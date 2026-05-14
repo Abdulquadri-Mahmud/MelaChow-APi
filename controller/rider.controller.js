@@ -242,9 +242,8 @@ export const getRiderOrderDetails = async (req, res, next) => {
             return res.status(403).json({ success: false, message: "Unauthorized to view this order" });
         }
 
-        const order = await Order.findById(orderId)
-            .populate({ path: "items.restaurantId", select: "storeName address phone location coords" })
-            .populate("userId", "firstname lastname name fullName phone email");
+        // Fetch order with minimal population first to avoid join crashes
+        const order = await Order.findById(orderId).populate("userId", "firstname lastname name fullName phone email");
 
         if (!order) {
             return res.status(404).json({ success: false, message: "Order not found" });
@@ -273,13 +272,21 @@ export const getRiderOrderDetails = async (req, res, next) => {
 
         const orderObj = order.toObject();
         
-        // Safety check for restaurantId
-        const firstItem = orderObj.items?.[0];
-        orderObj.restaurantId = firstItem?.restaurantId || orderObj.vendorId || null;
-        
-        // If restaurantId was populated, extract storeName for the UI
-        if (orderObj.restaurantId && typeof orderObj.restaurantId === 'object') {
-            orderObj.restaurantName = orderObj.restaurantId.storeName || "Store";
+        // Manual restaurant lookup for maximum safety
+        try {
+            const firstItem = orderObj.items?.[0];
+            const restaurantId = firstItem?.restaurantId || orderObj.vendorId;
+            
+            if (restaurantId && mongoose.Types.ObjectId.isValid(restaurantId)) {
+                const restaurant = await mongoose.model("Vendor").findById(restaurantId).select("storeName address phone location");
+                if (restaurant) {
+                    orderObj.restaurantName = restaurant.storeName || "Store";
+                    orderObj.restaurantId = restaurant;
+                }
+            }
+        } catch (restErr) {
+            console.warn("⚠️ [getRiderOrderDetails] Failed to link restaurant details:", restErr.message);
+            orderObj.restaurantName = "MelaChow Store";
         }
 
         // Populate customer-specific details for Rider UI with safety
