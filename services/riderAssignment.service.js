@@ -52,12 +52,21 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
     const cityId = masterOrder.deliveryAddress?.cityId || vendor?.cityId || null;
     const stateId = masterOrder.deliveryAddress?.stateId || vendor?.stateId || null;
 
+    console.log(`🔍 [Broadcast Assignment] Resolving location for Order ${masterOrder.orderId}:`, {
+        cityId,
+        stateId,
+        deliveryCityId: masterOrder.deliveryAddress?.cityId,
+        vendorCityId: vendor?.cityId
+    });
+
     if (!cityId || !stateId) {
+        console.warn(`⚠️ [Broadcast Assignment] Missing location IDs for Order ${masterOrder.orderId}. Cannot broadcast.`);
         return { success: false, reason: "missing_location", riderCount: 0 };
     }
 
-    const candidateRiders = await Rider.find({
-        managedBy: "admin",
+    // ✅ FIX: Removed 'managedBy: admin' to allow ALL available riders in the city 
+    // to participate in the automated broadcast, ensuring maximum fulfillment coverage.
+    const riderQuery = {
         cityId,
         stateId,
         status: "available",
@@ -65,7 +74,11 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
         isVerified: true,
         deletedAt: null,
         currentOrderId: null,
-    });
+    };
+
+    console.log(`🔍 [Broadcast Assignment] Searching for riders with query:`, riderQuery);
+    const candidateRiders = await Rider.find(riderQuery);
+    console.log(`🔍 [Broadcast Assignment] Found ${candidateRiders.length} candidate riders.`);
 
     await expireStaleRiderAssignmentOffers(candidateRiders.map((rider) => rider._id));
 
