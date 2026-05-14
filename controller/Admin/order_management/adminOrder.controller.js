@@ -751,7 +751,6 @@ export const assignRiderToOrder = async (req, res) => {
                 { 
                     $set: { 
                         status: 'pending_assignment',
-                        currentOrderId: masterOrder._id,
                         assignmentExpiresAt
                     } 
                 },
@@ -799,9 +798,10 @@ export const assignRiderToOrder = async (req, res) => {
             expiresAt: assignmentExpiresAt,
             metadata: {
                 restaurantName: vendor?.storeName || '',
-                orderReadableId: masterOrder.orderId || ''
+                orderReadableId: masterOrder.orderId || '',
+                assignmentMode: "manual"
             }
-        })), { session });
+        })), { session, ordered: true });
 
         await session.commitTransaction();
         session.endSession();
@@ -825,7 +825,9 @@ export const assignRiderToOrder = async (req, res) => {
                     customerName: masterOrder.deliveryAddress?.name || "Customer",
                     customerPhone: masterOrder.deliveryAddress?.phone,
                     note: masterOrder.note,
-                    payout: riderPayout
+                    payout: riderPayout,
+                    assignmentMode: "manual",
+                    assignmentExpiresAt
                 }));
             }
             console.log(`✅ Socket: Order assigned event emitted to ${riders.length} rider(s)`);
@@ -838,6 +840,7 @@ export const assignRiderToOrder = async (req, res) => {
                     restaurantName: vendor?.storeName,
                     orderDatabaseId: masterOrder._id,
                     payout: riderPayout,
+                    assignmentMode: "manual",
                     assignmentExpiresAt
                 })
             ));

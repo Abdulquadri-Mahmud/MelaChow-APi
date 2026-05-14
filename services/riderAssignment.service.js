@@ -6,6 +6,8 @@ import Rider from "../model/rider.model.js";
 import RiderAssignment from "../model/riderAssignment.model.js";
 import { getPlatformConfig } from "./platformConfig.service.js";
 
+const AUTOMATIC_ASSIGNMENT_EXPIRES_AT = new Date("9999-12-31T23:59:59.999Z");
+
 export const expireStaleRiderAssignmentOffers = async (riderIds = []) => {
     const ids = [...new Set(riderIds.map((id) => id?.toString()).filter(Boolean))];
     if (!ids.length) return { expiredCount: 0, riderIds: [] };
@@ -79,7 +81,7 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
         return { success: false, reason: "no_available_riders", riderCount: 0 };
     }
 
-    const assignmentExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    const assignmentExpiresAt = AUTOMATIC_ASSIGNMENT_EXPIRES_AT;
     const riderIds = riders.map((rider) => rider._id);
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -128,7 +130,7 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
                 cityId,
                 stateId,
             },
-            { $set: { status: "pending_assignment", currentOrderId: masterOrder._id, assignmentExpiresAt } },
+            { $set: { status: "pending_assignment", assignmentExpiresAt } },
             { session }
         );
 
@@ -151,7 +153,7 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
                 orderReadableId: masterOrder.orderId || "",
                 assignmentMode: "automatic",
             },
-        })), { session });
+        })), { session, ordered: true });
 
         await session.commitTransaction();
     } catch (error) {
@@ -181,12 +183,15 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
                 customerPhone: masterOrder.deliveryAddress?.phone,
                 note: masterOrder.note,
                 payout: riderPayout,
+                assignmentMode: "automatic",
+                assignmentExpiresAt,
             }));
 
             await sendRiderNotification(rider._id, masterOrder._id, "order_assigned", {
                 restaurantName: vendor?.storeName,
                 orderDatabaseId: masterOrder._id,
                 payout: riderPayout,
+                assignmentMode: "automatic",
                 assignmentExpiresAt,
             });
         }));
