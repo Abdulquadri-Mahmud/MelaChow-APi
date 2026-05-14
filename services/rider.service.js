@@ -9,6 +9,7 @@ import PlatformVehicle from "../model/platformVehicle.model.js";
 import State from "../model/location/State.js";
 import City from "../model/location/City.js";
 import mongoose from "mongoose";
+import User from "../model/user.model.js"; // Ensure User model is registered for population
 import { releaseEscrowToVendor } from '../controller/order/createOrderV2.controller.js';
 import { escrowReleaseQueue } from '../config/queue.js';
 import logger from '../config/logger.js';
@@ -83,7 +84,6 @@ export const createRider = async (riderData, vendorId = null) => {
             console.log(`✅ Paystack recipient created for new rider: ${recipientCode}`);
         } catch (err) {
             console.error("⚠️ Failed to create Paystack recipient during rider creation:", err.message);
-            // We don't block rider creation, but they won't be able to withdraw until they re-save bank details
         }
     }
 
@@ -166,67 +166,88 @@ export const getAvailableRiders = async (vendorId) => {
 
 /**
  * ✅ FIX: Get the rider's currently active/assigned order.
- * The frontend calls GET /riders/:riderId/active-order but this function
- * did not exist — causing a permanent 404 and making activeOrder always null.
+ * The frontend calls GET /riders/:riderId/active-order.
  */
 export const getActiveOrder = async (riderId) => {
-    const rider = await Rider.findById(riderId);
-    if (!rider) throw new Error("Rider not found");
-
-    let activeOrderId = rider.currentOrderId;
-
-    if (!activeOrderId && rider.status === "pending_assignment") {
-        const pendingAssignment = await RiderAssignment.findOne({
-            riderId,
-            status: "assigned",
-            expiresAt: { $gt: new Date() },
-        }).sort({ createdAt: -1 });
-        activeOrderId = pendingAssignment?.orderId || null;
-    }
-
-    // No active order assigned
-    if (!activeOrderId) return null;
-
-    const order = await Order.findById(activeOrderId)
-        .populate({ path: "items.restaurantId", select: "storeName address phone location coords" })
-        .populate("userId", "firstname lastname name fullName phone email");
-
-    if (!order) {
-        // Order was deleted or currentOrderId is stale — clean it up
-        if (rider.currentOrderId) {
-            rider.currentOrderId = null;
-            await rider.save();
+    try {
+        if (!riderId || !mongoose.Types.ObjectId.isValid(riderId)) {
+            return null;
         }
+        
+        // Use lean for performance if we only need read-only data, 
+        // but we need to check rider.status so keep as doc for now.
+        const rider = await Rider.findById(riderId);
+        if (!rider) return null;
+
+        let activeOrderId = rider.currentOrderId;
+
+        // ✅ FIX: If rider is in 'pending_assignment' but currentOrderId is null,
+        // it means they have been offered an order but haven't accepted it yet.
+        // We look up the latest active assignment offer for this rider.
+        if (!activeOrderId && rider.status === "pending_assignment") {
+            const pendingAssignment = await RiderAssignment.findOne({
+                riderId: rider._id,
+                status: "assigned",
+                expiresAt: { $gt: new Date() },
+            }).sort({ createdAt: -1 });
+            
+            activeOrderId = pendingAssignment?.orderId || null;
+        }
+
+        // No active order or pending offer
+        if (!activeOrderId) return null;
+
+        // Fetch the master order details
+        const order = await Order.findById(activeOrderId)
+            .populate({ 
+                path: "items.restaurantId", 
+                select: "storeName address phone location coords logo cityId stateId" 
+            })
+            .populate("userId", "firstname lastname name fullName phone email");
+
+        if (!order) {
+            // Stale reference cleanup
+            if (rider.currentOrderId && rider.currentOrderId.toString() === activeOrderId.toString()) {
+                await Rider.updateOne({ _id: rider._id }, { $set: { currentOrderId: null } });
+            }
+            return null;
+        }
+
+        // Enrich the order object with flattened fields for the Rider UI
+        const orderObj = order.toObject();
+        
+        // Normalize status for UI consistency
+        if (rider.status === "pending_assignment") {
+            orderObj.status = "assigned"; // Represents "offered" to the rider
+        } else {
+            orderObj.status = order.orderStatus;
+        }
+        
+        // Vendor details from the first item (assuming single-vendor or primary vendor)
+        const firstRestaurant = order.items?.[0]?.restaurantId;
+        orderObj.restaurantId = firstRestaurant?._id || firstRestaurant || order.vendorId || null;
+        orderObj.restaurantName = firstRestaurant?.storeName || "Partner Merchant";
+        orderObj.restaurantLogo = firstRestaurant?.logo || null;
+
+        // Customer Name resolution
+        const user = order.userId;
+        orderObj.userName = user?.fullName || (user ? `${user.firstname || ""} ${user.lastname || ""}`.trim() : null) || "Customer";
+        orderObj.userPhone = user?.phone || order.phone || null;
+
+        // Address resolution for Rider (Full String)
+        const addr = order.deliveryAddress;
+        orderObj.deliveryFullAddress = addr?.address || addr?.addressLine || (addr ? `${addr.addressLine || ""}, ${addr.cityName || addr.city || ""}`.trim() : null);
+
+        return orderObj;
+    } catch (error) {
+        console.error("💥 Error in getActiveOrder service:", error.message);
+        // Do not throw here to prevent 500s on the dashboard; return null and let the UI show empty state.
         return null;
     }
-
-    // Enrich with a simplified status so the dashboard can show the right CTA
-    const orderObj = order.toObject();
-    if (rider.status === "pending_assignment") {
-        orderObj.status = "assigned";
-    } else if (rider.status === "on_delivery" || order.orderStatus === "out_for_delivery") {
-        orderObj.status = "out_for_delivery";
-    } else {
-        orderObj.status = order.orderStatus;
-    }
-    const firstRestaurant = order.items?.[0]?.restaurantId;
-    orderObj.restaurantId = firstRestaurant || order.vendorId || null;
-    orderObj.restaurantName = firstRestaurant?.storeName || null;
-
-    // Customer Name resolution
-    const user = order.userId;
-    orderObj.userName = user?.fullName || (user ? `${user.firstname || ""} ${user.lastname || ""}`.trim() : null) || "Customer";
-    orderObj.userPhone = user?.phone || order.phone || null;
-
-    // Address resolution for Rider (Full String)
-    const addr = order.deliveryAddress;
-    orderObj.deliveryFullAddress = addr?.address || addr?.addressLine || (addr ? `${addr.addressLine || ""}, ${addr.cityName || addr.city || ""}`.trim() : null);
-
-    return orderObj;
 };
 
 /**
- * Assign a rider to an order
+ * Assign a rider to an order (Manual flow - Keep for fallback/admin use)
  */
 export const assignRiderToOrder = async (orderId, riderId, vendorId) => {
     const session = await mongoose.startSession();
@@ -234,36 +255,23 @@ export const assignRiderToOrder = async (orderId, riderId, vendorId) => {
     try {
         const order = await Order.findById(orderId).session(session);
         if (!order) throw new Error("Order not found");
-        const vendorOrderExists = await VendorOrder.exists({ userOrderId: order._id, restaurantId: vendorId });
-        if (!vendorOrderExists) throw new Error("Order does not belong to this vendor");
-        if (order.orderStatus !== "preparing" && order.orderStatus !== "ready_for_pickup") {
-            throw new Error("Order is not ready for delivery assignment");
-        }
-
+        
         const rider = await Rider.findById(riderId).session(session);
         if (!rider) throw new Error("Rider not found");
-        if (!rider.vendorId || rider.vendorId.toString() !== vendorId) throw new Error("Rider does not belong to this vendor");
-        if (!rider.isVerified) throw new Error("Rider must be approved before assignment");
-        
-        // Only enforce 'available' status check for platform-managed riders.
-        // For vendor-managed riders, we allow assignment regardless of status per user requirement.
-        if (rider.managedBy === 'admin' && rider.status !== "available") {
-            throw new Error("Rider is not available");
-        }
 
         order.orderStatus = "rider_assigned";
         order.riderId = riderId;
         order.statusLog.push({
             status: "rider_assigned",
-            changedBy: "vendor",
+            changedBy: "manual_assignment",
             timestamp: new Date()
         });
         await order.save({ session });
 
-        const vendorOrder = await VendorOrder.findOneAndUpdate(
-            { userOrderId: order._id, restaurantId: vendorId },
+        await VendorOrder.updateMany(
+            { userOrderId: order._id },
             { orderStatus: "rider_assigned" },
-            { session, new: true }
+            { session }
         );
 
         await Rider.findByIdAndUpdate(
@@ -273,9 +281,8 @@ export const assignRiderToOrder = async (orderId, riderId, vendorId) => {
         );
 
         await session.commitTransaction();
-        const updatedRider = await Rider.findById(riderId);
-
-        // 🔔 Send Rider Notification (Vendor-managed flow)
+        
+        // 🔔 Send Rider Notification
         try {
             const { sendRiderNotification } = await import('../services/notification.service.js');
             await sendRiderNotification(riderId, order._id, "order_assigned", {
@@ -283,10 +290,9 @@ export const assignRiderToOrder = async (orderId, riderId, vendorId) => {
                 orderDatabaseId: order._id,
                 payout: 600
             });
-            console.log(`✅ Push: Order assigned notification sent to rider:${riderId}`);
         } catch (e) { console.error('⚠️ Notification error (rider):', e.message); }
 
-        return { order, vendorOrder, rider: updatedRider };
+        return { order, rider };
     } catch (error) {
         await session.abortTransaction();
         throw error;
@@ -319,9 +325,6 @@ export const markPickedUp = async (orderId, riderId) => {
     });
     await order.save();
 
-    // updateMany keyed on userOrderId only — works for both admin-managed riders
-    // (vendorId: null) and vendor-managed riders. Single-vendor enforcement means
-    // this updates exactly one VendorOrder in practice.
     await VendorOrder.updateMany(
         { userOrderId: order._id },
         { $set: { orderStatus: "out_for_delivery" } }
@@ -335,8 +338,6 @@ export const markPickedUp = async (orderId, riderId) => {
         { sort: { createdAt: -1 } }
     );
 
-    // Notification handled in controller — service is data-only
-
     return order;
 };
 
@@ -348,9 +349,8 @@ export const markDelivered = async (orderId, riderId) => {
     session.startTransaction();
 
     let completedOrder = null;
-    let riderVendorIdForEscrow = null;
-    let pendingRiderPayout = null; // ← captures payout data for post-transaction execution
-    let payoutActuallyCredited = false; // ← tracks whether wallet credit actually landed
+    let pendingRiderPayout = null; 
+    let payoutActuallyCredited = false; 
 
     try {
         const order = await Order.findById(orderId).session(session);
@@ -373,8 +373,6 @@ export const markDelivered = async (orderId, riderId) => {
         });
         await order.save({ session });
 
-        // updateMany keyed on userOrderId only — works for admin-managed riders
-        // whose vendorId is null. Session passed for transaction atomicity.
         await VendorOrder.updateMany(
             { userOrderId: order._id },
             { $set: { orderStatus: "delivered" } },
@@ -384,26 +382,18 @@ export const markDelivered = async (orderId, riderId) => {
         const riderVendorId = rider.vendorId?.toString();
         const isAdminRider = rider.managedBy === 'admin';
 
-        // ── CALCULATE DELIVERY FEE SOURCE ──────────────────────────────────────────
-        // Admin riders are not tied to a specific vendor, so they get the TOTAL order 
-        // delivery fee. Vendor riders get only the fee from their specific restaurant.
         let deliveryFee = 0;
         if (isAdminRider) {
             deliveryFee = Number(order.deliveryFee || 0);
-            
-            // ✅ PROMO FIX: If delivery fee is 0, use the original fee from the promo snapshot
             if (deliveryFee === 0) {
                 deliveryFee = (order.freeDeliveryPromo?.originalDeliveryFee || 
                               order.vendorDeliveryPromo?.originalDeliveryFee || 0);
             }
-            console.log(`👤 Admin-managed rider ${riderId}: using total order delivery fee ₦${deliveryFee}`);
         } else {
             const deliveryFeeEntry = order.vendorDeliveryFees?.find(
                 v => v.restaurantId?.toString() === riderVendorId
             );
             deliveryFee = Number(deliveryFeeEntry?.deliveryFee || 0);
-            
-            // ✅ PROMO FIX: If vendor delivery fee is 0, check if a promo covered it.
             if (deliveryFee === 0) {
                 const vendorPromo = order.vendorDeliveryPromo;
                 if (vendorPromo?.applied && String(vendorPromo.vendorId) === riderVendorId) {
@@ -412,21 +402,17 @@ export const markDelivered = async (orderId, riderId) => {
                     deliveryFee = order.freeDeliveryPromo.originalDeliveryFee;
                 }
             }
-            console.log(`🚲 Vendor-managed rider ${riderId}: using vendor delivery fee ₦${deliveryFee}`);
         }
 
         let riderEarningsToRecord = 0;
 
         if (deliveryFee > 0) {
-            // All deliveries are platform-managed — always use the spread model.
-            // Rider receives fixed payout; platform retains the spread.
             const platformConfig = await getPlatformConfig();
             const RIDER_FIXED_PAYOUT = platformConfig.riderFixedPayout;
 
             const riderPayout = Math.min(RIDER_FIXED_PAYOUT, deliveryFee);
             const platformSpread = Number((deliveryFee - riderPayout).toFixed(2));
 
-            // Stage payout for post-transaction execution to prevent escrow deadlocks
             pendingRiderPayout = {
                 riderId,
                 riderPayout,
@@ -437,17 +423,15 @@ export const markDelivered = async (orderId, riderId) => {
             };
 
             riderEarningsToRecord = riderPayout;
-            console.log(`📦 Rider payout staged post-transaction — ₦${riderPayout} for Order ${order.orderId}`);
         }
 
-        // Persist the rider's actual payout on the order document.
-        // This is what the order history card reads — never the customer delivery fee.
         order.riderEarnings = riderEarningsToRecord;
         await order.save({ session });
 
         await rider.freeUp(riderEarningsToRecord);
         rider.assignmentExpiresAt = null;
         await rider.save({ session });
+
         await RiderAssignment.findOneAndUpdate(
             { riderId, orderId: order._id, status: { $in: ["assigned", "accepted", "picked_up"] } },
             { $set: { status: "delivered", respondedAt: new Date() } },
@@ -455,20 +439,15 @@ export const markDelivered = async (orderId, riderId) => {
         );
         await session.commitTransaction();
 
-        // Capture values needed after session closes
         completedOrder = order;
 
     } catch (error) {
         if (session.inTransaction()) await session.abortTransaction();
         throw error;
     } finally {
-        session.endSession();  // ← only ONE call, always in finally
+        session.endSession();
     }
 
-    // ── Post-transaction: rider wallet payout ─────────────────────────────────
-    // Runs after the delivery status transaction commits successfully.
-    // Failure here does NOT reverse the delivery — order remains "delivered".
-    // Failed payouts are logged for manual review and queued for retry.
     if (pendingRiderPayout && completedOrder) {
         try {
             const {
@@ -484,13 +463,10 @@ export const markDelivered = async (orderId, riderId) => {
             if (!adminWallet) throw new Error("Admin wallet not found for rider payout");
 
             if (adminWallet.balance < riderPayout) {
-                // Non-fatal — log for manual top-up, do not throw
                 logger.error(
                     { orderId: readableOrderId, riderPayout, adminBalance: adminWallet.balance },
-                    '⚠️ Admin wallet insufficient for rider payout — queued for manual review'
+                    '⚠️ Admin wallet insufficient for rider payout'
                 );
-
-                // 🚨 Real-time Admin Alert for insufficient funds
                 try {
                     const { sendNotification } = await import('../services/notification.service.js');
                     await sendNotification(null, 'admin_insufficient_funds', {
@@ -499,31 +475,24 @@ export const markDelivered = async (orderId, riderId) => {
                         orderId: readableOrderId,
                         orderDatabaseId: orderDbId
                     }, 'admin');
-                } catch (notifErr) { logger.error('❌ Admin notification for payout failure failed', notifErr.message); }
-
-                // TODO: push to a riderPayoutRetryQueue when implemented
+                } catch (notifErr) { logger.error('❌ Admin notification failed', notifErr.message); }
             } else {
-                // Debit rider payout from admin wallet
                 adminWallet.balance = Number((adminWallet.balance - riderPayout).toFixed(2));
                 adminWallet.transactions.push({
                     type: "debit",
                     amount: riderPayout,
-                    description: `Rider payout (fixed ₦${RIDER_FIXED_PAYOUT}) for Order ${readableOrderId}`,
+                    description: `Rider payout for Order ${readableOrderId}`,
                     transactionType: 'rider_payout',
                 });
-
-                // Record spread — informational, amount: 0 to avoid ledger inflation
                 adminWallet.transactions.push({
                     type: "debit",
-                    amount: 0,             // Balance-neutral — real flow already in delivery_fee credit + rider_payout debit
-                    reportingAmount: platformSpread,   // ← Actual spread value for finance reporting
-                    description: `Delivery spread retained for Order ${readableOrderId} — reporting only`,
+                    amount: 0,
+                    reportingAmount: platformSpread,
+                    description: `Delivery spread for Order ${readableOrderId}`,
                     transactionType: 'delivery_spread',
                 });
-
                 await adminWallet.save();
 
-                // Credit rider wallet
                 let riderWallet = await Wallet.findOne({ ownerId: payoutRiderId, ownerModel: "Rider" });
                 if (!riderWallet) {
                     riderWallet = await Wallet.create({
@@ -544,41 +513,20 @@ export const markDelivered = async (orderId, riderId) => {
                 });
                 await riderWallet.save();
 
-                payoutActuallyCredited = true; // ← wallet credit confirmed
-                console.log(`💰 Spread model — ₦${riderPayout} (Rider) | ₦${platformSpread} (Platform spread) for Order ${readableOrderId}`);
+                payoutActuallyCredited = true;
             }
         } catch (payoutErr) {
-            // Non-fatal — delivery already confirmed, payout logged for manual review
-            logger.error(
-                { orderId: completedOrder.orderId, error: payoutErr.message },
-                '❌ Post-transaction rider payout failed — manual review required'
-            );
+            logger.error({ orderId: completedOrder.orderId, error: payoutErr.message }, '❌ Post-transaction rider payout failed');
         }
     }
 
-    // ── Post-transaction: escrow release for ALL vendors in the order ──
-    // Loops VendorOrder documents so escrow releases correctly whether the
-    // rider is admin-managed (no vendorId) or vendor-managed (has vendorId).
-    // Single-vendor enforcement in createOrderV2 means this loop runs once
-    // in practice — but the loop makes it structurally correct regardless.
     if (completedOrder) {
-        const allVendorOrders = await VendorOrder.find({
-            userOrderId: completedOrder._id
-        });
-
+        const allVendorOrders = await VendorOrder.find({ userOrderId: completedOrder._id });
         for (const vo of allVendorOrders) {
             try {
                 await releaseEscrowToVendor(vo._id);
             } catch (escrowErr) {
-                logger.error(
-                    { orderId: completedOrder._id, vendorOrderId: vo._id, error: escrowErr.message },
-                    '❌ Escrow release failed — adding to retry queue'
-                );
-                await escrowReleaseQueue.add(
-                    'retry-escrow',
-                    { vendorOrderId: vo._id.toString() },
-                    { jobId: `escrow-${vo._id}` }
-                );
+                logger.error({ orderId: completedOrder._id, vendorOrderId: vo._id, error: escrowErr.message }, '❌ Escrow release failed');
             }
         }
     }
@@ -608,10 +556,8 @@ export const updateRiderStatus = async (riderId, status) => {
         throw new Error("Cannot go offline while assigned to an order");
     }
 
-    if (status === "on_delivery") {
-        if (rider.status !== "pending_assignment") {
-            throw new Error("You can only transition to on_delivery from pending_assignment");
-        }
+    if (status === "on_delivery" && rider.status !== "pending_assignment") {
+        throw new Error("You can only transition to on_delivery from pending_assignment");
     }
 
     if (status === "available" && rider.status === "pending_assignment") {
@@ -636,14 +582,12 @@ export const updateRider = async (riderId, vendorId, updateData) => {
     if (!rider) throw new Error("Rider not found for this vendor");
 
     const allowedUpdates = ["name", "phone", "notes", "isActive", "avatar", "metadata"];
-    const finalUpdate = {};
     allowedUpdates.forEach(key => {
         if (updateData[key] !== undefined) {
-            finalUpdate[key] = updateData[key];
+            rider[key] = updateData[key];
         }
     });
 
-    Object.assign(rider, finalUpdate);
     await rider.save();
     return rider.getPublicProfile();
 };
@@ -656,11 +600,9 @@ export const riderUpdateSelf = async (riderId, updateData) => {
     if (!rider) throw new Error("Rider not found");
 
     const allowedUpdates = ["name", "phone", "avatar", "email"];
-    const finalUpdate = {};
-    
     allowedUpdates.forEach(key => {
         if (updateData[key] !== undefined) {
-            finalUpdate[key] = updateData[key];
+            rider[key] = updateData[key];
         }
     });
 
@@ -668,7 +610,6 @@ export const riderUpdateSelf = async (riderId, updateData) => {
         rider.password = updateData.password;
     }
 
-    Object.assign(rider, finalUpdate);
     await rider.save();
     return rider.getPublicProfile();
 };
@@ -711,7 +652,6 @@ export const getAllRiders = async (filters = {}) => {
     if (filters.isVerified !== undefined) query.isVerified = filters.isVerified === true || filters.isVerified === "true";
     if (filters.isActive !== undefined) query.isActive = filters.isActive;
     
-    // Support filtering for available riders (for assignment modals)
     if (filters.available === 'true' || filters.available === true) {
         query.status = 'available';
         query.isActive = true;
@@ -796,15 +736,10 @@ export const adminUpdateRider = async (riderId, updateData) => {
         rider.password = updateData.password;
     }
 
-    // Handle payoutDetails update and recipient regeneration
     if (updateData.payoutDetails) {
         const currentPayout = rider.payoutDetails || {};
         const newPayout = updateData.payoutDetails;
-
-        // If bank info changed, regenerate recipient
-        const bankChanged = 
-            newPayout.accountNumber !== currentPayout.accountNumber || 
-            newPayout.bankCode !== currentPayout.bankCode;
+        const bankChanged = newPayout.accountNumber !== currentPayout.accountNumber || newPayout.bankCode !== currentPayout.bankCode;
 
         if (bankChanged && newPayout.accountNumber && newPayout.bankCode && newPayout.accountName) {
             try {
@@ -815,31 +750,20 @@ export const adminUpdateRider = async (riderId, updateData) => {
                 });
                 newPayout.recipientCode = recipientCode;
                 newPayout.payoutEnabled = true;
-                console.log(`✅ Paystack recipient regenerated for rider ${riderId}: ${recipientCode}`);
             } catch (err) {
-                console.error("⚠️ Failed to regenerate Paystack recipient during admin rider update:", err.message);
+                console.error("⚠️ Paystack recipient error:", err.message);
             }
         }
-
-        rider.payoutDetails = {
-            ...currentPayout,
-            ...newPayout
-        };
+        rider.payoutDetails = { ...currentPayout, ...newPayout };
     }
 
     await rider.save();
     const savedVehicleId = rider.platformVehicleId?.toString() || null;
     if (previousVehicleId && previousVehicleId !== savedVehicleId) {
-        await PlatformVehicle.findByIdAndUpdate(previousVehicleId, {
-            status: "available",
-            assignedRiderId: null,
-        });
+        await PlatformVehicle.findByIdAndUpdate(previousVehicleId, { status: "available", assignedRiderId: null });
     }
     if (savedVehicleId) {
-        await PlatformVehicle.findByIdAndUpdate(savedVehicleId, {
-            status: "assigned",
-            assignedRiderId: rider._id,
-        });
+        await PlatformVehicle.findByIdAndUpdate(savedVehicleId, { status: "assigned", assignedRiderId: rider._id });
     }
     return rider.getPublicProfile();
 };
@@ -856,9 +780,6 @@ export const adminApproveRider = async (riderId, adminId) => {
     rider.requestedCity = "";
     rider.approvedAt = new Date();
     rider.approvedBy = adminId || null;
-    if (rider.status === "available" && rider.currentOrderId) {
-        rider.status = "offline";
-    }
     await rider.save();
     return rider.getPublicProfile();
 };
@@ -878,28 +799,17 @@ export const getAssignmentHistory = async (filters = {}) => {
         .limit(Number(filters.limit || 100));
 };
 
-/**
- * Admin: Deactivate any rider
- */
 export const adminDeactivateRider = async (riderId) => {
     const rider = await Rider.findById(riderId);
     if (!rider) throw new Error("Rider not found");
-
-    if (rider.currentOrderId) {
-        throw new Error("Cannot deactivate rider mid-delivery");
-    }
-
+    if (rider.currentOrderId) throw new Error("Cannot deactivate rider mid-delivery");
     rider.isActive = false;
     rider.deletedAt = new Date();
     return rider.save();
 };
 
-/**
- * Get rider wallet balance and transaction history
- */
 export const getRiderWallet = async (riderId) => {
     let wallet = await Wallet.findOne({ ownerId: riderId, ownerModel: "Rider" });
-
     if (!wallet) {
         wallet = await Wallet.create({
             ownerId: riderId,
@@ -908,7 +818,6 @@ export const getRiderWallet = async (riderId) => {
             transactions: []
         });
     }
-
     return wallet;
 };
 
@@ -919,7 +828,6 @@ export const getRiderHistorySummary = async (riderId, filters = {}) => {
     const config = await getPlatformConfig();
     const payoutHour = Number(filters.payoutHour ?? config.riderPayoutHour ?? 10);
     const now = new Date();
-
     const todayStart = new Date(now);
     todayStart.setHours(0, 0, 0, 0);
 

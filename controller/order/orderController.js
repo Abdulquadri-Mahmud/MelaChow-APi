@@ -1604,26 +1604,27 @@ export const updateVendorOrderStatus = async (req, res) => {
 
           setImmediate(async () => {
           try {
-              const platformConfig = await getPlatformConfig();
-              if (platformConfig.riderAssignmentMode === "automatic") {
-                  const assignmentResult = await offerOrderToAvailableRiders({
+              // 🚀 AUTOMATIC RIDER ASSIGNMENT (Enforced as Default)
+              // Broadcast the offer to all available riders in the vendor/customer city.
+              const assignmentResult = await offerOrderToAvailableRiders({
+                  vendorOrderId: populatedOrder._id,
+                  assignedBy: null,
+              });
+              
+              console.log(`📡 Broadcast Assignment for Order ${orderId}:`, assignmentResult);
+              
+              if (!assignmentResult.success) {
+                  const { sendNotification } = await import('../../services/notification.service.js');
+                  await sendNotification(null, 'rider_assignment_needed', {
+                      orderId,
+                      orderDatabaseId: populatedOrder.userOrderId._id,
                       vendorOrderId: populatedOrder._id,
-                      assignedBy: null,
-                  });
-                  console.log('Automatic rider assignment result:', assignmentResult);
-                  if (!assignmentResult.success) {
-                      const { sendNotification } = await import('../../services/notification.service.js');
-                      await sendNotification(null, 'rider_assignment_needed', {
-                          orderId,
-                          orderDatabaseId: populatedOrder.userOrderId._id,
-                          vendorOrderId: populatedOrder._id,
-                          reason: assignmentResult.reason,
-                          message: `Automatic rider assignment could not run for Order #${orderId}. Manual assignment required.`,
-                      }, 'admin');
-                  }
+                      reason: assignmentResult.reason,
+                      message: `Automatic broadcast assignment could not find available riders for Order #${orderId}. Admin attention required.`,
+                  }, 'admin');
               }
           } catch (autoAssignError) {
-              console.error('Automatic rider assignment error:', autoAssignError);
+              console.error('❌ Automatic broadcast assignment error:', autoAssignError.message);
           }
           });
       }
