@@ -130,7 +130,7 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
                 cityId,
                 stateId,
             },
-            { $set: { status: "pending_assignment", assignmentExpiresAt } },
+            { $set: { status: "pending_assignment", currentOrderId: masterOrder._id, assignmentExpiresAt } },
             { session }
         );
 

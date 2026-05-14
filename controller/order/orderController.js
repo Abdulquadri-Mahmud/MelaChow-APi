@@ -1610,6 +1610,7 @@ export const updateVendorOrderStatus = async (req, res) => {
                       vendorOrderId: populatedOrder._id,
                       assignedBy: null,
                   });
+                  console.log('Automatic rider assignment result:', assignmentResult);
                   if (!assignmentResult.success) {
                       const { sendNotification } = await import('../../services/notification.service.js');
                       await sendNotification(null, 'rider_assignment_needed', {
@@ -1622,7 +1623,7 @@ export const updateVendorOrderStatus = async (req, res) => {
                   }
               }
           } catch (autoAssignError) {
-              console.error('Automatic rider assignment error:', autoAssignError.message);
+              console.error('Automatic rider assignment error:', autoAssignError);
           }
           });
       }
