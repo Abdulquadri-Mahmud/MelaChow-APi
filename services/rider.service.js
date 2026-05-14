@@ -174,16 +174,16 @@ export const getActiveOrder = async (riderId) => {
             return null;
         }
         
-        // Use lean for performance if we only need read-only data, 
-        // but we need to check rider.status so keep as doc for now.
         const rider = await Rider.findById(riderId);
-        if (!rider) return null;
+        if (!rider) {
+            console.warn(`[getActiveOrder] Rider not found: ${riderId}`);
+            return null;
+        }
 
         let activeOrderId = rider.currentOrderId;
 
-        // ✅ FIX: If rider is in 'pending_assignment' but currentOrderId is null,
+        // If rider is in 'pending_assignment' but currentOrderId is null,
         // it means they have been offered an order but haven't accepted it yet.
-        // We look up the latest active assignment offer for this rider.
         if (!activeOrderId && rider.status === "pending_assignment") {
             const pendingAssignment = await RiderAssignment.findOne({
                 riderId: rider._id,
@@ -194,7 +194,6 @@ export const getActiveOrder = async (riderId) => {
             activeOrderId = pendingAssignment?.orderId || null;
         }
 
-        // No active order or pending offer
         if (!activeOrderId) return null;
 
         // Fetch the master order details
@@ -206,8 +205,9 @@ export const getActiveOrder = async (riderId) => {
             .populate("userId", "firstname lastname name fullName phone email");
 
         if (!order) {
-            // Stale reference cleanup
-            if (rider.currentOrderId && rider.currentOrderId.toString() === activeOrderId.toString()) {
+            console.warn(`[getActiveOrder] Active order ${activeOrderId} not found for rider ${riderId}`);
+            // Stale reference cleanup logic - only update if actually assigned
+            if (rider.currentOrderId && String(rider.currentOrderId) === String(activeOrderId)) {
                 await Rider.updateOne({ _id: rider._id }, { $set: { currentOrderId: null } });
             }
             return null;
@@ -218,12 +218,11 @@ export const getActiveOrder = async (riderId) => {
         
         // Normalize status for UI consistency
         if (rider.status === "pending_assignment") {
-            orderObj.status = "assigned"; // Represents "offered" to the rider
+            orderObj.status = "assigned"; 
         } else {
             orderObj.status = order.orderStatus;
         }
         
-        // Vendor details from the first item (assuming single-vendor or primary vendor)
         const firstRestaurant = order.items?.[0]?.restaurantId;
         orderObj.restaurantId = firstRestaurant?._id || firstRestaurant || order.vendorId || null;
         orderObj.restaurantName = firstRestaurant?.storeName || "Partner Merchant";
@@ -234,15 +233,14 @@ export const getActiveOrder = async (riderId) => {
         orderObj.userName = user?.fullName || (user ? `${user.firstname || ""} ${user.lastname || ""}`.trim() : null) || "Customer";
         orderObj.userPhone = user?.phone || order.phone || null;
 
-        // Address resolution for Rider (Full String)
+        // Address resolution
         const addr = order.deliveryAddress;
         orderObj.deliveryFullAddress = addr?.address || addr?.addressLine || (addr ? `${addr.addressLine || ""}, ${addr.cityName || addr.city || ""}`.trim() : null);
 
         return orderObj;
     } catch (error) {
         console.error("💥 Error in getActiveOrder service:", error.message);
-        // Do not throw here to prevent 500s on the dashboard; return null and let the UI show empty state.
-        return null;
+        return null; 
     }
 };
 
@@ -552,8 +550,10 @@ export const updateRiderStatus = async (riderId, status) => {
         throw new Error("Your rider account is pending admin approval");
     }
 
-    if (rider.currentOrderId && status === "offline") {
-        throw new Error("Cannot go offline while assigned to an order");
+    // Allow going offline from 'pending_assignment' if no confirmed order is being delivered.
+    // 'currentOrderId' is set once the rider actually accepts the order.
+    if (status === "offline" && (rider.status === "on_delivery" || rider.currentOrderId)) {
+        throw new Error("You cannot go offline while on an active delivery!");
     }
 
     if (status === "on_delivery" && rider.status !== "pending_assignment") {

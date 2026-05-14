@@ -216,7 +216,7 @@ export const getActiveOrder = async (req, res, next) => {
         const { riderId } = req.params;
 
         // Auth guard — rider can only fetch their own active order
-        if (req.rider._id.toString() !== riderId) {
+        if (!req.rider || req.rider._id.toString() !== riderId) {
             return res.status(403).json({ success: false, message: "Unauthorized" });
         }
 
