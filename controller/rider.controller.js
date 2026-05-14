@@ -272,18 +272,37 @@ export const getRiderOrderDetails = async (req, res, next) => {
         }
 
         const orderObj = order.toObject();
-        orderObj.restaurantId = orderObj.items?.[0]?.restaurantId || orderObj.vendorId || null;
+        
+        // Safety check for restaurantId
+        const firstItem = orderObj.items?.[0];
+        orderObj.restaurantId = firstItem?.restaurantId || orderObj.vendorId || null;
+        
+        // If restaurantId was populated, extract storeName for the UI
+        if (orderObj.restaurantId && typeof orderObj.restaurantId === 'object') {
+            orderObj.restaurantName = orderObj.restaurantId.storeName || "Store";
+        }
 
-        // Populate customer-specific details for Rider UI
+        // Populate customer-specific details for Rider UI with safety
         const user = orderObj.userId;
-        orderObj.userName = user?.fullName || (user ? `${user.firstname || ""} ${user.lastname || ""}`.trim() : null) || "Customer";
-        orderObj.userPhone = user?.phone || orderObj.phone || null;
+        if (user && typeof user === 'object') {
+            orderObj.userName = user.fullName || `${user.firstname || ""} ${user.lastname || ""}`.trim() || "Customer";
+            orderObj.userPhone = user.phone || orderObj.phone || null;
+        } else {
+            orderObj.userName = orderObj.deliveryAddress?.name || "Customer";
+            orderObj.userPhone = orderObj.deliveryAddress?.phone || orderObj.phone || null;
+        }
 
         const addr = orderObj.deliveryAddress;
-        orderObj.deliveryFullAddress = addr?.address || addr?.addressLine || (addr ? `${addr.addressLine || ""}, ${addr.cityName || addr.city || ""}`.trim() : null);
+        if (addr) {
+            orderObj.deliveryFullAddress = addr.address || addr.addressLine || 
+                `${addr.addressLine || ""}, ${addr.cityName || addr.city || ""}`.trim().replace(/^,/, '').trim();
+        } else {
+            orderObj.deliveryFullAddress = "No address provided";
+        }
 
         res.status(200).json({ success: true, data: orderObj });
     } catch (error) {
+        console.error("💥 [getRiderOrderDetails] CRASH:", error);
         next(error);
     }
 };
