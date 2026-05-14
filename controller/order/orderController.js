@@ -1602,6 +1602,7 @@ export const updateVendorOrderStatus = async (req, res) => {
               console.error('❌ Admin Notification error:', adminNotifError.message);
           }
 
+          setImmediate(async () => {
           try {
               const platformConfig = await getPlatformConfig();
               if (platformConfig.riderAssignmentMode === "automatic") {
@@ -1623,6 +1624,7 @@ export const updateVendorOrderStatus = async (req, res) => {
           } catch (autoAssignError) {
               console.error('Automatic rider assignment error:', autoAssignError.message);
           }
+          });
       }
 
     } else {
