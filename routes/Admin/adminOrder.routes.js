@@ -24,7 +24,7 @@ router.get("/:orderId", adminAuth, getSingleOrder);
 // Status overrides
 router.patch("/:orderId/status", adminAuth, adminOverrideOrderStatus);
 
-// Rider Assignment
-router.patch("/:vendorOrderId/assign-rider", adminAuth, assignRiderToOrder);
+// Rider Assignment (DISABLED: Flow is now fully automatic broadcast-based)
+// router.patch("/:vendorOrderId/assign-rider", adminAuth, assignRiderToOrder);
 
 export default router;
