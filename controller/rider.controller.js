@@ -8,6 +8,7 @@ import RiderAssignment from "../model/riderAssignment.model.js";
 import PlatformVehicle from "../model/platformVehicle.model.js";
 import { sendDeliveryOTP, verifyDeliveryOTP } from '../services/otp.service.js';
 import { validateVendorLocation } from "../services/locationService.js";
+import mongoose from "mongoose";
 
 export const createRider = async (req, res, next) => {
     try {
@@ -238,78 +239,40 @@ export const getRiderOrderDetails = async (req, res, next) => {
     try {
         const { riderId, orderId } = req.params;
 
-        if (req.rider._id.toString() !== riderId) {
+        if (!req.rider || req.rider._id.toString() !== riderId) {
             return res.status(403).json({ success: false, message: "Unauthorized to view this order" });
         }
 
-        // Fetch order with minimal population first to avoid join crashes
-        const order = await Order.findById(orderId).populate("userId", "firstname lastname name fullName phone email");
-
+        // 1. Fetch Basic Order first for Auth Check
+        const order = await Order.findById(orderId).select("riderId orderStatus");
         if (!order) {
             return res.status(404).json({ success: false, message: "Order not found" });
         }
 
-        // ✅ FIX: In FCFS broadcast mode, order.riderId is null until someone accepts.
-        // We must allow any rider who has a pending assignment for this order to see its details.
+        // 2. Auth Guard: Allow if rider is assigned owner OR an offered candidate
         const isAssignedOwner = order.riderId?.toString() === riderId;
-        
         let isCandidate = false;
+
         if (!isAssignedOwner) {
-            // Use explicit ObjectId casting to prevent string comparison issues
             isCandidate = await RiderAssignment.exists({
                 riderId: new mongoose.Types.ObjectId(riderId),
                 orderId: new mongoose.Types.ObjectId(orderId),
                 status: "assigned",
                 expiresAt: { $gt: new Date() }
             });
-            console.log(`🔍 [getRiderOrderDetails] Auth Check: riderId=${riderId}, orderId=${orderId}, isAssignedOwner=${isAssignedOwner}, isCandidate=${!!isCandidate}`);
         }
 
         if (!isAssignedOwner && !isCandidate) {
-            console.warn(`🚫 [getRiderOrderDetails] 403 Forbidden: Rider ${riderId} is neither owner nor candidate for Order ${orderId}`);
+            console.warn(`🚫 [getRiderOrderDetails] 403: Rider ${riderId} unauthorized for Order ${orderId}`);
             return res.status(403).json({ success: false, message: "Rider not authorized to view this order" });
         }
 
-        const orderObj = order.toObject();
-        
-        // Manual restaurant lookup for maximum safety
-        try {
-            const firstItem = orderObj.items?.[0];
-            const restaurantId = firstItem?.restaurantId || orderObj.vendorId;
-            
-            if (restaurantId && mongoose.Types.ObjectId.isValid(restaurantId)) {
-                const restaurant = await mongoose.model("Vendor").findById(restaurantId).select("storeName address phone location");
-                if (restaurant) {
-                    orderObj.restaurantName = restaurant.storeName || "Store";
-                    orderObj.restaurantId = restaurant;
-                }
-            }
-        } catch (restErr) {
-            console.warn("⚠️ [getRiderOrderDetails] Failed to link restaurant details:", restErr.message);
-            orderObj.restaurantName = "MelaChow Store";
-        }
-
-        // Populate customer-specific details for Rider UI with safety
-        const user = orderObj.userId;
-        if (user && typeof user === 'object') {
-            orderObj.userName = user.fullName || `${user.firstname || ""} ${user.lastname || ""}`.trim() || "Customer";
-            orderObj.userPhone = user.phone || orderObj.phone || null;
-        } else {
-            orderObj.userName = orderObj.deliveryAddress?.name || "Customer";
-            orderObj.userPhone = orderObj.deliveryAddress?.phone || orderObj.phone || null;
-        }
-
-        const addr = orderObj.deliveryAddress;
-        if (addr) {
-            orderObj.deliveryFullAddress = addr.address || addr.addressLine || 
-                `${addr.addressLine || ""}, ${addr.cityName || addr.city || ""}`.trim().replace(/^,/, '').trim();
-        } else {
-            orderObj.deliveryFullAddress = "No address provided";
-        }
+        // 3. Delegate detailed fetching/population to the service (same logic as dashboard)
+        const orderObj = await riderService.getRiderOrderDetails(riderId, orderId);
 
         res.status(200).json({ success: true, data: orderObj });
     } catch (error) {
-        console.error("💥 [getRiderOrderDetails] CRASH:", error);
+        console.error("💥 [getRiderOrderDetails] Error:", error.message);
         next(error);
     }
 };

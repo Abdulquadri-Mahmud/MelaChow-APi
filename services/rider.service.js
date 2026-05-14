@@ -245,6 +245,43 @@ export const getActiveOrder = async (riderId) => {
 };
 
 /**
+ * ✅ NEW: Get specific order details for a rider (Modal view)
+ * Mirrored from getActiveOrder to ensure identical data structure.
+ */
+export const getRiderOrderDetails = async (riderId, orderId) => {
+    try {
+        const order = await Order.findById(orderId)
+            .populate({ 
+                path: "items.restaurantId", 
+                select: "storeName address phone location coords logo cityId stateId" 
+            })
+            .populate("userId", "firstname lastname name fullName phone email");
+
+        if (!order) return null;
+
+        const orderObj = order.toObject();
+        
+        // Populate flattened fields for the Rider UI
+        const firstRestaurant = order.items?.[0]?.restaurantId;
+        orderObj.restaurantId = firstRestaurant?._id || firstRestaurant || order.vendorId || null;
+        orderObj.restaurantName = firstRestaurant?.storeName || "Partner Merchant";
+        orderObj.restaurantLogo = firstRestaurant?.logo || null;
+
+        const user = order.userId;
+        orderObj.userName = user?.fullName || (user ? `${user.firstname || ""} ${user.lastname || ""}`.trim() : null) || "Customer";
+        orderObj.userPhone = user?.phone || order.phone || null;
+
+        const addr = order.deliveryAddress;
+        orderObj.deliveryFullAddress = addr?.address || addr?.addressLine || (addr ? `${addr.addressLine || ""}, ${addr.cityName || addr.city || ""}`.trim() : null);
+
+        return orderObj;
+    } catch (error) {
+        console.error(`💥 Error in getRiderOrderDetails service for Order ${orderId}:`, error.message);
+        throw error;
+    }
+};
+
+/**
  * Assign a rider to an order (Manual flow - Keep for fallback/admin use)
  */
 export const assignRiderToOrder = async (orderId, riderId, vendorId) => {
