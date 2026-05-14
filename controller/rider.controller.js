@@ -250,8 +250,22 @@ export const getRiderOrderDetails = async (req, res, next) => {
             return res.status(404).json({ success: false, message: "Order not found" });
         }
 
-        if (order.riderId?.toString() !== riderId) {
-            return res.status(403).json({ success: false, message: "Rider not assigned to this order" });
+        // ✅ FIX: In FCFS broadcast mode, order.riderId is null until someone accepts.
+        // We must allow any rider who has a pending assignment for this order to see its details.
+        const isAssignedOwner = order.riderId?.toString() === riderId;
+        
+        let isCandidate = false;
+        if (!isAssignedOwner) {
+            isCandidate = await RiderAssignment.exists({
+                riderId,
+                orderId,
+                status: "assigned",
+                expiresAt: { $gt: new Date() }
+            });
+        }
+
+        if (!isAssignedOwner && !isCandidate) {
+            return res.status(403).json({ success: false, message: "Rider not authorized to view this order" });
         }
 
         const orderObj = order.toObject();
