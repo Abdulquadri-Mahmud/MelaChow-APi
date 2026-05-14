@@ -256,15 +256,18 @@ export const getRiderOrderDetails = async (req, res, next) => {
         
         let isCandidate = false;
         if (!isAssignedOwner) {
+            // Use explicit ObjectId casting to prevent string comparison issues
             isCandidate = await RiderAssignment.exists({
-                riderId,
-                orderId,
+                riderId: new mongoose.Types.ObjectId(riderId),
+                orderId: new mongoose.Types.ObjectId(orderId),
                 status: "assigned",
                 expiresAt: { $gt: new Date() }
             });
+            console.log(`🔍 [getRiderOrderDetails] Auth Check: riderId=${riderId}, orderId=${orderId}, isAssignedOwner=${isAssignedOwner}, isCandidate=${!!isCandidate}`);
         }
 
         if (!isAssignedOwner && !isCandidate) {
+            console.warn(`🚫 [getRiderOrderDetails] 403 Forbidden: Rider ${riderId} is neither owner nor candidate for Order ${orderId}`);
             return res.status(403).json({ success: false, message: "Rider not authorized to view this order" });
         }
 
