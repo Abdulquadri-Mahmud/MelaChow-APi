@@ -597,11 +597,23 @@ export const updateRiderStatus = async (riderId, status) => {
         throw new Error("You can only transition to on_delivery from pending_assignment");
     }
 
+    // ✅ IMPROVED: If rider is rejecting a broadcast offer (pending_assignment)
     if (status === "available" && rider.status === "pending_assignment") {
-        await RiderAssignment.findOneAndUpdate(
-            { riderId, orderId: rider.currentOrderId, status: "assigned" },
-            { $set: { status: "rejected", respondedAt: new Date(), reason: "rider_released_assignment" } }
-        );
+        // Find the active assignment they are rejecting
+        const activeAssignment = await RiderAssignment.findOne({
+            riderId,
+            status: "assigned",
+            expiresAt: { $gt: new Date() }
+        }).sort({ createdAt: -1 });
+
+        if (activeAssignment) {
+            await RiderAssignment.updateOne(
+                { _id: activeAssignment._id },
+                { $set: { status: "rejected", respondedAt: new Date(), reason: reason || "rider_rejected_broadcast" } }
+            );
+            console.log(`❌ Rider ${riderId} rejected broadcast for Order ${activeAssignment.orderId}`);
+        }
+        
         rider.currentOrderId = null;
         rider.assignmentExpiresAt = null;
     }
