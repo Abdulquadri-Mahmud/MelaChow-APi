@@ -751,6 +751,7 @@ export const assignRiderToOrder = async (req, res) => {
                 { 
                     $set: { 
                         status: 'pending_assignment',
+                        currentOrderId: masterOrder._id,
                         assignmentExpiresAt
                     } 
                 },
