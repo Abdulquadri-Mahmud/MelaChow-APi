@@ -615,6 +615,8 @@ export const updateRiderStatus = async (riderId, status) => {
     }
 
     if (status === "on_delivery" && rider.status !== "pending_assignment") {
+        // ✅ IDEMPOTENCY: If already on delivery, just return success
+        if (rider.status === "on_delivery") return rider;
         throw new Error("You can only transition to on_delivery from pending_assignment");
     }
 
