@@ -343,19 +343,25 @@ export const updateRiderStatus = async (req, res, next) => {
                 );
 
                 if (!acceptedOrderUpdate) {
-                    await Rider.findByIdAndUpdate(riderId, {
-                        $set: { status: "available", assignmentExpiresAt: null },
-                        $unset: { currentOrderId: "" }
-                    });
-                    await RiderAssignment.findOneAndUpdate(
-                        { riderId, orderId, status: "assigned" },
-                        { $set: { status: "rejected", respondedAt: new Date(), reason: "order_already_taken" } },
-                        { sort: { createdAt: -1 } }
-                    );
-                    return res.status(409).json({
-                        success: false,
-                        message: "This order has already been accepted by another rider"
-                    });
+                    // ✅ IDEMPOTENCY CHECK: If the rider is already the owner, treat as success
+                    const alreadyOwned = await OrderModel.exists({ _id: orderId, riderId });
+                    if (alreadyOwned) {
+                        console.log(`♻️ [updateRiderStatus] Rider ${riderId} already owns Order ${orderId}. Treating as success.`);
+                    } else {
+                        await Rider.findByIdAndUpdate(riderId, {
+                            $set: { status: "available", assignmentExpiresAt: null },
+                            $unset: { currentOrderId: "" }
+                        });
+                        await RiderAssignment.findOneAndUpdate(
+                            { riderId, orderId, status: "assigned" },
+                            { $set: { status: "rejected", respondedAt: new Date(), reason: "order_already_taken" } },
+                            { sort: { createdAt: -1 } }
+                        );
+                        return res.status(409).json({
+                            success: false,
+                            message: "This order has already been accepted by another rider"
+                        });
+                    }
                 }
 
                 await Rider.findByIdAndUpdate(riderId, {
