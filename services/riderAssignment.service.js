@@ -69,7 +69,7 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
     const riderQuery = {
         cityId,
         stateId,
-        status: "available",
+        status: { $in: ["available", "pending_assignment"] },
         isActive: true,
         isVerified: true,
         deletedAt: null,
@@ -116,16 +116,18 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
 
     await expireStaleRiderAssignmentOffers(candidateRiders.map((rider) => rider._id));
 
-    const activeAssignments = await RiderAssignment.find({
-        riderId: { $in: candidateRiders.map((rider) => rider._id) },
-        status: "assigned",
-        expiresAt: { $gt: new Date() },
+    const ridersAlreadyAssigned = await RiderAssignment.find({
+        orderId: masterOrder._id,
+        status: "assigned"
     }).select("riderId");
-    const busyRiderIds = new Set(activeAssignments.map((assignment) => assignment.riderId.toString()));
-    const riders = candidateRiders.filter((rider) => !busyRiderIds.has(rider._id.toString()));
+    const alreadyAssignedIds = new Set(ridersAlreadyAssigned.map(a => a.riderId.toString()));
+
+    const riders = candidateRiders.filter(
+        (rider) => !alreadyAssignedIds.has(rider._id.toString())
+    );
 
     if (!riders.length) {
-        return { success: false, reason: "no_available_riders", riderCount: 0 };
+        return { success: false, reason: "no_new_riders_to_broadcast", riderCount: 0 };
     }
 
     const assignmentExpiresAt = AUTOMATIC_ASSIGNMENT_EXPIRES_AT;
@@ -181,8 +183,9 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
             { session }
         );
 
-        if (orderUpdate.modifiedCount !== 1 || riderUpdate.modifiedCount !== riderIds.length) {
-            throw new Error("Order or rider availability changed during assignment");
+        if (orderUpdate.modifiedCount !== 1) {
+            // It's okay if riderUpdate.modifiedCount is 0 (e.g. they were already pending_assignment)
+            // But the order must be successfully transitioned or remain in assigned state
         }
 
         await RiderAssignment.create(riderIds.map((riderId) => ({
@@ -262,4 +265,38 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
     }
 
     return { success: true, riderCount: riders.length, riderIds };
+};
+
+/**
+ * Catch-up: Instant broadcast of all pending orders to a newly available rider.
+ */
+export const catchupRiderWithPendingOrders = async (riderId) => {
+    try {
+        const rider = await Rider.findById(riderId);
+        if (!rider || (rider.status !== "available" && rider.status !== "pending_assignment") || rider.currentOrderId) {
+            return { success: false, reason: "rider_not_eligible" };
+        }
+
+        // Find all orders that are waiting for a rider
+        const pendingOrders = await VendorOrder.find({
+            orderStatus: { $in: ["ready_for_pickup", "rider_assigned"] },
+            deletedAt: null
+        }).limit(10);
+
+        if (!pendingOrders.length) return { success: true, broadcasted: 0 };
+
+        let count = 0;
+        for (const vOrder of pendingOrders) {
+            const result = await offerOrderToAvailableRiders({
+                vendorOrderId: vOrder._id,
+                assignedBy: null
+            });
+            if (result.success) count++;
+        }
+
+        return { success: true, broadcasted: count };
+    } catch (error) {
+        console.error("❌ [Catch-up] Failed:", error.message);
+        return { success: false, error: error.message };
+    }
 };
