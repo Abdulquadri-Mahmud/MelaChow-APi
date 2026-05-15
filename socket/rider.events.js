@@ -3,6 +3,7 @@ export const SOCKET_EVENTS = {
     // Server → Client
     NEW_ORDER: "new_order",
     ORDER_ASSIGNED_TO_RIDER: "order_assigned",
+    ASSIGNMENT_CANCELLED: "assignment_cancelled",
     ORDER_STATUS_UPDATE: "order_status_update",
     ORDER_DELIVERED: "order_delivered",
     RIDER_STATUS_CHANGED: "rider_status_changed",
@@ -36,11 +37,9 @@ export const buildPayload = {
         createdAt
     }),
 
-    // ✅ FIX: Added riderId to the payload so the frontend can verify the event
-    // is meant for this specific rider and dispatch rider:new_assignment
     orderAssigned: ({ orderId, riderId, vendorId, vendorName, items, deliveryAddress, customerName, customerPhone, note, payout, assignmentMode, assignmentExpiresAt }) => ({
         orderId,
-        riderId,      // ← was missing; handleRiderAssigned check always failed without this
+        riderId,
         vendorId,
         vendorName,
         items,
@@ -73,6 +72,13 @@ export const buildPayload = {
         riderId,
         riderName,
         status,
+        timestamp: new Date()
+    }),
+
+    assignmentCancelled: ({ orderId, reason, message }) => ({
+        orderId,
+        reason,
+        message: message || "This order is no longer available.",
         timestamp: new Date()
     })
 };
