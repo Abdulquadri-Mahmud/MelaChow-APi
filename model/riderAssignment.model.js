@@ -61,7 +61,7 @@ const riderAssignmentSchema = new mongoose.Schema(
 riderAssignmentSchema.index({ orderId: 1, status: 1, createdAt: -1 });
 riderAssignmentSchema.index({ riderId: 1, status: 1, createdAt: -1 });
 riderAssignmentSchema.index(
-    { riderId: 1, status: 1 },
+    { riderId: 1, orderId: 1, status: 1 },
     { unique: true, partialFilterExpression: { status: "assigned" } }
 );
 

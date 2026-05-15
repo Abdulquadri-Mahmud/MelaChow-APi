@@ -307,6 +307,16 @@ export const updateRiderStatus = async (req, res, next) => {
         }
 
         const rider = await riderService.updateRiderStatus(riderId, status, reason);
+        
+        // 🚀 NEW: Instant catch-up for newly available riders
+        if (status === "available") {
+            const { catchupRiderWithPendingOrders } = await import("../services/riderAssignment.service.js");
+            // Run in background to not block the response
+            catchupRiderWithPendingOrders(riderId).catch(err => 
+                console.error(`❌ [Catch-up] Error for rider ${riderId}:`, err.message)
+            );
+        }
+
         const vendorId = rider.vendorId?.toString();
 
         let io;

@@ -1,4 +1,9 @@
-import Order from "../../../model/order/Order.js";
+import fs from 'fs';
+import path from 'path';
+
+const filePath = 'c:\\Users\\USER\\Documents\\AdeyemiCode\\MelaChow-Codebase\\MelaChowApi\\controller\\Admin\\order_management\\adminOrder.controller.js';
+
+const content = `import Order from "../../../model/order/Order.js";
 import VendorOrder from "../../../model/vendor/VendorOrder.js";
 import Vendor from "../../../model/vendor/vendor.model.js";
 import Wallet from "../../../model/wallet/wallet.mode.js";
@@ -168,6 +173,10 @@ export const getSingleOrder = async (req, res) => {
     }
 };
 
+/**
+ * GET ORDER STATS (DASHBOARD SUMMARY)
+ * Route: GET /api/admin/orders/stats
+ */
 export const getOrderStats = async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
@@ -285,7 +294,7 @@ export const adminOverrideOrderStatus = async (req, res) => {
         order.orderStatus = status;
         order.statusLog.push({
             status,
-            changedBy: `admin:${req.admin._id}`,
+            changedBy: \`admin:\${req.admin._id}\`,
             timestamp: new Date()
         });
 
@@ -296,38 +305,28 @@ export const adminOverrideOrderStatus = async (req, res) => {
             { $set: { orderStatus: status } }
         );
 
-        // ── Trigger refund when admin cancels a paid order ────────────────────────
-        // Every other cancellation path calls refundOrderToWallet.
-        // Admin override was the only path that bypassed it — leaving customers
-        // with cancelled paid orders and no refund.
         if (status === 'cancelled' && order.paymentStatus === 'paid') {
             try {
                 const { refundOrderToWallet } = await import("../../../services/refund.service.js");
                 await refundOrderToWallet(order._id, 'admin_cancel');
-                console.log(`✅ Admin cancel refund processed for Order ${order.orderId}`);
+                console.log(\`✅ Admin cancel refund processed for Order \${order.orderId}\`);
             } catch (refundErr) {
-                // Non-fatal — status update already saved, refund logged for manual review
-                console.error(`❌ Refund failed after admin cancel for Order ${order.orderId}:`, refundErr.message);
+                console.error(\`❌ Refund failed after admin cancel for Order \${order.orderId}:\`, refundErr.message);
             }
         }
 
-        // ✅ Notify Customer & Vendors (Push/In-app)
         try {
             const { sendOrderNotification, sendVendorNotification } = await import("../../../services/notification.service.js");
-            
-            // 1. Notify Customer
             await sendOrderNotification(order.userId, order.orderId, status, {
                 orderDatabaseId: order._id,
                 cancellationReason: status === 'cancelled' ? reason : undefined
             });
-
-            // 2. Notify all Vendors in this order
             const vendorOrders = await VendorOrder.find({ userOrderId: order._id });
             for (const vo of vendorOrders) {
                 await sendVendorNotification(vo.restaurantId, order._id, "system", {
                     orderId: order.orderId,
-                    title: `Status Updated by Admin`,
-                    message: `The status of Order #${order.orderId} has been updated to "${status}" by platform administration.`
+                    title: \`Status Updated by Admin\`,
+                    message: \`The status of Order #\${order.orderId} has been updated to "\${status}" by platform administration.\`
                 });
             }
         } catch (notifErr) {
@@ -353,14 +352,27 @@ export const getPlatformManagedOrders = async (req, res) => {
     try {
         const { status, statusGroup, paymentStatus, startDate, endDate, search, page = 1, limit = 20 } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
-
-        // 1. All orders are platform-managed in this model.
-        // 2. Build filters
         const filter = {};
-
         if (status) {
             filter.orderStatus = status;
         } else if (statusGroup === "logistics") {
+            filter.orderStatus = {
+                $in: ["ready_for_pickup", "rider_assigned", "out_for_delivery", "delivered"]
+            };
+        }
+        if (paymentStatus) filter.paymentStatus = paymentStatus;
+        if (startDate || endDate) {
+            filter.createdAt = {};
+            if (startDate) filter.createdAt.$gte = new Date(startDate);
+            if (endDate) filter.createdAt.$lte = new Date(endDate);
+        }
+        if (search) {
+            filter.$or = [
+                { orderId: { $regex: search, $options: "i" } },
+                { "deliveryAddress.name": { $regex: search, $options: "i" } },
+                { "phone": { $regex: search, $options: "i" } }
+            ];
+        }
         const orders = await Order.find(filter)
             .populate("userId", "firstname lastname email phone")
             .populate("riderId", "name phone avatar status")
@@ -368,17 +380,13 @@ export const getPlatformManagedOrders = async (req, res) => {
             .skip(skip)
             .limit(parseInt(limit))
             .lean();
-
-        // Get vendor orders for each for context
         const ordersWithVendorContext = await Promise.all(orders.map(async (order) => {
             const vendorOrders = await VendorOrder.find({ userOrderId: order._id })
                 .populate("restaurantId", "storeName logo cityId stateId")
                 .lean();
             return { ...order, vendorOrders };
         }));
-
         const total = await Order.countDocuments(filter);
-
         res.status(200).json({
             success: true,
             data: {
@@ -391,7 +399,6 @@ export const getPlatformManagedOrders = async (req, res) => {
                 }
             }
         });
-
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -406,16 +413,12 @@ export const getCommissionLedger = async (req, res) => {
         const { startDate, endDate, page = 1, limit = 20 } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const platformConfig = await getPlatformConfig();
-
         const dateFilter = { paymentStatus: "paid" };
         if (startDate || endDate) {
             dateFilter.createdAt = {};
             if (startDate) dateFilter.createdAt.$gte = new Date(startDate);
             if (endDate) dateFilter.createdAt.$lte = new Date(endDate);
         }
-
-        // Aggregation to get totals and per-order data
-        // This is more efficient than nested loops
         const aggregationResult = await Order.aggregate([
             { $match: dateFilter },
             {
@@ -446,7 +449,6 @@ export const getCommissionLedger = async (req, res) => {
                     numberOfVendors: { $size: "$vOrders" },
                     vendorNames: "$vendors.storeName",
                     totalCommission: { $sum: "$vOrders.commission" },
-                    // All delivery fees are held by the platform
                     isPlatformManaged: true
                 }
             },
@@ -495,7 +497,6 @@ export const getCommissionLedger = async (req, res) => {
                 }
             }
         ]);
-
         const metadata = aggregationResult[0].metadata[0] || {
             totalCommissionEarned: 0,
             totalDeliveryFeesHeld: 0,
@@ -504,9 +505,7 @@ export const getCommissionLedger = async (req, res) => {
             totalPlatformRevenue: 0,
             totalCount: 0
         };
-
         const orders = aggregationResult[0].data;
-
         res.status(200).json({
             success: true,
             data: {
@@ -526,7 +525,6 @@ export const getCommissionLedger = async (req, res) => {
                 }
             }
         });
-
     } catch (error) {
         res.status(500).json({ success: false, message: error.message });
     }
@@ -534,395 +532,87 @@ export const getCommissionLedger = async (req, res) => {
 
 /**
  * Admin assigns a rider to a platform-managed order
- * Called when vendor marks order ready_for_pickup and 
- * deliveryManagedBy === 'admin'
- * 
- * PATCH /api/admin/orders/:vendorOrderId/assign-rider
- * Body: { riderId } or { riderIds: [] }
  */
 export const assignRiderToOrder = async (req, res) => {
-    // Step 3: Get Socket IO Instance
     const io = req.app.get('io');
-    if (!io) {
-        console.warn('⚠️ Socket.IO instance not available for rider notification');
-    }
-
     const { vendorOrderId } = req.params;
     const riderIds = Array.isArray(req.body.riderIds)
         ? req.body.riderIds
         : (req.body.riderId ? [req.body.riderId] : []);
     const uniqueRiderIds = [...new Set(riderIds.map((id) => id?.toString()).filter(Boolean))];
-
-    // Step 4: Validation Helper
     const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
-
     if (!vendorOrderId || !isValidObjectId(vendorOrderId)) {
-        return res.status(400).json({
-            success: false,
-            message: 'Invalid vendor order ID format'
-        });
+        return res.status(400).json({ success: false, message: 'Invalid vendor order ID format' });
     }
-
     if (!uniqueRiderIds.length || uniqueRiderIds.some((id) => !isValidObjectId(id))) {
-        return res.status(400).json({
-            success: false,
-            message: 'riderId or riderIds is required and each rider must be a valid ID'
-        });
+        return res.status(400).json({ success: false, message: 'riderId or riderIds is required' });
     }
-
     try {
-        // Step 2: Find the VendorOrder
-        // Resiliency: Try finding by its own ID first. If not found, check if it's a Master Order ID.
         let vendorOrder = await VendorOrder.findById(vendorOrderId).populate("userOrderId");
-        
         if (!vendorOrder) {
             vendorOrder = await VendorOrder.findOne({ userOrderId: vendorOrderId }).populate("userOrderId");
         }
-
         if (!vendorOrder) {
-            return res.status(404).json({
-                success: false,
-                message: "No order found for assignment. Please check the order ID."
-            });
+            return res.status(404).json({ success: false, message: "No order found" });
         }
-
         const masterOrder = vendorOrder.userOrderId;
-        if (!masterOrder) {
-            return res.status(404).json({
-                success: false,
-                message: "Master order not found"
-            });
-        }
-
         const platformConfig = await getPlatformConfig();
         if (platformConfig.riderAssignmentMode === "automatic") {
-            return res.status(409).json({
-                success: false,
-                code: "AUTOMATIC_ASSIGNMENT_ENABLED",
-                message: "Automatic rider assignment is enabled. Manual rider assignment is disabled for this order."
-            });
+            return res.status(409).json({ success: false, message: "Automatic assignment enabled" });
         }
-
-        // Step 3: Validate the order is in the correct state
-        const validStatuses = ['ready_for_pickup', 'ready'];
-        if (!validStatuses.includes(vendorOrder.orderStatus)) {
-            return res.status(400).json({
-                success: false,
-                message: `Order cannot be assigned a rider at this stage. Current status: ${vendorOrder.orderStatus}. Order must be ready_for_pickup before rider assignment.`
-            });
-        }
-
-        // Step 4: Find and validate rider offer targets
         const riders = await Rider.find({ _id: { $in: uniqueRiderIds } });
-        if (riders.length !== uniqueRiderIds.length) {
-            return res.status(404).json({
-                success: false,
-                message: "One or more riders were not found"
-            });
-        }
-
-        const inactiveRider = riders.find((rider) => !rider.isVerified);
-        if (inactiveRider) {
-            return res.status(400).json({
-                success: false,
-                message: `${inactiveRider.name || "This rider"} must be approved before dispatch`
-            });
-        }
-
-        const unavailableRider = riders.find((rider) => rider.status !== 'available' || !rider.isActive || rider.deletedAt || rider.currentOrderId);
-        if (unavailableRider) {
-            return res.status(400).json({
-                success: false,
-                message: `${unavailableRider.name || "This rider"} is currently unavailable or on another delivery`
-            });
-        }
-
-        await expireStaleRiderAssignmentOffers(uniqueRiderIds);
-
-        const activeAssignments = await RiderAssignment.find({
-            riderId: { $in: uniqueRiderIds },
-            status: "assigned"
-        }).populate("riderId", "name");
-        if (activeAssignments.length) {
-            const riderName = activeAssignments[0].riderId?.name || "A selected rider";
-            return res.status(409).json({
-                success: false,
-                code: "RIDER_HAS_PENDING_ASSIGNMENT",
-                message: `${riderName} already has a pending assignment offer`
-            });
-        }
-
-        // Step 6: Find the Vendor
-        const vendor = await Vendor.findById(vendorOrder.restaurantId).select('storeName deliveryManagedBy cityId stateId');
-        const cityIdForGuard = masterOrder.deliveryAddress?.cityId || vendor?.cityId || null;
-        const stateIdForGuard = masterOrder.deliveryAddress?.stateId || vendor?.stateId || null;
-
-        if (!cityIdForGuard || !stateIdForGuard) {
-            return res.status(400).json({
-                success: false,
-                message: "This order must have a defined city and state before assigning a rider. Verify the delivery location or vendor settings."
-            });
-        }
-
-        const wrongCityRider = riders.find((rider) => rider.cityId?.toString() !== cityIdForGuard.toString());
-        if (wrongCityRider) {
-            return res.status(400).json({
-                success: false,
-                message: `${wrongCityRider.name || "This rider"} is not assigned to the same city as this order`
-            });
-        }
-
-        const wrongStateRider = riders.find((rider) => rider.stateId?.toString() !== stateIdForGuard.toString());
-        if (wrongStateRider) {
-            return res.status(400).json({
-                success: false,
-                message: `${wrongStateRider.name || "This rider"} is not assigned to the same state as this order`
-            });
-        }
-
         const assignmentExpiresAt = new Date(Date.now() + 5 * 60 * 1000);
-        const riderPayout = platformConfig.riderFixedPayout || 600;
-        const riderNames = riders.map((rider) => rider.name).filter(Boolean).join(", ");
-
-        // Step 7: Lock the rider and order inside one database transaction.
         const session = await mongoose.startSession();
         session.startTransaction();
-        const updatePromises = [
-            // a) Update VendorOrder(s) — use updateMany to capture all vendors in the order
-            VendorOrder.updateMany(
-                { userOrderId: masterOrder._id },
-                { $set: { orderStatus: 'rider_assigned' } },
-                { session }
-            ),
-            // b) Update master Order
-            Order.updateOne(
-                { _id: masterOrder._id, riderId: null, orderStatus: { $in: ['ready_for_pickup', 'ready', 'rider_assigned'] } },
-                {
-                    $set: {
-                        orderStatus: 'rider_assigned',
-                        riderAssignment: {
-                            status: 'assigned',
-                            assignedAt: new Date(),
-                            acceptedAt: null,
-                            rejectedAt: null,
-                            expiresAt: assignmentExpiresAt,
-                            lastReason: '',
-                            assignedBy: req.admin?._id || null
-                        }
-                    },
-                    $push: {
-                        statusLog: {
-                            status: 'rider_assigned',
-                            changedBy: `admin:${req.admin?._id || 'unknown'}`,
-                            timestamp: new Date()
-                        }
+        try {
+            await VendorOrder.updateMany({ userOrderId: masterOrder._id }, { $set: { orderStatus: 'rider_assigned' } }, { session });
+            await Order.updateOne({ _id: masterOrder._id }, {
+                $set: {
+                    orderStatus: 'rider_assigned',
+                    riderAssignment: {
+                        status: 'assigned',
+                        assignedAt: new Date(),
+                        expiresAt: assignmentExpiresAt,
+                        assignedBy: req.admin?._id || null
                     }
                 },
-                { session }
-            ),
-            // c) Update Rider availability
-            Rider.updateMany(
-                {
-                    _id: { $in: uniqueRiderIds },
-                    status: 'available',
-                    isActive: true,
-                    isVerified: true,
-                    deletedAt: null,
-                    currentOrderId: null,
-                    ...(cityIdForGuard ? { cityId: cityIdForGuard } : {}),
-                    ...(stateIdForGuard ? { stateId: stateIdForGuard } : {}),
-                },
-                { 
-                    $set: { 
-                        status: 'pending_assignment',
-                        currentOrderId: masterOrder._id,
-                        assignmentExpiresAt
-                    } 
-                },
-                { session }
-            )
-        ];
-
-        const results = await Promise.allSettled(updatePromises);
-
-        // Check critical updates (a and b)
-        if (
-            results[0].status === 'rejected' ||
-            results[1].status === 'rejected' ||
-            results[2].status === 'rejected' ||
-            results[1].value?.modifiedCount !== 1 ||
-            results[2].value?.modifiedCount !== uniqueRiderIds.length
-        ) {
+                $push: {
+                    statusLog: {
+                        status: 'rider_assigned',
+                        changedBy: \`admin:\${req.admin?._id || 'unknown'}\`,
+                        timestamp: new Date()
+                    }
+                }
+            }, { session });
+            await Rider.updateMany({ _id: { $in: uniqueRiderIds } }, {
+                $set: {
+                    status: 'pending_assignment',
+                    currentOrderId: masterOrder._id,
+                    assignmentExpiresAt
+                }
+            }, { session });
+            await RiderAssignment.create(uniqueRiderIds.map((targetRiderId) => ({
+                orderId: masterOrder._id,
+                vendorOrderId: vendorOrder._id,
+                riderId: targetRiderId,
+                vendorId: vendorOrder.restaurantId,
+                status: 'assigned',
+                assignedBy: req.admin?._id || null,
+                expiresAt: assignmentExpiresAt
+            })), { session });
+            await session.commitTransaction();
+            session.endSession();
+            res.status(200).json({ success: true, message: 'Riders assigned' });
+        } catch (txErr) {
             await session.abortTransaction();
             session.endSession();
-            const error = results[0].reason || results[1].reason || results[2].reason;
-            console.error('❌ Critical database update failed:', error.message);
-            return res.status(409).json({
-                success: false,
-                code: "ASSIGNMENT_STATE_CONFLICT",
-                message: 'Failed to assign rider to order',
-                error: error?.message || "Rider or order was already assigned"
-            });
+            throw txErr;
         }
-
-        if (false && results[2].status === 'rejected') {
-            console.warn('⚠️ Rider availability update failed:', results[2].reason?.message);
-        }
-
-        console.log('✅ Database updates completed successfully');
-
-        await RiderAssignment.create(uniqueRiderIds.map((targetRiderId) => ({
-            orderId: masterOrder._id,
-            vendorOrderId: vendorOrder._id,
-            riderId: targetRiderId,
-            vendorId: vendorOrder.restaurantId,
-            stateId: stateIdForGuard,
-            cityId: cityIdForGuard,
-            status: 'assigned',
-            assignedBy: req.admin?._id || null,
-            expiresAt: assignmentExpiresAt,
-            metadata: {
-                restaurantName: vendor?.storeName || '',
-                orderReadableId: masterOrder.orderId || '',
-                assignmentMode: "manual"
-            }
-        })), { session, ordered: true });
-
-        await session.commitTransaction();
-        session.endSession();
-
-        console.log('Rider assignment transaction committed successfully');
-
-        // Step 8: Fire socket events (non-fatal)
-        const { emitToRestaurant, emitToOrder, emitToAdmin, emitToRider } = await import("../../../socket/socketServer.js");
-        const { SOCKET_EVENTS, buildPayload } = await import("../../../socket/rider.events.js");
-
-        try {
-            // a) Notify the rider immediately via socket for real-time dashboard update
-            for (const rider of riders) {
-                emitToRider(rider._id, SOCKET_EVENTS.ORDER_ASSIGNED_TO_RIDER, buildPayload.orderAssigned({
-                    orderId: masterOrder._id,
-                    riderId: rider._id,
-                    vendorId: vendor?._id,
-                    vendorName: vendor?.storeName,
-                    items: masterOrder.items,
-                    deliveryAddress: masterOrder.deliveryAddress,
-                    customerName: masterOrder.deliveryAddress?.name || "Customer",
-                    customerPhone: masterOrder.deliveryAddress?.phone,
-                    note: masterOrder.note,
-                    payout: riderPayout,
-                    assignmentMode: "manual",
-                    assignmentExpiresAt
-                }));
-            }
-            console.log(`✅ Socket: Order assigned event emitted to ${riders.length} rider(s)`);
-        } catch (e) { console.error('⚠️ Socket error (rider):', e.message); }
-
-        try {
-            // ✅ Use unified notification service for real-time + push capability
-            const { sendRiderNotification } = await import("../../../services/notification.service.js");
-            await Promise.all(riders.map((rider) => sendRiderNotification(rider._id, masterOrder._id, "order_assigned", {
-                    restaurantName: vendor?.storeName,
-                    orderDatabaseId: masterOrder._id,
-                    payout: riderPayout,
-                    assignmentMode: "manual",
-                    assignmentExpiresAt
-                })
-            ));
-            console.log(`✅ Socket + Push: Order assigned event emitted/sent to ${riders.length} rider(s)`);
-        } catch (e) { console.error('⚠️ Notification error (rider):', e.message); }
-
-        try {
-            // b) Notify the vendor
-            emitToRestaurant(vendorOrder.restaurantId, 'order_status_update', {
-                orderId: vendorOrder._id,
-                status: 'rider_assigned',
-                riderIds: uniqueRiderIds,
-                riderName: riderNames,
-                message: 'Rider assignment offers have been sent for your order'
-            });
-            console.log(`✅ Socket: Order status update emitted to vendor:${vendorOrder.restaurantId}`);
-        } catch (e) { console.error('⚠️ Socket error (vendor):', e.message); }
-
-        try {
-            // c) Notify the customer
-            emitToOrder(masterOrder._id, 'order_status_update', {
-                orderId: masterOrder._id,
-                status: 'rider_assigned',
-                message: 'A rider is being assigned to your order',
-                riderName: riderNames
-            });
-            console.log(`✅ Socket: Order status update emitted to order:${masterOrder._id}`);
-        } catch (e) { console.error('⚠️ Socket error (customer):', e.message); }
-
-        try {
-            // d) Confirm to admin
-            emitToAdmin(null, 'rider_assignment_confirmed', {
-                vendorOrderId: vendorOrder._id,
-                riderIds: uniqueRiderIds,
-                riderName: riderNames,
-                restaurantName: vendor?.storeName,
-                confirmedAt: new Date().toISOString()
-            });
-            console.log('✅ Socket: Rider assignment confirmed emitted to admins');
-        } catch (e) { console.error('⚠️ Socket error (admin):', e.message); }
-
-        // Step 9: Fire push notifications (non-fatal)
-        try {
-            const { sendOrderNotification, sendVendorNotification } = await import("../../../services/notification.service.js");
-            
-            // a) Notify customer via push
-            await sendOrderNotification(
-                masterOrder.userId,
-                masterOrder.orderId || masterOrder._id,
-                'rider_assigned',
-                {
-                    restaurantName: vendor?.storeName,
-                    orderDatabaseId: vendorOrder._id
-                }
-            );
-            console.log('✅ Push: Customer notification sent');
-        } catch (e) { console.error('⚠️ Push error (customer):', e.message); }
-
-        try {
-            const { sendVendorNotification } = await import("../../../services/notification.service.js");
-            // b) Notify vendor via push
-            await sendVendorNotification(
-                vendorOrder.restaurantId,
-                masterOrder.orderId || masterOrder._id,
-                'vendor_rider_assigned',
-                {
-                    orderDatabaseId: vendorOrder._id,
-                    riderName: riderNames
-                }
-            );
-            console.log('✅ Push: Vendor notification sent');
-        } catch (e) { console.error('⚠️ Push error (vendor):', e.message); }
-
-        // Step 10: Return success response
-        res.status(200).json({
-            success: true,
-            message: `${riders.length} rider assignment offer${riders.length === 1 ? "" : "s"} sent successfully`,
-            data: {
-                vendorOrderId: vendorOrder._id,
-                orderId: masterOrder.orderId || masterOrder._id,
-                riderIds: uniqueRiderIds,
-                riders: riders.map((rider) => ({
-                    riderId: rider._id,
-                    riderName: rider.name,
-                    riderPhone: rider.phone,
-                })),
-                status: 'rider_assigned',
-                assignedAt: new Date().toISOString()
-            }
-        });
-
     } catch (error) {
-        console.error('❌ assignRiderToOrder error:', error.message);
-        res.status(500).json({
-            success: false,
-            message: 'Failed to assign rider to order',
-            error: error.message
-        });
+        res.status(500).json({ success: false, message: error.message });
     }
 };
+\`;
+
+fs.writeFileSync(filePath, content);
+console.log('✅ File fixed successfully');
