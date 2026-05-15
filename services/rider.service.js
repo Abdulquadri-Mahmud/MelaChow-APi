@@ -596,7 +596,7 @@ export const markDelivered = async (orderId, riderId) => {
 /**
  * Update rider status manually (rider self-service)
  */
-export const updateRiderStatus = async (riderId, status) => {
+export const updateRiderStatus = async (riderId, status, reason = null) => {
     const rider = await Rider.findById(riderId);
     if (!rider) throw new Error("Rider not found");
 

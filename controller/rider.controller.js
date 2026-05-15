@@ -306,7 +306,7 @@ export const updateRiderStatus = async (req, res, next) => {
             orderId = pendingAssignment?.orderId || null;
         }
 
-        const rider = await riderService.updateRiderStatus(riderId, status);
+        const rider = await riderService.updateRiderStatus(riderId, status, reason);
         const vendorId = rider.vendorId?.toString();
 
         let io;
@@ -387,6 +387,18 @@ export const updateRiderStatus = async (req, res, next) => {
                         { _id: { $in: losingRiderIds }, status: "pending_assignment" },
                         { $set: { status: "available", assignmentExpiresAt: null }, $unset: { currentOrderId: "" } }
                     );
+
+                    // ✅ SYNC: Notify all other riders to close their broadcast modals immediately
+                    losingRiderIds.forEach(id => {
+                        const room = SOCKET_ROOMS.rider(id);
+                        if (io) {
+                            io.to(room).emit(SOCKET_EVENTS.ASSIGNMENT_CANCELLED, buildPayload.assignmentCancelled({
+                                orderId,
+                                reason: 'accepted_by_another_rider',
+                                message: 'This order has been accepted by another rider.'
+                            }));
+                        }
+                    });
                 }
 
                 const resolvedVendorId = vendorId ||
@@ -429,7 +441,18 @@ export const updateRiderStatus = async (req, res, next) => {
                 // ── RIDER REJECTED ────────────────────────────────────────────────
                 const OrderModel = (await import("../model/order/Order.js")).default;
                 const VendorOrder = (await import("../model/vendor/VendorOrder.js")).default;
+                
+                // ✅ SAFETY: Ensure orderId exists before proceeding
+                if (!orderId) {
+                    console.warn(`⚠️ Reject attempted without orderId for rider ${riderId}`);
+                    return res.status(200).json({ success: true, data: rider.getPublicProfile() });
+                }
+
                 const previousOrder = await OrderModel.findById(orderId).select("riderAssignment");
+                if (!previousOrder) {
+                    console.warn(`⚠️ Reject attempted for non-existent order ${orderId}`);
+                    return res.status(200).json({ success: true, data: rider.getPublicProfile() });
+                }
                 await RiderAssignment.findOneAndUpdate(
                     { riderId, orderId, status: { $in: ["assigned", "accepted"] } },
                     {

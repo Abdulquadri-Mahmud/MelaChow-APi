@@ -55,6 +55,7 @@ import './workers/index.js';
 import { initializeSocket } from './socket/socketServer.js';
 import { scheduledPayoutWorker, triggerScheduledPayouts } from "./jobs/scheduledPayout.job.js";
 import { expireStaleRiderAssignments } from "./jobs/riderAssignmentTimeout.job.js";
+import { retryPendingRiderAssignments } from "./jobs/riderAssignmentRetry.job.js";
 import cron from "node-cron";
 
 // Environment loaded via ./config/env.js import above
@@ -529,6 +530,21 @@ const startServer = async () => {
     );
 
     console.log("Rider assignment timeout sweep registered (every minute)");
+
+    // 🚀 NEW: Continuous Assignment Retry Loop (Every 30 seconds)
+    cron.schedule(
+        "*/30 * * * * *",
+        async () => {
+            try {
+                await retryPendingRiderAssignments();
+            } catch (err) {
+                logger.warn({ err: err.message }, "Assignment retry sweep failed");
+            }
+        },
+        { timezone: "Africa/Lagos" }
+    );
+
+    console.log("Continuous assignment retry loop registered (every 30 seconds)");
 
     // 5. Graceful shutdown
     // Render sends SIGTERM before stopping the instance
