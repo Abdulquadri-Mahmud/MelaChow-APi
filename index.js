@@ -240,7 +240,7 @@ const globalLimiter = rateLimit({
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 10,
+  max: 50, // Increased from 10 to allow for profile refreshes and status checks
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many login attempts, please try again in 15 minutes.' },
@@ -288,7 +288,7 @@ const transactionLimiter = rateLimit({
 
 const notificationLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 40,
+  max: 100, // Increased from 40 to support polling fallbacks (10s poll = 90 req/15min)
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many notification requests, please slow down.' },
