@@ -6,7 +6,7 @@ import Order from "../model/order/Order.js";
 import Rider from "../model/rider.model.js";
 import RiderAssignment from "../model/riderAssignment.model.js";
 import PlatformVehicle from "../model/platformVehicle.model.js";
-import { sendDeliveryOTP, verifyDeliveryOTP } from '../services/otp.service.js';
+import { sendDeliveryOTP, verifyDeliveryOTP, getActiveDeliveryOTP } from '../services/otp.service.js';
 import { validateVendorLocation } from "../services/locationService.js";
 import mongoose from "mongoose";
 
@@ -222,13 +222,18 @@ export const getActiveOrder = async (req, res, next) => {
         }
 
         const order = await riderService.getActiveOrder(riderId);
+        
+        let deliveryOtp = null;
+        if (order) {
+            deliveryOtp = await getActiveDeliveryOTP(order._id);
+        }
 
         // ✅ FIX: Returning 200 with null instead of 404.
         // A 404 in the console looks like a "failure" to the user/dev, 
         // but having no active order is a valid and frequent state for a rider.
         res.status(200).json({ 
             success: true, 
-            data: { order: order || null } 
+            data: { order: order ? { ...order, deliveryOtp } : null } 
         });
     } catch (error) {
         next(error);
@@ -270,7 +275,10 @@ export const getRiderOrderDetails = async (req, res, next) => {
         // 3. Delegate detailed fetching/population to the service (same logic as dashboard)
         const orderObj = await riderService.getRiderOrderDetails(riderId, orderId);
 
-        res.status(200).json({ success: true, data: orderObj });
+        // 4. Check for active delivery OTP
+        const deliveryOtp = await getActiveDeliveryOTP(orderId);
+
+        res.status(200).json({ success: true, data: { ...orderObj, deliveryOtp } });
     } catch (error) {
         console.error("💥 [getRiderOrderDetails] Error:", error.message);
         next(error);
@@ -741,6 +749,32 @@ export const requestDeliveryOTP = async (req, res, next) => {
                 message: 'Unable to send OTP to customer right now. Check the customer has a valid phone number or email, then try again.',
             });
         }
+
+        // Emit socket events for real-time updates
+        const io = getIO(req);
+        
+        // 1. Notify Customer - Send the OTP so it appears on their track-order page
+        const deliveryOtp = await getActiveDeliveryOTP(orderId);
+        io.to(SOCKET_ROOMS.customer(order.userId?._id || order.userId)).emit(
+            SOCKET_EVENTS.ORDER_STATUS_UPDATE,
+            buildPayload.statusUpdate({
+                orderId: order._id,
+                status: order.orderStatus,
+                deliveryOtp: deliveryOtp,
+                message: 'Delivery code has been sent. Please provide it to your rider upon arrival.'
+            })
+        );
+
+        // 2. Notify Rider - To refresh their active order data with the OTP presence
+        io.to(SOCKET_ROOMS.rider(riderId)).emit(
+            SOCKET_EVENTS.ORDER_STATUS_UPDATE,
+            buildPayload.statusUpdate({
+                orderId: order._id,
+                status: order.orderStatus,
+                deliveryOtp: deliveryOtp,
+                message: 'Delivery code sent to customer.'
+            })
+        );
 
         return res.status(200).json({
             success: true,
