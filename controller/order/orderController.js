@@ -10,6 +10,7 @@ import VendorOrder from "../../model/vendor/VendorOrder.js";
 import Food from "../../model/vendor/food.model.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 import Admin from "../../model/Admin/admin.model.js";
+import { getActiveDeliveryOTP } from "../../services/otp.service.js";
 import {
   createOrderV2,
   updateOrderAfterPayment,
@@ -1245,10 +1246,14 @@ export const getSingleOrder = async (req, res) => {
       }
     }
 
-    // 4️⃣ Return order with embedded variant info
+    // 4️⃣ Get Delivery OTP if active
+    const deliveryOtp = await getActiveDeliveryOTP(order._id);
+
+    // 5️⃣ Return order with embedded variant info
     return res.json({
       order,
       vendorOrders,
+      deliveryOtp,
       trackingStatus,
       message: "Order fetched successfully",
     });

@@ -193,3 +193,24 @@ export const verifyDeliveryOTP = async (orderId, otp) => {
     throw new Error('Invalid OTP session state. Please request a new code.');
 };
 
+/**
+ * Safely retrieve an active OTP for an order.
+ * Used for displaying the code on the customer's tracking page.
+ * 
+ * @param {string} orderId 
+ * @returns {string|null}
+ */
+export const getActiveDeliveryOTP = async (orderId) => {
+    try {
+        const redisKey = `${OTP_REDIS_PREFIX}${orderId}`;
+        const stored = await retrieveOtpPayload(redisKey);
+        if (!stored) return null;
+
+        const otpData = JSON.parse(stored);
+        return otpData.otp || null;
+    } catch (error) {
+        logger.error({ orderId, error: error.message }, '❌ Error retrieving active OTP');
+        return null;
+    }
+};
+
