@@ -30,7 +30,13 @@ export const getAllOrders = async (req, res) => {
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const filters = {};
 
-        if (status) filters.orderStatus = status;
+        if (status) {
+            if (status.includes(',')) {
+                filters.orderStatus = { $in: status.split(',') };
+            } else {
+                filters.orderStatus = status;
+            }
+        }
         if (paymentStatus) filters.paymentStatus = paymentStatus;
         if (vendorId) filters["items.restaurantId"] = vendorId;
         if (startDate || endDate) {
@@ -352,15 +358,18 @@ export const adminOverrideOrderStatus = async (req, res) => {
 export const getPlatformManagedOrders = async (req, res) => {
     try {
         const { status, statusGroup, paymentStatus, startDate, endDate, search, page = 1, limit = 20 } = req.query;
+        const filter = {};
+        if (status) {
+            if (status.includes(',')) {
+                filter.orderStatus = { $in: status.split(',') };
+            } else {
+                filter.orderStatus = status;
+            }
+        } else if (statusGroup === "logistics") {
+            filter.orderStatus = { $in: ["ready_for_pickup", "rider_assigned"] };
+        }
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
-        // 1. All orders are platform-managed in this model.
-        // 2. Build filters
-        const filter = {};
-
-        if (status) {
-            filter.orderStatus = status;
-        } else if (statusGroup === "logistics") {
         const orders = await Order.find(filter)
             .populate("userId", "firstname lastname email phone")
             .populate("riderId", "name phone avatar status")
