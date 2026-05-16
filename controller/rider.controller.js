@@ -242,6 +242,24 @@ export const getActiveOrder = async (req, res, next) => {
     }
 };
 
+export const getPendingOffers = async (req, res, next) => {
+    try {
+        const { riderId } = req.params;
+        if (!req.rider || req.rider._id.toString() !== riderId) {
+            return res.status(403).json({ success: false, message: "Unauthorized" });
+        }
+
+        const offers = await riderService.getPendingOffers(riderId);
+        
+        res.status(200).json({ 
+            success: true, 
+            data: { offers } 
+        });
+    } catch (error) {
+        next(error);
+    }
+};
+
 export const getRiderOrderDetails = async (req, res, next) => {
     try {
         const { riderId, orderId } = req.params;
@@ -290,7 +308,7 @@ export const getRiderOrderDetails = async (req, res, next) => {
 export const updateRiderStatus = async (req, res, next) => {
     try {
         const { riderId } = req.params;
-        const { status, reason } = req.body;
+        const { status, reason, orderId: reqOrderId } = req.body;
 
         if (req.rider._id.toString() !== riderId) {
             return res.status(403).json({ success: false, message: "Unauthorized to update this rider status" });
@@ -305,15 +323,19 @@ export const updateRiderStatus = async (req, res, next) => {
             return res.status(404).json({ success: false, message: "Rider not found" });
         }
 
-        const wasPending = oldRider.status === "pending_assignment";
-        let orderId = oldRider.currentOrderId?._id || oldRider.currentOrderId;
-        if (wasPending && !orderId) {
+        const wasPending = oldRider.status === "pending_assignment" || oldRider.status === "available";
+        let orderId = reqOrderId || oldRider.currentOrderId?._id || oldRider.currentOrderId;
+        if (wasPending && !orderId && status === "on_delivery") {
             const pendingAssignment = await RiderAssignment.findOne({
                 riderId,
                 status: "assigned",
                 expiresAt: { $gt: new Date() },
             }).sort({ createdAt: -1 });
             orderId = pendingAssignment?.orderId || null;
+        }
+
+        if (status === "on_delivery" && !orderId) {
+            return res.status(400).json({ success: false, message: "No active assignment found to accept." });
         }
 
         const rider = await riderService.updateRiderStatus(riderId, status, reason);
@@ -1151,13 +1173,13 @@ export const adminRejectRiderAssignment = async (req, res, next) => {
             return res.status(400).json({ success: false, message: "Rider does not have a pending assignment to reject" });
         }
 
-        const activeAssignment = await RiderAssignment.findOne({
+        const activeAssignments = await RiderAssignment.find({
             riderId,
             status: "assigned",
             expiresAt: { $gt: new Date() }
-        }).sort({ createdAt: -1 });
+        });
 
-        if (!activeAssignment) {
+        if (!activeAssignments.length) {
             rider.status = "available";
             rider.currentOrderId = null;
             rider.assignmentExpiresAt = null;
@@ -1165,11 +1187,12 @@ export const adminRejectRiderAssignment = async (req, res, next) => {
             return res.status(400).json({ success: false, message: "No active assignment found for this rider, marked as available" });
         }
 
-        const orderId = activeAssignment.orderId;
+        const assignmentIds = activeAssignments.map(a => a._id);
+        const orderIds = activeAssignments.map(a => a.orderId);
         const vendorId = rider.vendorId?.toString();
 
-        await RiderAssignment.updateOne(
-            { _id: activeAssignment._id },
+        await RiderAssignment.updateMany(
+            { _id: { $in: assignmentIds } },
             { $set: { status: "rejected", respondedAt: new Date(), reason: reason || "rejected_by_admin" } }
         );
 
@@ -1178,46 +1201,50 @@ export const adminRejectRiderAssignment = async (req, res, next) => {
         rider.assignmentExpiresAt = null;
         await rider.save();
 
-        const remainingOffers = await RiderAssignment.countDocuments({
-            orderId,
-            status: "assigned",
-            expiresAt: { $gt: new Date() }
-        });
-
-        const previousOrder = await OrderModel.findById(orderId).select("riderAssignment items orderId");
-
-        let order = remainingOffers > 0
-            ? await OrderModel.findById(orderId)
-            : await OrderModel.findByIdAndUpdate(
+        for (const orderId of orderIds) {
+            const remainingOffers = await RiderAssignment.countDocuments({
                 orderId,
-                {
-                    orderStatus: "ready_for_pickup",
-                    riderId: null,
-                    riderAssignment: {
-                        status: "rejected",
-                        assignedAt: previousOrder?.riderAssignment?.assignedAt || null,
-                        acceptedAt: null,
-                        rejectedAt: new Date(),
-                        expiresAt: null,
-                        lastReason: "rejected_by_admin",
-                        assignedBy: previousOrder?.riderAssignment?.assignedBy || null
-                    },
-                    $push: {
-                        statusLog: {
-                            status: "rider_rejected",
-                            changedBy: "admin",
-                            timestamp: new Date()
-                        }
-                    }
-                },
-                { new: true }
-            );
+                status: "assigned",
+                expiresAt: { $gt: new Date() }
+            });
 
-        if (order && remainingOffers === 0) {
-            await VendorOrder.updateMany(
-                { userOrderId: order._id },
-                { $set: { orderStatus: "ready_for_pickup" } }
-            );
+            const previousOrder = await OrderModel.findById(orderId).select("riderAssignment items orderId");
+
+            let order = remainingOffers > 0
+                ? await OrderModel.findById(orderId)
+                : await OrderModel.findByIdAndUpdate(
+                    orderId,
+                    {
+                        orderStatus: "ready_for_pickup",
+                        riderId: null,
+                        riderAssignment: {
+                            status: "rejected",
+                            assignedAt: previousOrder?.riderAssignment?.assignedAt || null,
+                            acceptedAt: null,
+                            rejectedAt: new Date(),
+                            expiresAt: null,
+                            lastReason: "rejected_by_admin",
+                            assignedBy: previousOrder?.riderAssignment?.assignedBy || null
+                        },
+                        $push: {
+                            statusLog: {
+                                status: "rider_rejected",
+                                changedBy: "admin",
+                                timestamp: new Date()
+                            }
+                        }
+                    },
+                    { new: true }
+                );
+
+            if (order && remainingOffers === 0) {
+                await VendorOrder.updateMany(
+                    { userOrderId: order._id },
+                    { $set: { orderStatus: "ready_for_pickup" } }
+                );
+            }
+            
+            // Note: Socket logic could be moved into loop if needed, but for now we process state cleanly.
         }
 
         let io;

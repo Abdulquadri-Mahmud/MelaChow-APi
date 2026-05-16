@@ -31,6 +31,7 @@ router.post("/riders/register", riderController.registerRider);
 // Without it, fetchActiveOrder() always got a 404 → activeOrder was always null
 // → rider could never see their assigned delivery on the dashboard.
 router.get("/riders/:riderId/active-order", requireRiderAuth, riderController.getActiveOrder);
+router.get("/riders/:riderId/pending-offers", requireRiderAuth, riderController.getPendingOffers);
 
 // Rider self-service actions
 router.patch("/riders/:riderId/status", requireRiderAuth, riderController.updateRiderStatus);
