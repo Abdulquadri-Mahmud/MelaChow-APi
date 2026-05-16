@@ -38,6 +38,7 @@ export const registerRider = async (req, res, next) => {
             requestedCity,
             serviceZones,
             vehicleType,
+            payoutDetails,
         } = req.body;
 
         const stateName = (requestedState || state || "").trim();
@@ -80,6 +81,7 @@ export const registerRider = async (req, res, next) => {
             vehicleOwnership: "own",
             vehicleType: ["bicycle", "motorbike"].includes(vehicleType) ? vehicleType : "motorbike",
             isVerified: false,
+            payoutDetails: payoutDetails || undefined,
         });
 
         res.status(201).json({
@@ -1071,6 +1073,50 @@ export const adminUpdatePlatformVehicle = async (req, res, next) => {
         });
         if (!vehicle) return res.status(404).json({ success: false, message: "Vehicle not found" });
         res.status(200).json({ success: true, data: vehicle });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const adminDeletePlatformVehicle = async (req, res, next) => {
+    try {
+        const { vehicleId } = req.params;
+        const vehicle = await PlatformVehicle.findById(vehicleId);
+        if (!vehicle) return res.status(404).json({ success: false, message: "Vehicle not found" });
+
+        if (vehicle.assignedRiderId) {
+            // Unassign rider first
+            await Rider.findByIdAndUpdate(vehicle.assignedRiderId, {
+                platformVehicleId: null,
+                vehicleOwnership: "own"
+            });
+        }
+
+        await vehicle.deleteOne();
+        res.status(200).json({ success: true, message: "Vehicle deleted successfully" });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const adminUnassignRiderFromVehicle = async (req, res, next) => {
+    try {
+        const { vehicleId } = req.params;
+        const vehicle = await PlatformVehicle.findById(vehicleId);
+        if (!vehicle) return res.status(404).json({ success: false, message: "Vehicle not found" });
+
+        if (vehicle.assignedRiderId) {
+            await Rider.findByIdAndUpdate(vehicle.assignedRiderId, {
+                platformVehicleId: null,
+                vehicleOwnership: "own"
+            });
+        }
+
+        vehicle.assignedRiderId = null;
+        vehicle.status = "available";
+        await vehicle.save();
+
+        res.status(200).json({ success: true, message: "Rider unassigned successfully", data: vehicle });
     } catch (error) {
         next(error);
     }

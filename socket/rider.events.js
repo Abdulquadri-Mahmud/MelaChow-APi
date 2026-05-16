@@ -52,13 +52,14 @@ export const buildPayload = {
         assignmentExpiresAt
     }),
 
-    statusUpdate: ({ orderId, status, changedBy, message, riderName, rider }) => ({
+    statusUpdate: ({ orderId, status, changedBy, message, riderName, rider, deliveryOtp }) => ({
         orderId,
         status,
         changedBy,
         message,
         riderName,
         rider,
+        deliveryOtp,
         timestamp: new Date()
     }),
 
