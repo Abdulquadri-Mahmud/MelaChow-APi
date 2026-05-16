@@ -68,5 +68,7 @@ router.get("/admin/rider-assignments", adminAuth, riderController.adminGetAssign
 router.get("/admin/platform-vehicles", adminAuth, riderController.adminGetPlatformVehicles);
 router.post("/admin/platform-vehicles", adminAuth, riderController.adminCreatePlatformVehicle);
 router.patch("/admin/platform-vehicles/:vehicleId", adminAuth, riderController.adminUpdatePlatformVehicle);
+router.delete("/admin/platform-vehicles/:vehicleId", adminAuth, riderController.adminDeletePlatformVehicle);
+router.patch("/admin/platform-vehicles/:vehicleId/unassign", adminAuth, riderController.adminUnassignRiderFromVehicle);
 
 export default router;

@@ -237,6 +237,13 @@ const globalLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many requests, please try again later.' },
+  skip: (req) => {
+    // Rider assignment checks are critical and run on intervals, bypass global rate limit
+    if (req.path.includes('/riders/') && (req.path.includes('/active-order') || req.path.includes('/status'))) {
+        return true;
+    }
+    return false;
+  }
 });
 
 const authLimiter = rateLimit({
@@ -245,6 +252,13 @@ const authLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many login attempts, please try again in 15 minutes.' },
+  skip: (req) => {
+    // Don't limit the 'me' endpoint as it's used for frequent state polling by the app
+    if (req.path.endsWith('/me')) {
+        return true;
+    }
+    return false;
+  }
 });
 
 const walletLimiter = rateLimit({

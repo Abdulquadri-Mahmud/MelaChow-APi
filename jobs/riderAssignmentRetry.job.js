@@ -11,11 +11,10 @@ import { offerOrderToAvailableRiders } from "../services/riderAssignment.service
  */
 export async function retryPendingRiderAssignments() {
     try {
-        // Find VendorOrders that are ready but not yet in assignment/broadcast
-        // We look for 'ready_for_pickup' because that's where the automated system 
-        // reverts to if no riders are found or if all riders reject.
+        // We look for 'ready_for_pickup' and 'rider_assigned' to ensure orders 
+        // constantly seek out any newly available riders if they haven't been accepted yet.
         const pendingOrders = await VendorOrder.find({
-            orderStatus: "ready_for_pickup",
+            orderStatus: { $in: ["ready_for_pickup", "rider_assigned"] },
             deletedAt: null
         }).limit(10); // Process in small batches to prevent server lag
 
