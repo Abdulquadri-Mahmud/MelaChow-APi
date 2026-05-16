@@ -182,18 +182,9 @@ export const getActiveOrder = async (riderId) => {
 
         let activeOrderId = rider.currentOrderId;
 
-        // If rider is in 'pending_assignment' but currentOrderId is null,
-        // it means they have been offered an order but haven't accepted it yet.
-        if (!activeOrderId && rider.status === "pending_assignment") {
-            const pendingAssignment = await RiderAssignment.findOne({
-                riderId: rider._id,
-                status: "assigned",
-                expiresAt: { $gt: new Date() },
-            }).sort({ createdAt: -1 });
-            
-            activeOrderId = pendingAssignment?.orderId || null;
-        }
-
+        // Note: For Bulletin Board architecture, we DO NOT return pending assignments here.
+        // Pending assignments are fetched via getPendingOffers.
+        
         if (!activeOrderId) return null;
 
         // Fetch the master order details
@@ -241,6 +232,65 @@ export const getActiveOrder = async (riderId) => {
     } catch (error) {
         console.error("💥 Error in getActiveOrder service:", error.message);
         return null; 
+    }
+};
+
+/**
+ * Get ALL pending assignment offers for a rider (Bulletin Board)
+ */
+export const getPendingOffers = async (riderId) => {
+    try {
+        if (!riderId || !mongoose.Types.ObjectId.isValid(riderId)) {
+            return [];
+        }
+
+        const rider = await Rider.findById(riderId);
+        if (!rider) return [];
+
+        // If rider is already on delivery, they can't see new offers
+        if (rider.status === "on_delivery" || rider.currentOrderId) {
+            return [];
+        }
+
+        const pendingAssignments = await RiderAssignment.find({
+            riderId: rider._id,
+            status: "assigned",
+            expiresAt: { $gt: new Date() },
+        }).sort({ createdAt: -1 });
+
+        if (!pendingAssignments.length) return [];
+
+        const orderIds = pendingAssignments.map(a => a.orderId);
+
+        // Fetch master order details
+        const orders = await Order.find({ _id: { $in: orderIds }, riderId: null })
+            .populate({ 
+                path: "items.restaurantId", 
+                select: "storeName address phone location coords logo cityId stateId" 
+            })
+            .populate("userId", "firstname lastname name fullName phone email");
+
+        return orders.map(order => {
+            const orderObj = order.toObject();
+            orderObj.status = "assigned";
+            
+            const firstRestaurant = order.items?.[0]?.restaurantId;
+            orderObj.restaurantId = firstRestaurant?._id || firstRestaurant || order.vendorId || null;
+            orderObj.restaurantName = firstRestaurant?.storeName || "Partner Merchant";
+            orderObj.restaurantLogo = firstRestaurant?.logo || null;
+
+            const user = order.userId;
+            orderObj.userName = user?.fullName || (user ? `${user.firstname || ""} ${user.lastname || ""}`.trim() : null) || "Customer";
+            orderObj.userPhone = user?.phone || order.phone || null;
+
+            const addr = order.deliveryAddress;
+            orderObj.deliveryFullAddress = addr?.address || addr?.addressLine || (addr ? `${addr.addressLine || ""}, ${addr.cityName || addr.city || ""}`.trim() : null);
+
+            return orderObj;
+        });
+    } catch (error) {
+        console.error("💥 Error in getPendingOffers service:", error.message);
+        return [];
     }
 };
 
