@@ -1132,6 +1132,146 @@ export const adminDeactivateRider = async (req, res, next) => {
     }
 };
 
+export const adminRejectRiderAssignment = async (req, res, next) => {
+    try {
+        const { riderId } = req.params;
+        const { reason } = req.body;
+
+        const Rider = (await import("../model/rider.model.js")).default;
+        const RiderAssignment = (await import("../model/riderAssignment.model.js")).default;
+        const OrderModel = (await import("../model/order/Order.js")).default;
+        const VendorOrder = (await import("../model/vendor/VendorOrder.js")).default;
+        const { getIO, SOCKET_ROOMS, SOCKET_EVENTS } = await import("../socket/socketServer.js");
+        const { buildPayload } = await import("../socket/rider.events.js");
+
+        const rider = await Rider.findById(riderId);
+        if (!rider) return res.status(404).json({ success: false, message: "Rider not found" });
+
+        if (rider.status !== "pending_assignment") {
+            return res.status(400).json({ success: false, message: "Rider does not have a pending assignment to reject" });
+        }
+
+        const activeAssignment = await RiderAssignment.findOne({
+            riderId,
+            status: "assigned",
+            expiresAt: { $gt: new Date() }
+        }).sort({ createdAt: -1 });
+
+        if (!activeAssignment) {
+            rider.status = "available";
+            rider.currentOrderId = null;
+            rider.assignmentExpiresAt = null;
+            await rider.save();
+            return res.status(400).json({ success: false, message: "No active assignment found for this rider, marked as available" });
+        }
+
+        const orderId = activeAssignment.orderId;
+        const vendorId = rider.vendorId?.toString();
+
+        await RiderAssignment.updateOne(
+            { _id: activeAssignment._id },
+            { $set: { status: "rejected", respondedAt: new Date(), reason: reason || "rejected_by_admin" } }
+        );
+
+        rider.status = "available";
+        rider.currentOrderId = null;
+        rider.assignmentExpiresAt = null;
+        await rider.save();
+
+        const remainingOffers = await RiderAssignment.countDocuments({
+            orderId,
+            status: "assigned",
+            expiresAt: { $gt: new Date() }
+        });
+
+        const previousOrder = await OrderModel.findById(orderId).select("riderAssignment items orderId");
+
+        let order = remainingOffers > 0
+            ? await OrderModel.findById(orderId)
+            : await OrderModel.findByIdAndUpdate(
+                orderId,
+                {
+                    orderStatus: "ready_for_pickup",
+                    riderId: null,
+                    riderAssignment: {
+                        status: "rejected",
+                        assignedAt: previousOrder?.riderAssignment?.assignedAt || null,
+                        acceptedAt: null,
+                        rejectedAt: new Date(),
+                        expiresAt: null,
+                        lastReason: "rejected_by_admin",
+                        assignedBy: previousOrder?.riderAssignment?.assignedBy || null
+                    },
+                    $push: {
+                        statusLog: {
+                            status: "rider_rejected",
+                            changedBy: "admin",
+                            timestamp: new Date()
+                        }
+                    }
+                },
+                { new: true }
+            );
+
+        if (order && remainingOffers === 0) {
+            await VendorOrder.updateMany(
+                { userOrderId: order._id },
+                { $set: { orderStatus: "ready_for_pickup" } }
+            );
+        }
+
+        let io;
+        try { io = getIO(); } catch (e) {}
+
+        const resolvedVendorId = vendorId || previousOrder?.items?.[0]?.restaurantId?.toString() || null;
+
+        if (io && resolvedVendorId && remainingOffers === 0) {
+            io.to(SOCKET_ROOMS.vendor(resolvedVendorId)).emit(
+                SOCKET_EVENTS.ORDER_STATUS_UPDATE,
+                buildPayload.statusUpdate({
+                    orderId,
+                    status: "rider_rejected",
+                    changedBy: "admin",
+                    message: `Rider ${rider.name}'s offer was rejected by admin. Manual reassignment required.`,
+                    riderName: rider.name
+                })
+            );
+        }
+
+        if (io && vendorId) {
+            io.to(SOCKET_ROOMS.vendor(vendorId)).emit(
+                SOCKET_EVENTS.RIDER_STATUS_CHANGED,
+                buildPayload.riderStatusChanged({
+                    riderId: rider._id,
+                    riderName: rider.name,
+                    status: rider.status
+                })
+            );
+        }
+
+        if (io) {
+            io.to(SOCKET_ROOMS.rider(riderId)).emit(
+                SOCKET_EVENTS.ASSIGNMENT_CANCELLED,
+                buildPayload.assignmentCancelled({
+                    orderId,
+                    reason: 'rejected_by_admin',
+                    message: 'This assignment was cancelled by an admin.'
+                })
+            );
+        }
+
+        const { catchupRiderWithPendingOrders } = await import("../services/riderAssignment.service.js");
+        catchupRiderWithPendingOrders(riderId).catch(err => 
+            console.error(`❌ [Catch-up] Error for rider ${riderId}:`, err.message)
+        );
+
+        res.status(200).json({ success: true, message: "Offer rejected successfully. Rider is now available.", data: rider.getPublicProfile() });
+
+    } catch (error) {
+        next(error);
+    }
+};
+
 export const getRiderWallet = async (req, res, next) => {
     try {
         const { riderId } = req.params;
