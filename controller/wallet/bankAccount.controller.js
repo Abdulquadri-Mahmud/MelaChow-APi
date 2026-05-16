@@ -54,7 +54,10 @@ export const resolveAccount = async (req, res) => {
 // ─── FUNCTION 3: saveBankAccount ───
 export const saveBankAccount = async (req, res) => {
   try {
-    const { bank_name, bank_code, account_number, account_name } = req.body;
+    const bank_name = req.body.bank_name || req.body.bankName;
+    const bank_code = req.body.bank_code || req.body.bankCode;
+    const account_number = req.body.account_number || req.body.accountNumber;
+    const account_name = req.body.account_name || req.body.accountName;
 
     if (!bank_name || !bank_code || !account_number || !account_name) {
       return res.status(400).json({ message: "All fields are required: bank_name, bank_code, account_number, account_name" });
@@ -65,19 +68,24 @@ export const saveBankAccount = async (req, res) => {
       return res.status(404).json({ message: "Vendor not found" });
     }
 
-    // Delete old recipient if exists
-    if (vendor.payoutDetails && vendor.payoutDetails.recipientCode) {
-      await deleteTransferRecipient(vendor.payoutDetails.recipientCode);
+    // 🔒 SECURITY: Prevent self-service updates to registered bank details.
+    // Once a bank account is registered and payout is enabled, changes must go
+    // through the platform admin to prevent fraudulent account substitution.
+    if (vendor.payoutDetails && vendor.payoutDetails.payoutEnabled && vendor.payoutDetails.accountNumber) {
+      return res.status(403).json({
+        message: "Bank account details are already registered and cannot be changed self-service. Please contact MelaChow support to update your payout account.",
+        code: "BANK_DETAILS_LOCKED"
+      });
     }
 
-    // Create new transfer recipient
+    // Create new transfer recipient (first-time registration only)
     const recipient_code = await createTransferRecipient({
       name: account_name,
       account_number: account_number,
       bank_code: bank_code
     });
 
-    // Update vendor details
+    // Register payout details for the first time
     vendor.payoutDetails = {
       bankName: bank_name,
       bankCode: bank_code,
@@ -91,7 +99,7 @@ export const saveBankAccount = async (req, res) => {
     await vendor.save();
 
     return res.json({
-      message: "Bank account saved successfully",
+      message: "Bank account registered successfully",
       bank: {
         bankName: bank_name,
         accountName: account_name,
