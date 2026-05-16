@@ -61,6 +61,7 @@ router.get("/admin/riders", adminAuth, riderController.adminGetAllRiders);
 router.patch("/admin/riders/:riderId", adminAuth, riderController.adminUpdateRider);
 router.patch("/admin/riders/:riderId/approve", adminAuth, riderController.adminApproveRider);
 router.delete("/admin/riders/:riderId", adminAuth, riderController.adminDeactivateRider);
+router.patch("/admin/riders/:riderId/reject-offer", adminAuth, riderController.adminRejectRiderAssignment);
 router.get("/admin/riders/:riderId/history", adminAuth, riderController.adminGetRiderHistory);
 router.post("/admin/riders", adminAuth, riderController.createRider); // ✅ NEW: Create platform-wide rider
 router.post("/admin/vendors/:vendorId/riders", adminAuth, riderController.createRider); // Tie to specific vendor
