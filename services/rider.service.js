@@ -255,11 +255,6 @@ export const getPendingOffers = async (riderId) => {
         const rider = await Rider.findById(riderId);
         if (!rider) return [];
 
-        // If rider is already on delivery, they can't see new offers
-        if (rider.status === "on_delivery" || rider.currentOrderId) {
-            return [];
-        }
-
         const pendingAssignments = await RiderAssignment.find({
             riderId: rider._id,
             status: "assigned",
@@ -284,10 +279,15 @@ export const getPendingOffers = async (riderId) => {
             orderObj.status = "assigned";
 
             // Resolve exact restaurant details for this specific vendor order
-            const restaurant = await Vendor.findById(vendorOrder.restaurantId).select("storeName address phone location coords logo cityId stateId");
+            const restaurant = await Vendor.findById(vendorOrder.restaurantId).select("storeName address phone location coords logo cityId stateId fullAddress");
             orderObj.restaurantId = restaurant || null;
             orderObj.restaurantName = restaurant?.storeName || "Partner Merchant";
             orderObj.restaurantLogo = restaurant?.logo || null;
+            
+            const restAddr = restaurant?.address;
+            orderObj.restaurantAddress = restaurant?.fullAddress ||
+                (restAddr ? `${restAddr.street || restAddr.addressLine || ''}, ${restAddr.city || ''}, ${restAddr.state || ''}`.replace(/^[ ,]+|[ ,]+$/g, '').replace(/, ,/g, ',') : '') ||
+                "Restaurant Location";
 
             const user = await User.findById(order.userId).select("firstname lastname name fullName phone email");
             orderObj.userName = user?.fullName || (user ? `${user.firstname || ""} ${user.lastname || ""}`.trim() : null) || "Customer";
@@ -574,7 +574,47 @@ export const markDelivered = async (orderId, riderId) => {
         order.riderEarnings = riderEarningsToRecord;
         await order.save({ session });
 
-        await rider.freeUp(riderEarningsToRecord);
+        // Find if this rider has any other active/accepted orders
+        const activeOrdersCount = await mongoose.model("VendorOrder").countDocuments({
+            riderId,
+            orderStatus: { $in: ["accepted", "out_for_delivery", "rider_assigned"] },
+            _id: { $ne: orderId }
+        }).session(session);
+
+        const activeMasterOrdersCount = await mongoose.model("Order").countDocuments({
+            riderId,
+            orderStatus: { $in: ["accepted", "out_for_delivery", "rider_assigned"] },
+            _id: { $ne: orderId }
+        }).session(session);
+
+        const hasRemainingOrders = activeOrdersCount > 0 || activeMasterOrdersCount > 0;
+
+        if (hasRemainingOrders) {
+            rider.totalDeliveries += 1;
+            if (riderEarningsToRecord > 0) {
+                rider.totalEarnings += riderEarningsToRecord;
+            }
+            // Set currentOrderId to one of the remaining active orders
+            const nextOrder = await mongoose.model("VendorOrder").findOne({
+                riderId,
+                orderStatus: { $in: ["accepted", "out_for_delivery", "rider_assigned"] },
+                _id: { $ne: orderId }
+            }).session(session);
+
+            if (nextOrder) {
+                rider.currentOrderId = nextOrder._id;
+            } else {
+                const nextMaster = await mongoose.model("Order").findOne({
+                    riderId,
+                    orderStatus: { $in: ["accepted", "out_for_delivery", "rider_assigned"] },
+                    _id: { $ne: orderId }
+                }).session(session);
+                if (nextMaster) rider.currentOrderId = nextMaster._id;
+            }
+        } else {
+            await rider.freeUp(riderEarningsToRecord);
+        }
+
         rider.assignmentExpiresAt = null;
         await rider.save({ session });
 
@@ -710,23 +750,32 @@ export const updateRiderStatus = async (riderId, status, reason = null) => {
         throw new Error("You can only transition to on_delivery from pending_assignment");
     }
 
-    // ✅ IMPROVED: If rider is rejecting a broadcast offer (pending_assignment)
-    if (status === "available" && rider.status === "pending_assignment") {
-        // Find the active assignment they are rejecting
-        const activeAssignment = await RiderAssignment.findOne({
-            riderId,
-            status: "assigned",
-            expiresAt: { $gt: new Date() }
-        }).sort({ createdAt: -1 });
+    // ✅ IMPROVED: If rider is rejecting a broadcast offer (status === "available")
+    if (status === "available") {
+        if (rider.status === "pending_assignment" || rider.status === "on_delivery") {
+            // Find the active assignment they are rejecting
+            const activeAssignment = await RiderAssignment.findOne({
+                riderId,
+                status: "assigned",
+                expiresAt: { $gt: new Date() }
+            }).sort({ createdAt: -1 });
 
-        if (activeAssignment) {
-            await RiderAssignment.updateOne(
-                { _id: activeAssignment._id },
-                { $set: { status: "rejected", respondedAt: new Date(), reason: reason || "rider_rejected_broadcast" } }
-            );
-            console.log(`❌ Rider ${riderId} rejected broadcast for Order ${activeAssignment.orderId}`);
+            if (activeAssignment) {
+                await RiderAssignment.updateOne(
+                    { _id: activeAssignment._id },
+                    { $set: { status: "rejected", respondedAt: new Date(), reason: reason || "rider_rejected_broadcast" } }
+                );
+                console.log(`❌ Rider ${riderId} rejected broadcast for Order ${activeAssignment.orderId}`);
+            }
         }
         
+        // If rider is currently on delivery or has an active order, KEEP them on delivery!
+        if (rider.status === "on_delivery" || rider.currentOrderId) {
+            rider.assignmentExpiresAt = null;
+            await rider.save();
+            return rider;
+        }
+
         rider.currentOrderId = null;
         rider.assignmentExpiresAt = null;
     }

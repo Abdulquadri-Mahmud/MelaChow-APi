@@ -323,7 +323,7 @@ export const updateRiderStatus = async (req, res, next) => {
             return res.status(404).json({ success: false, message: "Rider not found" });
         }
 
-        const wasPending = oldRider.status === "pending_assignment" || oldRider.status === "available";
+        const wasPending = oldRider.status === "pending_assignment" || oldRider.status === "available" || oldRider.status === "on_delivery";
         let orderId = reqOrderId || oldRider.currentOrderId?._id || oldRider.currentOrderId;
         if (wasPending && !orderId && status === "on_delivery") {
             const pendingAssignment = await RiderAssignment.findOne({
