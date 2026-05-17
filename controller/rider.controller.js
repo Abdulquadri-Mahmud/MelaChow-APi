@@ -323,6 +323,17 @@ export const updateRiderStatus = async (req, res, next) => {
             return res.status(404).json({ success: false, message: "Rider not found" });
         }
 
+        // Prevent riders from accepting another job while on an active delivery
+        if (status === "on_delivery" && (oldRider.status === "on_delivery" || oldRider.currentOrderId)) {
+            const isSameOrder = reqOrderId && oldRider.currentOrderId?._id?.toString() === reqOrderId.toString();
+            if (!isSameOrder) {
+                return res.status(400).json({
+                    success: false,
+                    message: "You already have an ongoing delivery. Please complete your current active delivery before accepting a new job."
+                });
+            }
+        }
+
         const wasPending = oldRider.status === "pending_assignment" || oldRider.status === "available" || oldRider.status === "on_delivery";
         let orderId = reqOrderId || oldRider.currentOrderId?._id || oldRider.currentOrderId;
         if (wasPending && !orderId && status === "on_delivery") {
@@ -472,8 +483,10 @@ export const updateRiderStatus = async (req, res, next) => {
                     });
                 }
 
+                const finalOrderObj = acceptedOrderUpdate || masterOrder;
+
                 const resolvedVendorId = vendorId ||
-                    acceptedOrder?.items?.[0]?.restaurantId?.toString() || null;
+                    finalOrderObj?.items?.[0]?.restaurantId?.toString() || null;
 
                 // Notify vendor via socket (works for both rider types)
                 if (resolvedVendorId && io) {
@@ -494,10 +507,10 @@ export const updateRiderStatus = async (req, res, next) => {
                 try {
                     const { sendNotification } = await import("../services/notification.service.js");
                     await sendNotification(null, 'rider_assignment_accepted', {
-                        orderId: acceptedOrder?.orderId || orderId,
+                        orderId: finalOrderObj?.orderId || orderId,
                         orderDatabaseId: orderId,
                         riderName: rider.name,
-                        message: `Rider ${rider.name} accepted delivery assignment for Order #${acceptedOrder?.orderId || orderId}. Order is now in transit.`
+                        message: `Rider ${rider.name} accepted delivery assignment for Order #${finalOrderObj?.orderId || orderId}. Order is now in transit.`
                     }, 'admin');
                 } catch (notifErr) {
                     console.warn('⚠️ Admin notification failed for rider accept:', notifErr.message);
@@ -774,22 +787,28 @@ export const requestDeliveryOTP = async (req, res, next) => {
             return res.status(403).json({ success: false, message: 'Unauthorized' });
         }
 
+        const VendorOrderModel = (await import("../model/vendor/VendorOrder.js")).default;
+        const vendorOrder = await VendorOrderModel.findById(orderId);
+        const actualOrderId = vendorOrder ? vendorOrder.userOrderId : orderId;
+
         // Fetch order to get customer phone
-        const order = await Order.findById(orderId)
+        const order = await Order.findById(actualOrderId)
             .populate('userId', 'email firstname');
 
         if (!order) {
             return res.status(404).json({ success: false, message: 'Order not found' });
         }
 
-        if (order.riderId?.toString() !== riderId) {
+        const isAssigned = (order.riderId?.toString() === riderId) || (vendorOrder && vendorOrder.riderId?.toString() === riderId);
+        if (!isAssigned) {
             return res.status(403).json({ success: false, message: 'Rider not assigned to this order' });
         }
 
-        if (order.orderStatus !== 'out_for_delivery') {
+        const currentStatus = vendorOrder ? vendorOrder.orderStatus : order.orderStatus;
+        if (currentStatus !== 'out_for_delivery' && currentStatus !== 'picked_up') {
             return res.status(400).json({
                 success: false,
-                message: `Delivery OTP can only be requested after the order has been picked up. Current status: ${order.orderStatus}`
+                message: `Delivery OTP can only be requested after the order has been picked up. Current status: ${currentStatus}`
             });
         }
 
@@ -806,7 +825,7 @@ export const requestDeliveryOTP = async (req, res, next) => {
         let result;
         try {
             result = await sendDeliveryOTP(
-                orderId,
+                actualOrderId,
                 customerPhone,
                 order.userId?._id || order.userId
             );
@@ -824,12 +843,12 @@ export const requestDeliveryOTP = async (req, res, next) => {
         const io = getIO(req);
         
         // 1. Notify Customer - Send the OTP so it appears on their track-order page
-        const deliveryOtp = await getActiveDeliveryOTP(orderId);
+        const deliveryOtp = await getActiveDeliveryOTP(actualOrderId);
         io.to(SOCKET_ROOMS.customer(order.userId?._id || order.userId)).emit(
             SOCKET_EVENTS.ORDER_STATUS_UPDATE,
             buildPayload.statusUpdate({
                 orderId: order._id,
-                status: order.orderStatus,
+                status: currentStatus,
                 deliveryOtp: deliveryOtp,
                 message: 'Delivery code has been sent. Please provide it to your rider upon arrival.'
             })
@@ -840,7 +859,7 @@ export const requestDeliveryOTP = async (req, res, next) => {
             SOCKET_EVENTS.ORDER_STATUS_UPDATE,
             buildPayload.statusUpdate({
                 orderId: order._id,
-                status: order.orderStatus,
+                status: currentStatus,
                 deliveryOtp: deliveryOtp,
                 message: 'Delivery code sent to customer.'
             })
@@ -884,8 +903,12 @@ export const confirmDelivery = async (req, res, next) => {
             return res.status(403).json({ success: false, message: 'Unauthorized' });
         }
 
+        const VendorOrderModel = (await import("../model/vendor/VendorOrder.js")).default;
+        const vendorOrder = await VendorOrderModel.findById(orderId);
+        const actualOrderId = vendorOrder ? vendorOrder.userOrderId : orderId;
+
         // Verify OTP
-        const { verified } = await verifyDeliveryOTP(orderId, otp.toString().trim());
+        const { verified } = await verifyDeliveryOTP(actualOrderId, otp.toString().trim());
 
         if (!verified) {
             return res.status(400).json({
@@ -896,7 +919,7 @@ export const confirmDelivery = async (req, res, next) => {
 
         // OTP verified — proceed with delivery confirmation
         // markDelivered now returns a structured result, not raw order
-        const { order, payoutCredited, isVendorManagedDelivery } = await riderService.markDelivered(orderId, riderId);
+        const { order, payoutCredited, isVendorManagedDelivery } = await riderService.markDelivered(actualOrderId, riderId);
 
         // Emit real-time status update to customer tracking page
         try {
