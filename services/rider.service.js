@@ -744,10 +744,10 @@ export const updateRiderStatus = async (riderId, status, reason = null) => {
         throw new Error("You cannot go offline while on an active delivery!");
     }
 
-    if (status === "on_delivery" && rider.status !== "pending_assignment") {
+    if (status === "on_delivery" && rider.status !== "pending_assignment" && rider.status !== "available") {
         // ✅ IDEMPOTENCY: If already on delivery, just return success
         if (rider.status === "on_delivery") return rider;
-        throw new Error("You can only transition to on_delivery from pending_assignment");
+        throw new Error("You can only transition to on_delivery from pending_assignment or available");
     }
 
     // ✅ IMPROVED: If rider is rejecting a broadcast offer (status === "available")
