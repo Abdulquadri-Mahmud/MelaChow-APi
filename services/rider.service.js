@@ -181,19 +181,16 @@ export const getActiveOrder = async (riderId) => {
         }
 
         let activeOrderId = rider.currentOrderId;
-
-        // Note: For Bulletin Board architecture, we DO NOT return pending assignments here.
-        // Pending assignments are fetched via getPendingOffers.
         
         if (!activeOrderId) return null;
 
-        // Fetch the master order details
-        const order = await Order.findById(activeOrderId)
-            .populate({ 
-                path: "items.restaurantId", 
-                select: "storeName address phone location coords logo cityId stateId" 
-            })
-            .populate("userId", "firstname lastname name fullName phone email");
+        let vendorOrder = await VendorOrder.findById(activeOrderId).populate("userOrderId");
+        let order = null;
+        if (vendorOrder) {
+            order = vendorOrder.userOrderId;
+        } else {
+            order = await Order.findById(activeOrderId);
+        }
 
         if (!order) {
             console.warn(`[getActiveOrder] Active order ${activeOrderId} not found for rider ${riderId}`);
@@ -211,22 +208,36 @@ export const getActiveOrder = async (riderId) => {
         if (rider.status === "pending_assignment") {
             orderObj.status = "assigned"; 
         } else {
-            orderObj.status = order.orderStatus;
+            orderObj.status = vendorOrder ? vendorOrder.orderStatus : order.orderStatus;
         }
         
-        const firstRestaurant = order.items?.[0]?.restaurantId;
-        orderObj.restaurantId = firstRestaurant?._id || firstRestaurant || order.vendorId || null;
-        orderObj.restaurantName = firstRestaurant?.storeName || "Partner Merchant";
-        orderObj.restaurantLogo = firstRestaurant?.logo || null;
+        const restaurantId = vendorOrder ? vendorOrder.restaurantId : (order.items?.[0]?.restaurantId || order.vendorId);
+        const VendorModel = mongoose.model("Vendor");
+        const restaurant = await VendorModel.findById(restaurantId).select("storeName address phone location coords logo cityId stateId");
+        
+        orderObj.restaurantId = restaurant || null;
+        orderObj.restaurantName = restaurant?.storeName || "Partner Merchant";
+        orderObj.restaurantLogo = restaurant?.logo || null;
 
         // Customer Name resolution
-        const user = order.userId;
+        const user = await User.findById(order.userId).select("firstname lastname name fullName phone email");
         orderObj.userName = user?.fullName || (user ? `${user.firstname || ""} ${user.lastname || ""}`.trim() : null) || "Customer";
         orderObj.userPhone = user?.phone || order.phone || null;
 
         // Address resolution
         const addr = order.deliveryAddress;
         orderObj.deliveryFullAddress = addr?.address || addr?.addressLine || (addr ? `${addr.addressLine || ""}, ${addr.cityName || addr.city || ""}`.trim() : null);
+
+        // Limit items if we have a specific vendor order
+        if (vendorOrder) {
+            orderObj.items = vendorOrder.items;
+            orderObj._id = vendorOrder._id;
+            orderObj.vendorOrderId = vendorOrder._id;
+        }
+
+        // Dynamic platform rider fee
+        const platformConfig = await getPlatformConfig();
+        orderObj.deliveryFee = platformConfig.riderFixedPayout || 600;
 
         return orderObj;
     } catch (error) {
@@ -235,9 +246,6 @@ export const getActiveOrder = async (riderId) => {
     }
 };
 
-/**
- * Get ALL pending assignment offers for a rider (Bulletin Board)
- */
 export const getPendingOffers = async (riderId) => {
     try {
         if (!riderId || !mongoose.Types.ObjectId.isValid(riderId)) {
@@ -260,76 +268,79 @@ export const getPendingOffers = async (riderId) => {
 
         if (!pendingAssignments.length) return [];
 
-        const orderIds = pendingAssignments.map(a => a.orderId);
+        const offers = [];
+        for (const assignment of pendingAssignments) {
+            const vendorOrder = await VendorOrder.findById(assignment.vendorOrderId).populate("userOrderId");
+            if (!vendorOrder || !vendorOrder.userOrderId) continue;
 
-        // Fetch master order details
-        const orders = await Order.find({ _id: { $in: orderIds }, riderId: null })
-            .populate({ 
-                path: "items.restaurantId", 
-                select: "storeName address phone location coords logo cityId stateId" 
-            })
-            .populate("userId", "firstname lastname name fullName phone email");
+            const order = vendorOrder.userOrderId;
+            // DONT return if order is already assigned to a rider
+            if (order.riderId || vendorOrder.riderId) continue;
 
-        return orders.map(order => {
             const orderObj = order.toObject();
+            // Set offer _id to vendorOrder._id! So the rider accepts the specific vendor order.
+            orderObj._id = vendorOrder._id;
+            orderObj.vendorOrderId = vendorOrder._id;
             orderObj.status = "assigned";
-            
-            const firstRestaurant = order.items?.[0]?.restaurantId;
-            orderObj.restaurantId = firstRestaurant?._id || firstRestaurant || order.vendorId || null;
-            orderObj.restaurantName = firstRestaurant?.storeName || "Partner Merchant";
-            orderObj.restaurantLogo = firstRestaurant?.logo || null;
 
-            const user = order.userId;
+            // Resolve exact restaurant details for this specific vendor order
+            const restaurant = await Vendor.findById(vendorOrder.restaurantId).select("storeName address phone location coords logo cityId stateId");
+            orderObj.restaurantId = restaurant || null;
+            orderObj.restaurantName = restaurant?.storeName || "Partner Merchant";
+            orderObj.restaurantLogo = restaurant?.logo || null;
+
+            const user = await User.findById(order.userId).select("firstname lastname name fullName phone email");
             orderObj.userName = user?.fullName || (user ? `${user.firstname || ""} ${user.lastname || ""}`.trim() : null) || "Customer";
             orderObj.userPhone = user?.phone || order.phone || null;
 
             const addr = order.deliveryAddress;
             orderObj.deliveryFullAddress = addr?.address || addr?.addressLine || (addr ? `${addr.addressLine || ""}, ${addr.cityName || addr.city || ""}`.trim() : null);
 
-            return orderObj;
-        });
+            // Filter items to only show the ones belonging to this specific vendorOrder!
+            orderObj.items = vendorOrder.items;
+
+            // DYNAMIC PLATFORM RIDER FEE:
+            const platformConfig = await getPlatformConfig();
+            const platformRiderFee = platformConfig.riderFixedPayout || 600;
+            orderObj.deliveryFee = platformRiderFee;
+
+            offers.push(orderObj);
+        }
+
+        return offers;
     } catch (error) {
         console.error("💥 Error in getPendingOffers service:", error.message);
         return [];
     }
 };
 
-/**
- * ✅ NEW: Get specific order details for a rider (Modal view)
- * Mirrored from getActiveOrder to ensure identical data structure.
- */
 export const getRiderOrderDetails = async (riderId, orderId) => {
     try {
-        const order = await Order.findById(orderId)
-            .populate({ 
-                path: "items.restaurantId", 
-                select: "storeName address phone location coords logo cityId stateId" 
-            })
-            .populate("userId", "firstname lastname name fullName phone email");
+        let vendorOrder = await VendorOrder.findById(orderId).populate("userOrderId");
+        let order = null;
+        if (vendorOrder) {
+            order = vendorOrder.userOrderId;
+        } else {
+            order = await Order.findById(orderId);
+        }
 
         if (!order) return null;
 
         const orderObj = order.toObject();
         
-        // 1. Resolve Potential Earnings (Rider's Share)
-        if (!orderObj.riderEarnings) {
-            const { getPlatformConfig } = await import("./platformConfig.service.js");
-            const config = await getPlatformConfig();
-            orderObj.riderEarnings = config.riderFixedPayout || 600;
-        }
+        // Dynamic platform rider fee
+        const platformConfig = await getPlatformConfig();
+        orderObj.riderEarnings = platformConfig.riderFixedPayout || 600;
+        orderObj.deliveryFee = platformConfig.riderFixedPayout || 600;
 
-        // 2. Resolve Restaurant Details and Address
-        const firstRestaurant = order.items?.[0]?.restaurantId;
-        const restaurantId = firstRestaurant?._id || firstRestaurant || order.vendorId;
-        
+        const restaurantId = vendorOrder ? vendorOrder.restaurantId : (order.items?.[0]?.restaurantId || order.vendorId);
         if (restaurantId) {
-            const Vendor = mongoose.model("Vendor");
-            const restaurant = await Vendor.findById(restaurantId).select("storeName address phone location");
+            const VendorModel = mongoose.model("Vendor");
+            const restaurant = await VendorModel.findById(restaurantId).select("storeName address phone location logo");
             if (restaurant) {
                 orderObj.restaurantId = restaurant;
                 orderObj.restaurantName = restaurant.storeName || "Partner Merchant";
                 
-                // Flatten the address for the UI
                 const rAddr = restaurant.address;
                 orderObj.restaurantAddress = rAddr?.fullAddress || rAddr?.street || 
                     (typeof rAddr === 'string' ? rAddr : "Restaurant Address");
@@ -338,12 +349,18 @@ export const getRiderOrderDetails = async (riderId, orderId) => {
 
         if (!orderObj.restaurantName) orderObj.restaurantName = "Partner Merchant";
 
-        const user = order.userId;
+        const user = await User.findById(order.userId).select("firstname lastname name fullName phone email");
         orderObj.userName = user?.fullName || (user ? `${user.firstname || ""} ${user.lastname || ""}`.trim() : null) || "Customer";
         orderObj.userPhone = user?.phone || order.phone || null;
 
         const addr = order.deliveryAddress;
         orderObj.deliveryFullAddress = addr?.address || addr?.addressLine || (addr ? `${addr.addressLine || ""}, ${addr.cityName || addr.city || ""}`.trim() : null);
+
+        if (vendorOrder) {
+            orderObj.items = vendorOrder.items;
+            orderObj._id = vendorOrder._id;
+            orderObj.vendorOrderId = vendorOrder._id;
+        }
 
         return orderObj;
     } catch (error) {
@@ -411,9 +428,17 @@ export const assignRiderToOrder = async (orderId, riderId, vendorId) => {
  * Mark order as picked up by rider
  */
 export const markPickedUp = async (orderId, riderId) => {
-    const order = await Order.findById(orderId);
+    let vendorOrder = await VendorOrder.findById(orderId).populate("userOrderId");
+    let order = null;
+    if (vendorOrder) {
+        order = vendorOrder.userOrderId;
+    } else {
+        order = await Order.findById(orderId);
+    }
     if (!order) throw new Error("Order not found");
-    if (order.riderId?.toString() !== riderId) throw new Error("Rider not assigned to this order");
+
+    const isAssigned = (order.riderId?.toString() === riderId) || (vendorOrder && vendorOrder.riderId?.toString() === riderId);
+    if (!isAssigned) throw new Error("Rider not assigned to this order");
 
     const rider = await Rider.findById(riderId);
     if (!rider) throw new Error("Rider not found");
@@ -431,10 +456,15 @@ export const markPickedUp = async (orderId, riderId) => {
     });
     await order.save();
 
-    await VendorOrder.updateMany(
-        { userOrderId: order._id },
-        { $set: { orderStatus: "out_for_delivery" } }
-    );
+    if (vendorOrder) {
+        vendorOrder.orderStatus = "out_for_delivery";
+        await vendorOrder.save();
+    } else {
+        await VendorOrder.updateMany(
+            { userOrderId: order._id },
+            { $set: { orderStatus: "out_for_delivery" } }
+        );
+    }
 
     // Move rider to on_delivery
     await Rider.findByIdAndUpdate(riderId, { status: "on_delivery" });
@@ -459,9 +489,17 @@ export const markDelivered = async (orderId, riderId) => {
     let payoutActuallyCredited = false; 
 
     try {
-        const order = await Order.findById(orderId).session(session);
+        let vendorOrder = await VendorOrder.findById(orderId).populate("userOrderId").session(session);
+        let order = null;
+        if (vendorOrder) {
+            order = vendorOrder.userOrderId;
+        } else {
+            order = await Order.findById(orderId).session(session);
+        }
         if (!order) throw new Error("Order not found");
-        if (order.riderId?.toString() !== riderId) throw new Error("Rider not assigned to this order");
+
+        const isAssigned = (order.riderId?.toString() === riderId) || (vendorOrder && vendorOrder.riderId?.toString() === riderId);
+        if (!isAssigned) throw new Error("Rider not assigned to this order");
 
         const rider = await Rider.findById(riderId).session(session);
         if (!rider) throw new Error("Rider not found");
@@ -479,22 +517,24 @@ export const markDelivered = async (orderId, riderId) => {
         });
         await order.save({ session });
 
-        await VendorOrder.updateMany(
-            { userOrderId: order._id },
-            { $set: { orderStatus: "delivered" } },
-            { session }
-        );
+        if (vendorOrder) {
+            vendorOrder.orderStatus = "delivered";
+            await vendorOrder.save({ session });
+        } else {
+            await VendorOrder.updateMany(
+                { userOrderId: order._id },
+                { $set: { orderStatus: "delivered" } },
+                { session }
+            );
+        }
 
         const riderVendorId = rider.vendorId?.toString();
         const isAdminRider = rider.managedBy === 'admin';
 
         let deliveryFee = 0;
         if (isAdminRider) {
-            deliveryFee = Number(order.deliveryFee || 0);
-            if (deliveryFee === 0) {
-                deliveryFee = (order.freeDeliveryPromo?.originalDeliveryFee || 
-                              order.vendorDeliveryPromo?.originalDeliveryFee || 0);
-            }
+            const platformConfig = await getPlatformConfig();
+            deliveryFee = platformConfig.riderFixedPayout || 600;
         } else {
             const deliveryFeeEntry = order.vendorDeliveryFees?.find(
                 v => v.restaurantId?.toString() === riderVendorId
@@ -514,7 +554,7 @@ export const markDelivered = async (orderId, riderId) => {
 
         if (deliveryFee > 0) {
             const platformConfig = await getPlatformConfig();
-            const RIDER_FIXED_PAYOUT = platformConfig.riderFixedPayout;
+            const RIDER_FIXED_PAYOUT = platformConfig.riderFixedPayout || 600;
 
             const riderPayout = Math.min(RIDER_FIXED_PAYOUT, deliveryFee);
             const platformSpread = Number((deliveryFee - riderPayout).toFixed(2));
