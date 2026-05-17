@@ -255,11 +255,6 @@ export const getPendingOffers = async (riderId) => {
         const rider = await Rider.findById(riderId);
         if (!rider) return [];
 
-        // If rider is already on delivery, they can't see new offers
-        if (rider.status === "on_delivery" || rider.currentOrderId) {
-            return [];
-        }
-
         const pendingAssignments = await RiderAssignment.find({
             riderId: rider._id,
             status: "assigned",
@@ -284,10 +279,15 @@ export const getPendingOffers = async (riderId) => {
             orderObj.status = "assigned";
 
             // Resolve exact restaurant details for this specific vendor order
-            const restaurant = await Vendor.findById(vendorOrder.restaurantId).select("storeName address phone location coords logo cityId stateId");
+            const restaurant = await Vendor.findById(vendorOrder.restaurantId).select("storeName address phone location coords logo cityId stateId fullAddress");
             orderObj.restaurantId = restaurant || null;
             orderObj.restaurantName = restaurant?.storeName || "Partner Merchant";
             orderObj.restaurantLogo = restaurant?.logo || null;
+            
+            const restAddr = restaurant?.address;
+            orderObj.restaurantAddress = restaurant?.fullAddress ||
+                (restAddr ? `${restAddr.street || restAddr.addressLine || ''}, ${restAddr.city || ''}, ${restAddr.state || ''}`.replace(/^[ ,]+|[ ,]+$/g, '').replace(/, ,/g, ',') : '') ||
+                "Restaurant Location";
 
             const user = await User.findById(order.userId).select("firstname lastname name fullName phone email");
             orderObj.userName = user?.fullName || (user ? `${user.firstname || ""} ${user.lastname || ""}`.trim() : null) || "Customer";

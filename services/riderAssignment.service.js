@@ -64,16 +64,15 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
         return { success: false, reason: "missing_location", riderCount: 0 };
     }
 
-    // ✅ FIX: Removed 'managedBy: admin' to allow ALL available riders in the city 
-    // to participate in the automated broadcast, ensuring maximum fulfillment coverage.
+    // ✅ FIX: Removed 'managedBy: admin' and allowed 'on_delivery' status
+    // to participate in the automated broadcast, ensuring riders can stack/receive queued offers.
     const riderQuery = {
         cityId,
         stateId,
-        status: { $in: ["available", "pending_assignment"] },
+        status: { $in: ["available", "pending_assignment", "on_delivery"] },
         isActive: true,
         isVerified: true,
         deletedAt: null,
-        currentOrderId: null,
     };
 
     console.log(`🔍 [Broadcast Assignment] Searching for riders with query:`, riderQuery);
