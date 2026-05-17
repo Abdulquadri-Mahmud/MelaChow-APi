@@ -88,7 +88,18 @@ export const sendDeliveryOTP = async (orderId, customerPhone, customerUserId) =>
 
     // ── Production: Email via Resend ──────────────────────────────────────────
     try {
-        const user = await User.findById(customerUserId).select('email firstname');
+        const VendorOrder = mongoose.model('VendorOrder');
+        const Order = mongoose.model('Order');
+        let vendorOrder = await VendorOrder.findById(orderId).populate('userOrderId');
+        let orderDoc = null;
+        if (vendorOrder) {
+            orderDoc = vendorOrder.userOrderId;
+        } else {
+            orderDoc = await Order.findById(orderId);
+        }
+
+        const resolvedCustomerUserId = customerUserId || orderDoc?.userId;
+        const user = await User.findById(resolvedCustomerUserId).select('email firstname');
         if (!user?.email) throw new Error('Customer email not found');
 
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -100,31 +111,29 @@ export const sendDeliveryOTP = async (orderId, customerPhone, customerUserId) =>
             otp,
         });
 
-            const Order = (await import('../model/order/Order.js')).default;
-            const orderDoc = await Order.findById(orderId).select('orderId');
-            const readableOrderId = orderDoc?.orderId || orderId;
+        const readableOrderId = orderDoc?.orderId || orderId;
 
-            await sendMail({
-                to: user.email,
-                subject: `Delivery Confirmation Code for Order ${readableOrderId}: ${otp}`,
-                html: wrapLayout(
-                    'Verification Required',
-                    `
-                    <p class="p">Your rider has arrived at your location. Please provide this secure code to confirm you've received your order.</p>
-                    <div style="background: #F3F4F6; border-radius: 20px; padding: 40px; text-align: center; margin: 32px 0; border: 2px dashed #E5E7EB;">
-                        <span style="font-size: 48px; font-weight: 900; letter-spacing: 12px; color: #111827; font-family: 'Courier New', Courier, monospace;">
-                            ${otp}
-                        </span>
-                    </div>
-                    <p class="p" style="font-size: 14px; color: #6B7280; text-align: center;">
-                        This code expires in 10 minutes. Only share it with your rider once you have the items.
-                    </p>
-                    `,
-                    'Security Check'
-                ),
-            });
+        await sendMail({
+            to: user.email,
+            subject: `Delivery Confirmation Code for Order ${readableOrderId}: ${otp}`,
+            html: wrapLayout(
+                'Verification Required',
+                `
+                <p class="p">Your rider has arrived at your location. Please provide this secure code to confirm you've received your order.</p>
+                <div style="background: #F3F4F6; border-radius: 20px; padding: 40px; text-align: center; margin: 32px 0; border: 2px dashed #E5E7EB;">
+                    <span style="font-size: 48px; font-weight: 900; letter-spacing: 12px; color: #111827; font-family: 'Courier New', Courier, monospace;">
+                        ${otp}
+                    </span>
+                </div>
+                <p class="p" style="font-size: 14px; color: #6B7280; text-align: center;">
+                    This code expires in 10 minutes. Only share it with your rider once you have the items.
+                </p>
+                `,
+                'Security Check'
+            ),
+        });
 
-            logger.info({ orderId, email: user.email, readableOrderId }, '✅ Delivery OTP sent via Resend email');
+        logger.info({ orderId, email: user.email, readableOrderId }, '✅ Delivery OTP sent via Resend email');
         return { success: true, method: 'email' };
 
     } catch (err) {

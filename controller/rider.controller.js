@@ -360,17 +360,29 @@ export const updateRiderStatus = async (req, res, next) => {
 
         if (wasPending && orderId) {
             if (status === "on_delivery") {
-                // ── RIDER ACCEPTED ────────────────────────────────────────────────
-                // Resolve vendorId from the order for admin-managed riders whose
-                // rider.vendorId is null.
+                // Resolve vendorOrder and masterOrder
                 const OrderModel = (await import("../model/order/Order.js")).default;
-                const acceptedOrder = await OrderModel.findById(orderId)
-                    .select("items userId orderId");
+                const VendorOrderModel = (await import("../model/vendor/VendorOrder.js")).default;
+
+                let vendorOrder = await VendorOrderModel.findById(orderId);
+                let actualOrderId = orderId;
+                let masterOrder = null;
+
+                if (vendorOrder) {
+                    actualOrderId = vendorOrder.userOrderId;
+                    masterOrder = await OrderModel.findById(actualOrderId);
+                } else {
+                    masterOrder = await OrderModel.findById(orderId);
+                }
+
+                if (!masterOrder) {
+                    return res.status(404).json({ success: false, message: "Order not found" });
+                }
 
                 const acceptedOrderUpdate = await OrderModel.findOneAndUpdate(
                     {
-                        _id: orderId,
-                        riderId: null,
+                        _id: actualOrderId,
+                        $or: [{ riderId: null }, { riderId: riderId }],
                         "riderAssignment.status": "assigned",
                     },
                     {
@@ -384,9 +396,15 @@ export const updateRiderStatus = async (req, res, next) => {
                     { new: true }
                 );
 
+                if (vendorOrder) {
+                    vendorOrder.riderId = riderId;
+                    vendorOrder.orderStatus = "rider_assigned";
+                    await vendorOrder.save();
+                }
+
                 if (!acceptedOrderUpdate) {
                     // ✅ IDEMPOTENCY CHECK: If the rider is already the owner, treat as success
-                    const alreadyOwned = await OrderModel.exists({ _id: orderId, riderId });
+                    const alreadyOwned = (masterOrder.riderId?.toString() === riderId) || (vendorOrder && vendorOrder.riderId?.toString() === riderId);
                     if (alreadyOwned) {
                         console.log(`♻️ [updateRiderStatus] Rider ${riderId} already owns Order ${orderId}. Treating as success.`);
                     } else {
@@ -394,8 +412,13 @@ export const updateRiderStatus = async (req, res, next) => {
                             $set: { status: "available", assignmentExpiresAt: null },
                             $unset: { currentOrderId: "" }
                         });
+                        
+                        const assignQuery = vendorOrder 
+                            ? { riderId, vendorOrderId: vendorOrder._id, status: "assigned" }
+                            : { riderId, orderId: actualOrderId, status: "assigned" };
+
                         await RiderAssignment.findOneAndUpdate(
-                            { riderId, orderId, status: "assigned" },
+                            assignQuery,
                             { $set: { status: "rejected", respondedAt: new Date(), reason: "order_already_taken" } },
                             { sort: { createdAt: -1 } }
                         );
@@ -409,20 +432,26 @@ export const updateRiderStatus = async (req, res, next) => {
                 await Rider.findByIdAndUpdate(riderId, {
                     $set: { status: "on_delivery", currentOrderId: orderId, assignmentExpiresAt: null }
                 });
+
+                const assignQuery = vendorOrder 
+                    ? { riderId, vendorOrderId: vendorOrder._id, status: "assigned" }
+                    : { riderId, orderId: actualOrderId, status: "assigned" };
+
                 await RiderAssignment.findOneAndUpdate(
-                    { riderId, orderId, status: "assigned" },
+                    assignQuery,
                     { $set: { status: "accepted", respondedAt: new Date() } },
                     { sort: { createdAt: -1 } }
                 );
-                const losingAssignments = await RiderAssignment.find({
-                    orderId,
-                    riderId: { $ne: riderId },
-                    status: "assigned"
-                }).select("riderId");
+
+                const losingAssignmentsQuery = vendorOrder
+                    ? { vendorOrderId: vendorOrder._id, riderId: { $ne: riderId }, status: "assigned" }
+                    : { orderId: actualOrderId, riderId: { $ne: riderId }, status: "assigned" };
+
+                const losingAssignments = await RiderAssignment.find(losingAssignmentsQuery).select("riderId");
                 const losingRiderIds = losingAssignments.map((assignment) => assignment.riderId);
                 if (losingRiderIds.length) {
                     await RiderAssignment.updateMany(
-                        { orderId, riderId: { $in: losingRiderIds }, status: "assigned" },
+                        losingAssignmentsQuery,
                         { $set: { status: "cancelled", respondedAt: new Date(), reason: "accepted_by_another_rider" } }
                     );
                     await Rider.updateMany(
@@ -484,19 +513,31 @@ export const updateRiderStatus = async (req, res, next) => {
                 const OrderModel = (await import("../model/order/Order.js")).default;
                 const VendorOrder = (await import("../model/vendor/VendorOrder.js")).default;
                 
-                // ✅ SAFETY: Ensure orderId exists before proceeding
-                if (!orderId) {
-                    console.warn(`⚠️ Reject attempted without orderId for rider ${riderId}`);
-                    return res.status(200).json({ success: true, data: rider.getPublicProfile() });
+                // Resolve vendorOrder and masterOrder
+                let vendorOrder = await VendorOrder.findById(orderId);
+                let actualOrderId = orderId;
+                let masterOrder = null;
+
+                if (vendorOrder) {
+                    actualOrderId = vendorOrder.userOrderId;
+                    masterOrder = await OrderModel.findById(actualOrderId);
+                } else {
+                    masterOrder = await OrderModel.findById(orderId);
                 }
 
-                const previousOrder = await OrderModel.findById(orderId).select("riderAssignment");
-                if (!previousOrder) {
+                if (!masterOrder) {
                     console.warn(`⚠️ Reject attempted for non-existent order ${orderId}`);
                     return res.status(200).json({ success: true, data: rider.getPublicProfile() });
                 }
+
+                const previousOrder = masterOrder;
+
+                const rejectAssignmentQuery = vendorOrder 
+                    ? { riderId, vendorOrderId: vendorOrder._id, status: { $in: ["assigned", "accepted"] } }
+                    : { riderId, orderId: actualOrderId, status: { $in: ["assigned", "accepted"] } };
+
                 await RiderAssignment.findOneAndUpdate(
-                    { riderId, orderId, status: { $in: ["assigned", "accepted"] } },
+                    rejectAssignmentQuery,
                     {
                         $set: {
                             status: isTimeout ? "timeout" : "rejected",
@@ -506,16 +547,17 @@ export const updateRiderStatus = async (req, res, next) => {
                     },
                     { sort: { createdAt: -1 } }
                 );
-                const remainingOffers = await RiderAssignment.countDocuments({
-                    orderId,
-                    status: "assigned",
-                    expiresAt: { $gt: new Date() }
-                });
+
+                const remainingOffersQuery = vendorOrder
+                    ? { vendorOrderId: vendorOrder._id, status: "assigned", expiresAt: { $gt: new Date() } }
+                    : { orderId: actualOrderId, status: "assigned", expiresAt: { $gt: new Date() } };
+
+                const remainingOffers = await RiderAssignment.countDocuments(remainingOffersQuery);
 
                 const order = remainingOffers > 0
-                    ? await OrderModel.findById(orderId)
+                    ? masterOrder
                     : await OrderModel.findByIdAndUpdate(
-                        orderId,
+                        actualOrderId,
                         {
                             orderStatus: "ready_for_pickup",
                             riderId: null,
@@ -545,12 +587,16 @@ export const updateRiderStatus = async (req, res, next) => {
                         order.items?.[0]?.restaurantId?.toString() || null;
 
                     // Update VendorOrder back to ready_for_pickup
-                    // updateMany works for both rider types (null vendorId safe)
                     if (remainingOffers === 0) {
-                        await VendorOrder.updateMany(
-                            { userOrderId: order._id },
-                            { $set: { orderStatus: "ready_for_pickup" } }
-                        );
+                        if (vendorOrder) {
+                            vendorOrder.orderStatus = "ready_for_pickup";
+                            await vendorOrder.save();
+                        } else {
+                            await VendorOrder.updateMany(
+                                { userOrderId: order._id },
+                                { $set: { orderStatus: "ready_for_pickup" } }
+                            );
+                        }
                     }
 
                     // Notify vendor via socket
@@ -558,7 +604,7 @@ export const updateRiderStatus = async (req, res, next) => {
                         io.to(SOCKET_ROOMS.vendor(resolvedVendorId)).emit(
                             SOCKET_EVENTS.ORDER_STATUS_UPDATE,
                             buildPayload.statusUpdate({
-                                orderId,
+                                orderId: actualOrderId,
                                 status: actionStatus,
                                 changedBy: "rider",
                                 message: actionMessage,

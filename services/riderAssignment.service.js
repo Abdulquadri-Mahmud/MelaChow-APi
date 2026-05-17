@@ -116,10 +116,11 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
 
     await expireStaleRiderAssignmentOffers(candidateRiders.map((rider) => rider._id));
 
-    // ✅ FIX: Exclude any rider who has EVER been offered this order
-    // This prevents re-broadcasting an order to a rider who already rejected it or timed out.
+    // ✅ FIX: Exclude any rider who has EVER been offered this specific vendor order.
+    // This prevents re-broadcasting a specific vendor order to a rider who already rejected it or timed out,
+    // but still allows other vendor orders under the same master order to be broadcasted to them.
     const pastAssignments = await RiderAssignment.find({
-        orderId: masterOrder._id
+        vendorOrderId: vendorOrder._id
     }).select("riderId");
     const alreadyHandledIds = new Set(pastAssignments.map(a => a.riderId.toString()));
 
