@@ -289,7 +289,7 @@ export const verifyVendorRegistration = async (req, res) => {
     }
 
     // Check if OTP matches and not expired
-    if (vendor.otp !== otp) {
+    if (String(vendor.otp).trim() !== String(otp).trim()) {
       return res.status(400).json({ message: 'Invalid OTP' });
     }
 
@@ -569,7 +569,7 @@ export const verifyVendorResetCode = async (req, res) => {
       return res.status(404).json({ message: 'Vendor not found' });
     }
 
-    if (vendor.otp !== otp) {
+    if (String(vendor.otp).trim() !== String(otp).trim()) {
       return res.status(400).json({ message: 'Invalid reset code' });
     }
 
@@ -587,6 +587,7 @@ export const verifyVendorResetCode = async (req, res) => {
     await vendor.save();
 
     res.status(200).json({
+      success: true,
       message: 'Reset code verified',
       resetToken
     });

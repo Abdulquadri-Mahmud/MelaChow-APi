@@ -152,7 +152,7 @@ export const resetPassword = async (req, res) => {
     const admin = await Admin.findOne({ email }).select("+password");
     if (!admin) return res.status(404).json({ success: false, message: "Admin not found" });
 
-    if (admin.otp !== otp || Date.now() > admin.otpExpires)
+    if (String(admin.otp).trim() !== String(otp).trim() || Date.now() > admin.otpExpires)
       return res.status(400).json({ success: false, message: "OTP invalid or expired" });
 
     admin.password = newPassword;
