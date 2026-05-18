@@ -1,4 +1,4 @@
-﻿import Admin from '../../model/Admin/admin.model.js';
+import Admin from '../../model/Admin/admin.model.js';
 import { generateAccessToken, generateRefreshToken, generateOTP, generateResetToken, verifyToken } from '../../utils/jwt.js';
 import { sendMail } from '../../config/mailer.js';
 import { sendTokenCookie } from '../../utils/sendTokenCookie.js';
@@ -160,7 +160,7 @@ export const verifyAdminResetCode = async (req, res) => {
             return res.status(404).json({ message: 'Admin not found' });
         }
 
-        if (admin.otp !== otp) {
+        if (String(admin.otp).trim() !== String(otp).trim()) {
             return res.status(400).json({ message: 'Invalid reset code' });
         }
 
@@ -178,6 +178,7 @@ export const verifyAdminResetCode = async (req, res) => {
         await admin.save();
 
         res.status(200).json({
+            success: true,
             message: 'Reset code verified',
             resetToken
         });

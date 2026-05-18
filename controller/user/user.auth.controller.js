@@ -100,7 +100,7 @@ export const verifyRegistration = async (req, res) => {
         }
 
         // Check if OTP matches and not expired
-        if (user.otp !== otp) {
+        if (String(user.otp).trim() !== String(otp).trim()) {
             return res.status(400).json({ message: 'Invalid OTP' });
         }
 
@@ -356,7 +356,7 @@ export const verifyResetCode = async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        if (user.otp !== otp) {
+        if (String(user.otp).trim() !== String(otp).trim()) {
             return res.status(400).json({ message: 'Invalid reset code' });
         }
 
@@ -374,6 +374,7 @@ export const verifyResetCode = async (req, res) => {
         await user.save();
 
         res.status(200).json({
+            success: true,
             message: 'Reset code verified',
             resetToken
         });
