@@ -16,6 +16,12 @@ import logger from '../config/logger.js';
 import { createTransferRecipient } from "./paystackTransfer.service.js";
 import { getPlatformConfig } from './platformConfig.service.js';
 
+const throwClientError = (msg) => {
+    const err = new Error(msg);
+    err.statusCode = 400;
+    throw err;
+};
+
 /**
  * Create a new rider
  * Auto-creates a wallet for every new rider on account creation
@@ -24,22 +30,22 @@ export const createRider = async (riderData, vendorId = null) => {
     if (vendorId) {
         const vendor = await Vendor.findById(vendorId);
         if (!vendor || vendor.deletedAt) {
-            throw new Error("Vendor not found or inactive");
+            throwClientError("Vendor not found or inactive");
         }
     }
 
     const existingRider = await Rider.findOne({ phone: riderData.phone });
     if (existingRider) {
-        throw new Error("A rider with this phone number already exists");
+        throwClientError("A rider with this phone number already exists");
     }
 
     if (riderData.stateId || riderData.cityId) {
         if (!riderData.stateId || !riderData.cityId) {
-            throw new Error("State and city must be selected together");
+            throwClientError("State and city must be selected together");
         }
 
         if (!mongoose.Types.ObjectId.isValid(riderData.stateId) || !mongoose.Types.ObjectId.isValid(riderData.cityId)) {
-            throw new Error("Selected rider state or city is invalid");
+            throwClientError("Selected rider state or city is invalid");
         }
 
         const [state, city] = await Promise.all([
@@ -48,13 +54,13 @@ export const createRider = async (riderData, vendorId = null) => {
         ]);
 
         if (!state || !city) {
-            throw new Error("Selected rider state or city is not active");
+            throwClientError("Selected rider state or city is not active");
         }
     }
 
     if (riderData.vehicleOwnership === "platform") {
         if (!riderData.platformVehicleId) {
-            throw new Error("Select an available platform vehicle for this rider");
+            throwClientError("Select an available platform vehicle for this rider");
         }
         const vehicle = await PlatformVehicle.findOne({
             _id: riderData.platformVehicleId,
@@ -63,7 +69,7 @@ export const createRider = async (riderData, vendorId = null) => {
             assignedRiderId: null,
         });
         if (!vehicle) {
-            throw new Error("Selected platform vehicle is unavailable or does not match rider vehicle type");
+            throwClientError("Selected platform vehicle is unavailable or does not match rider vehicle type");
         }
     } else {
         riderData.platformVehicleId = null;
