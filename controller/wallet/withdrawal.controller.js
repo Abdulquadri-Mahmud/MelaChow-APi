@@ -76,15 +76,11 @@ export const initiateWithdrawal = async (req, res) => {
       }
     }
 
-    // STEP 5 — Calculate Paystack transfer fee
-    let transferFee = 50;
-    if (amount <= 5000) transferFee = 10;
-    else if (amount <= 50000) transferFee = 25;
-
-    const netAmount = amount - transferFee;
-    if (netAmount <= 0) {
-      return res.status(400).json({ message: "Withdrawal amount too small after fees" });
-    }
+    // STEP 5 — Calculate recipient payout amount
+    // Paystack deducts its own transfer fee from the platform balance directly;
+    // the vendor receives their full requested amount.
+    const transferFee = 0;
+    const netAmount = amount;
 
     // STEP 6 — Generate idempotency reference
     const paystackReference = `WD_${randomUUID().replace(/-/g, "").toUpperCase()}`;
