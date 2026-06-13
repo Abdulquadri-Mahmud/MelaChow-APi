@@ -14,13 +14,8 @@ import {
 import { bullmqRedisConnection } from "../config/redis.js";
 
 const QUEUE_NAME = "scheduled-payout";
-const MIN_PAYOUT_BALANCE = 1500; // ₦1,500 minimum to trigger auto-payout
-
-const getTransferFee = (amount) => {
-    if (amount <= 5000) return 10;
-    if (amount <= 50000) return 25;
-    return 50;
-};
+const VENDOR_MIN_PAYOUT_BALANCE = 1500; // ₦1,500 minimum to trigger vendor auto-payout
+const RIDER_MIN_PAYOUT_BALANCE = 500; // ₦500 minimum to trigger rider auto-payout
 
 // ── Queue & Scheduler ─────────────────────────────────────────────────────────
 export const scheduledPayoutQueue = new Queue(QUEUE_NAME, {
@@ -64,14 +59,19 @@ const processPayoutJob = async (job) => {
 
     // 2. Re-fetch live wallet balance (race condition safety)
     const wallet = await Wallet.findById(walletId);
-    if (!wallet || wallet.balance < MIN_PAYOUT_BALANCE) {
+    const minPayoutBalance =
+        actorType === "rider" ? RIDER_MIN_PAYOUT_BALANCE : VENDOR_MIN_PAYOUT_BALANCE;
+
+    if (!wallet || wallet.balance < minPayoutBalance) {
         console.log(`⏭️ Skipping ${actorType} ${actorId} — balance too low at processing time`);
         return { skipped: true, reason: "balance insufficient at processing time" };
     }
 
     const actualAmount = Math.floor(wallet.balance); // Whole naira only
-    const transferFee = getTransferFee(actualAmount);
-    const netAmount = actualAmount - transferFee;
+    // Paystack deducts its own transfer fee from the platform balance directly;
+    // do not subtract it from the recipient's payout.
+    const transferFee = 0;
+    const netAmount = actualAmount;
     const paystackReference = `AUTO_${actorType.toUpperCase()}_${randomUUID()
         .replace(/-/g, "")
         .toUpperCase()}`;
@@ -180,7 +180,7 @@ const enqueueVendorPayouts = async (today) => {
 
     const vendorWallets = await Wallet.find({
         ownerModel: "Vendor",
-        balance: { $gte: MIN_PAYOUT_BALANCE },
+        balance: { $gte: VENDOR_MIN_PAYOUT_BALANCE },
     }).select("_id ownerId balance");
 
     for (const wallet of vendorWallets) {
@@ -229,7 +229,7 @@ const enqueueRiderPayouts = async (today) => {
 
     const riderWallets = await Wallet.find({
         ownerModel: "Rider",
-        balance: { $gte: MIN_PAYOUT_BALANCE },
+        balance: { $gte: RIDER_MIN_PAYOUT_BALANCE },
     }).select("_id ownerId balance");
 
     for (const wallet of riderWallets) {
@@ -277,7 +277,7 @@ const enqueueRiderPayouts = async (today) => {
 
 // ── Trigger functions — riders at 7:30 PM WAT, vendors at 8 PM WAT ───────────
 /**
- * Finds actors with balance >= ₦1,500 and a verified bank account,
+ * Finds actors with minimum eligible balances and a verified bank account,
  * then enqueues one BullMQ job per actor.
  * jobId deduplication ensures only one job per actor per calendar day.
  */
