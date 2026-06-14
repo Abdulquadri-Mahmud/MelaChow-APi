@@ -15,6 +15,8 @@ import {
     validateSuccessfulPaymentForOrder,
     verifyPaystackReference as verifyPaystackReferenceStrict,
 } from "../../../services/paymentHardening.service.js";
+import { usePostgresAdminFinanceReads } from "../../../services/postgres/compat.js";
+import { adminFinanceRepository } from "../../../services/postgres/adminFinance.repository.js";
 
 const buildTransactionDateMatch = (startDate, endDate) => {
     const match = {};
@@ -152,6 +154,12 @@ const getAdminWalletTransactionStats = async ({ startDate, endDate } = {}) => {
 export const getRevenueSummary = async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
+
+        if (usePostgresAdminFinanceReads()) {
+            const response = await adminFinanceRepository.getRevenueSummary({ startDate, endDate });
+            return res.status(200).json(response);
+        }
+
         const platformConfig = await getPlatformConfig();
 
         const dateFilter = {};
@@ -289,6 +297,12 @@ export const getRevenueSummary = async (req, res) => {
 export const getRevenueChart = async (req, res) => {
     try {
         const { period = "7days" } = req.query;
+
+        if (usePostgresAdminFinanceReads()) {
+            const response = await adminFinanceRepository.getRevenueChart({ period });
+            return res.status(200).json(response);
+        }
+
         const platformConfig = await getPlatformConfig();
 
         let dateFormat = "%Y-%m-%d";
@@ -413,6 +427,11 @@ export const getTransactionLedger = async (req, res) => {
             limit = 25
         } = req.query;
 
+        if (usePostgresAdminFinanceReads()) {
+            const response = await adminFinanceRepository.getTransactionLedger({ type, transactionType, startDate, endDate, search, page, limit });
+            return res.status(200).json(response);
+        }
+
         const wallet = await Wallet.findOne({ ownerModel: "Admin" }).lean();
         if (!wallet) {
             return res.status(200).json({
@@ -521,6 +540,12 @@ export const getTransactionLedger = async (req, res) => {
 export const getVendorBreakdown = async (req, res) => {
     try {
         const { startDate, endDate, page = 1, limit = 20 } = req.query;
+
+        if (usePostgresAdminFinanceReads()) {
+            const response = await adminFinanceRepository.getVendorBreakdown({ startDate, endDate, page, limit });
+            return res.status(200).json(response);
+        }
+
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const platformConfig = await getPlatformConfig();
 
@@ -645,6 +670,12 @@ export const getVendorBreakdown = async (req, res) => {
 export const getUnreleasedEscrowList = async (req, res) => {
     try {
         const { page = 1, limit = 20, search, startDate, endDate } = req.query;
+
+        if (usePostgresAdminFinanceReads()) {
+            const response = await adminFinanceRepository.getUnreleasedEscrowList({ page, limit, search, startDate, endDate });
+            return res.status(200).json(response);
+        }
+
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
         const matchStage = {
@@ -739,6 +770,12 @@ export const getUnreleasedEscrowList = async (req, res) => {
 export const getRefundsList = async (req, res) => {
     try {
         const { page = 1, limit = 20, search, startDate, endDate } = req.query;
+
+        if (usePostgresAdminFinanceReads()) {
+            const response = await adminFinanceRepository.getRefundsList({ page, limit, search, startDate, endDate });
+            return res.status(200).json(response);
+        }
+
         const skip = (parseInt(page) - 1) * parseInt(limit);
 
         let query = {};
@@ -800,6 +837,11 @@ export const getPaymentRecoveryList = async (req, res) => {
             startDate,
             endDate,
         } = req.query;
+
+        if (usePostgresAdminFinanceReads()) {
+            const response = await adminFinanceRepository.getPaymentRecoveryList({ search, status, page, limit, startDate, endDate });
+            return res.status(200).json(response);
+        }
 
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const query = {};

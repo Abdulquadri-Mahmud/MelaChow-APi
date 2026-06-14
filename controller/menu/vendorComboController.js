@@ -1,5 +1,11 @@
 import mongoose from "mongoose";
 import ComboItem from "../../model/menu/ComboItem.js";
+import { usePostgresMenuReads } from "../../services/postgres/compat.js";
+
+const getPostgresMenuRepository = async () => {
+    const { menuCatalogRepository } = await import("../../services/postgres/menuCatalog.repository.js");
+    return menuCatalogRepository;
+};
 
 /**
  * Create a new combo item
@@ -118,6 +124,23 @@ export const getVendorCombos = async (req, res) => {
         const { vendorId } = req.params;
         const { is_available, is_archived, search, page = 1, limit = 10 } = req.query;
 
+        if (usePostgresMenuReads()) {
+            const menuCatalogRepository = await getPostgresMenuRepository();
+            const { combos, pagination } = await menuCatalogRepository.listVendorCombos(vendorId, {
+                is_available,
+                is_archived,
+                search,
+                page,
+                limit,
+            });
+
+            return res.status(200).json({
+                success: true,
+                combos,
+                pagination,
+            });
+        }
+
         const pageNum = parseInt(page);
         const limitNum = parseInt(limit);
         const skip = (pageNum - 1) * limitNum;
@@ -196,6 +219,17 @@ export const getVendorCombos = async (req, res) => {
 export const getComboById = async (req, res) => {
     try {
         const { comboId } = req.params;
+
+        if (usePostgresMenuReads()) {
+            const menuCatalogRepository = await getPostgresMenuRepository();
+            const combo = await menuCatalogRepository.getComboById(comboId);
+
+            if (!combo) {
+                return res.status(404).json({ success: false, message: "Combo item not found" });
+            }
+
+            return res.status(200).json({ success: true, combo });
+        }
 
         const combo = await ComboItem.findOne({
             _id: new mongoose.Types.ObjectId(comboId),

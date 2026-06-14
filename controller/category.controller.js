@@ -1,8 +1,23 @@
 import Category from "../model/category.model.js";
+import {
+    toMongoCategoryShape,
+    toMongoCategoryTreeShape,
+    usePostgresReads,
+} from "../services/postgres/compat.js";
 
 // GET PUBLIC CATEGORIES (User Home Page - Root Only)
 export const getPublicCategories = async (req, res) => {
     try {
+        if (usePostgresReads()) {
+            const { locationCategoryRepository } = await import("../services/postgres/locationCategory.repository.js");
+            const categories = (await locationCategoryRepository.listRootPublicCategories()).map(toMongoCategoryShape);
+
+            return res.status(200).json({
+                success: true,
+                data: categories,
+            });
+        }
+
         const categories = await Category.find({
             parent: null,
             isActive: true
@@ -25,6 +40,17 @@ export const getPublicCategories = async (req, res) => {
 // GET ALL CATEGORIES (Hierarchical structure - Generic active)
 export const getCategories = async (req, res) => {
     try {
+        if (usePostgresReads()) {
+            const { locationCategoryRepository } = await import("../services/postgres/locationCategory.repository.js");
+            const categories = (await locationCategoryRepository.listCategoriesWithParent()).map(toMongoCategoryShape);
+
+            return res.status(200).json({
+                success: true,
+                count: categories.length,
+                data: categories,
+            });
+        }
+
         const categories = await Category.find({ isActive: true }).populate("parent", "name");
 
         res.status(200).json({
@@ -207,6 +233,13 @@ export const getAllCategoriesAdmin = async (req, res) => {
 // GET CATEGORY TREE (Hierarchical structure)
 export const getCategoryTree = async (req, res) => {
     try {
+        if (usePostgresReads()) {
+            const { locationCategoryRepository } = await import("../services/postgres/locationCategory.repository.js");
+            const tree = (await locationCategoryRepository.listCategoryTree()).map(toMongoCategoryTreeShape);
+
+            return res.status(200).json(tree);
+        }
+
         const categories = await Category.find({ isActive: true }).lean();
         
         // Build tree: Match children to their parents
@@ -236,6 +269,16 @@ export const getCategoryTree = async (req, res) => {
 // GET ALL CATEGORIES FOR VENDOR SELECTION (Includes inactive, grouped by root)
 export const getPlatformCategories = async (req, res) => {
     try {
+        if (usePostgresReads()) {
+            const { locationCategoryRepository } = await import("../services/postgres/locationCategory.repository.js");
+            const tree = (await locationCategoryRepository.listCategoryTree({ includeInactive: true })).map(toMongoCategoryTreeShape);
+
+            return res.status(200).json({
+                success: true,
+                data: tree
+            });
+        }
+
         const categories = await Category.find().lean();
         
         // Build tree: Match children to their parents

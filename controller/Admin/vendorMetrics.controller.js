@@ -1,5 +1,7 @@
 import Order from "../../model/order/Order.js";
 import Vendor from "../../model/vendor/vendor.model.js";
+import { usePostgresVendorMetricsReads } from "../../services/postgres/compat.js";
+import { vendorMetricsRepository } from "../../services/postgres/vendorMetrics.repository.js";
 
 /**
  * Get Comprehensive Vendor Metrics (System Wide)
@@ -7,6 +9,11 @@ import Vendor from "../../model/vendor/vendor.model.js";
  */
 export const getVendorMetrics = async (req, res) => {
     try {
+        if (usePostgresVendorMetricsReads()) {
+            const response = await vendorMetricsRepository.getVendorMetrics();
+            return res.status(200).json(response);
+        }
+
         const now = new Date();
         const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         const startOfLast7Days = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);

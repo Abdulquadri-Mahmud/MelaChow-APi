@@ -25,6 +25,12 @@ import Category from "../../model/category.model.js";
 import vendorModel from "../../model/vendor/vendor.model.js";
 import City from "../../model/location/City.js";
 import VendorDeliveryPromo from "../../model/promo/VendorDeliveryPromo.js";
+import { usePostgresSearchReads } from "../../services/postgres/compat.js";
+
+const getPostgresSearchRepository = async () => {
+  const { searchRepository } = await import("../../services/postgres/search.repository.js");
+  return searchRepository;
+};
 
 const getActiveVendorPromoMap = async (vendorIds) => {
   if (!vendorIds.length) return new Map();
@@ -310,6 +316,19 @@ export const autocompleteFoods = async (req, res) => {
     }
 
     // ── Build Search query ──────────────────────────
+    if (usePostgresSearchReads()) {
+      const searchRepository = await getPostgresSearchRepository();
+      const response = await searchRepository.autocomplete({
+        q,
+        limit,
+        vendorIds: vendorIds === null ? null : vendorIds.map(String),
+        userCity,
+        userState,
+      });
+
+      return res.status(200).json(response);
+    }
+
     const matchQuery = {
       is_available: true,
       is_in_stock: true,
@@ -566,6 +585,23 @@ export const searchFoods = async (req, res) => {
     // ── Sort ─────────────────────────────────────────
     // price_asc / price_desc DROPPED (no price on MenuItem)
     // Will re-add post-launch via aggregation pipeline
+    if (usePostgresSearchReads()) {
+      const searchRepository = await getPostgresSearchRepository();
+      const response = await searchRepository.search({
+        q,
+        category,
+        available,
+        sort,
+        page,
+        limit,
+        vendorIds: vendorIds === null ? null : vendorIds.map(String),
+        userCity,
+        userState,
+      });
+
+      return res.status(200).json(response);
+    }
+
     let sortOption;
     switch (sort) {
       case "rating_desc":

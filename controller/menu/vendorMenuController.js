@@ -6,6 +6,12 @@ import { MenuItemChoiceGroup, MenuItemChoiceOption } from '../../model/menu/Menu
 // TODO: ComboItem replaces MenuVariant — update variant-related functions to use ComboItem
 // import { MenuVariant, MenuVariantComponent, VariantChoiceGroup, VariantChoiceOption } from '../../model/menu/MenuVariant.js';
 import { MenuService } from '../../services/menu.service.js';
+import { usePostgresMenuReads } from '../../services/postgres/compat.js';
+
+const getPostgresMenuRepository = async () => {
+    const { menuCatalogRepository } = await import('../../services/postgres/menuCatalog.repository.js');
+    return menuCatalogRepository;
+};
 
 // =====================================================================
 // VENDOR MENU SECTIONS
@@ -25,6 +31,13 @@ export const createVendorMenuSection = async (req, res) => {
 export const getVendorMenuSections = async (req, res) => {
     try {
         const vendor_id = req.vendor._id;
+
+        if (usePostgresMenuReads()) {
+            const menuCatalogRepository = await getPostgresMenuRepository();
+            const sections = await menuCatalogRepository.listSectionsByVendor(vendor_id.toString());
+            return res.status(200).json({ success: true, sections });
+        }
+
         // Exclude soft-deleted sections
         const sections = await VendorMenuSection.find({ vendor_id, deleted_at: null }).sort('sort_order');
         res.status(200).json({ success: true, sections });
@@ -996,6 +1009,18 @@ export const getVendorMenuItems = async (req, res) => {
             return res.status(403).json({
                 success: false,
                 message: "Access denied. You can only view your own menu items.",
+            });
+        }
+
+        if (usePostgresMenuReads()) {
+            const menuCatalogRepository = await getPostgresMenuRepository();
+            const { items, stats, pagination } = await menuCatalogRepository.listVendorMenuItems(vendorId.toString(), req.query);
+
+            return res.status(200).json({
+                success: true,
+                items,
+                stats,
+                pagination,
             });
         }
 

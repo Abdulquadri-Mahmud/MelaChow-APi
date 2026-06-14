@@ -3,6 +3,8 @@ import { randomUUID } from "crypto";
 import Rider from "../../model/rider.model.js";
 import Wallet from "../../model/wallet/wallet.mode.js";
 import RiderWithdrawal from "../../model/wallet/RiderWithdrawal.model.js";
+import { usePostgresWalletReads } from "../../services/postgres/compat.js";
+import { walletRepository } from "../../services/postgres/wallet.repository.js";
 
 /**
  * ─── STEP 1: Resolve bank account name ───────────────────────────────────────
@@ -377,6 +379,11 @@ export const getRiderWithdrawalHistory = async (req, res) => {
             return res.status(403).json({ success: false, message: "Unauthorized" });
         }
 
+        if (usePostgresWalletReads()) {
+            const response = await walletRepository.getRiderWithdrawalHistory(riderId);
+            return res.status(200).json(response);
+        }
+
         const withdrawals = await RiderWithdrawal.find({ riderId })
             .sort({ createdAt: -1 })
             .limit(50)
@@ -402,6 +409,14 @@ export const getRiderBankAccount = async (req, res) => {
 
         if (req.rider._id.toString() !== riderId) {
             return res.status(403).json({ success: false, message: "Unauthorized" });
+        }
+
+        if (usePostgresWalletReads()) {
+            const response = await walletRepository.getRiderBankAccount(riderId);
+            if (response.status) {
+                return res.status(response.status).json({ success: false, message: response.message });
+            }
+            return res.status(200).json(response);
         }
 
         const rider = await Rider.findById(riderId).select("payoutDetails");

@@ -1,6 +1,6 @@
 import Category from "../model/category.model.js";
 
-const DEFAULT_CATEGORIES = [
+export const DEFAULT_CATEGORIES = [
     { name: "Rice Dishes", subcategories: ["Jollof Rice", "Fried Rice", "White Rice", "Coconut Rice"] },
     { name: "Swallow", subcategories: ["Pounded Yam", "Amala", "Eba", "Fufu", "Semovita"] },
     { name: "Soups & Stews", subcategories: ["Egusi", "Ogbono", "Efo Riro", "Vegetable Soup", "Okra Soup", "Banga Soup"] },

@@ -1,0 +1,1571 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum AccountRole {
+  user
+  vendor
+  rider
+  admin
+}
+
+enum AdminRole {
+  admin
+  super_admin @map("super-admin")
+  finance_admin @map("finance-admin")
+}
+
+enum LocationStatus {
+  approved
+  pending_review
+}
+
+enum DeliveryManagedBy {
+  vendor
+  admin
+}
+
+enum RiderStatus {
+  available
+  pending_assignment
+  on_delivery
+  offline
+}
+
+enum VehicleOwnership {
+  own
+  platform
+}
+
+enum VehicleType {
+  bicycle
+  motorbike
+}
+
+enum VehicleStatus {
+  available
+  assigned
+  maintenance
+  inactive
+}
+
+enum DietaryType {
+  veg
+  non_veg @map("non-veg")
+  vegan
+  halal
+  kosher
+  mixed
+}
+
+enum ItemType {
+  FOOD
+  DRINK
+  SIDE
+  PROTEIN
+  SWALLOW
+  SOUP
+  DESSERT
+  OTHER
+  combo
+}
+
+enum CartStatus {
+  ACTIVE
+  CHECKED_OUT
+  ABANDONED
+  EXPIRED
+}
+
+enum CartLineItemType {
+  PORTION_ITEM
+  VARIANT_ITEM
+}
+
+enum CartItemStatusAtAdd {
+  AVAILABLE
+  SOLD_OUT
+  UNAVAILABLE
+}
+
+enum OrderItemType {
+  item
+  combo
+}
+
+enum OrderStatus {
+  pending
+  accepted
+  preparing
+  ready_for_pickup
+  rider_assigned
+  out_for_delivery
+  delivered
+  completed
+  cancelled
+  failed
+  refunded
+}
+
+enum PaymentStatus {
+  pending
+  paid
+  failed
+  refunded
+}
+
+enum PaymentAttemptStatus {
+  initialized
+  pending
+  success
+  failed
+  amount_mismatch
+  currency_mismatch
+  provider_mismatch
+  recovered
+  review
+  abandoned
+}
+
+enum PaymentRecoveryState {
+  awaiting_verification
+  recovered
+  failed
+  review
+}
+
+enum WalletOwnerModel {
+  Admin
+  Vendor
+  User
+  Rider
+}
+
+enum WalletTransactionDirection {
+  credit
+  debit
+}
+
+enum WalletTransactionType {
+  commission
+  escrow_hold
+  escrow_release
+  delivery_fee
+  rider_payout
+  delivery_spread
+  service_fee
+  refund
+  order_payment
+  top_up
+  manual_credit
+  manual_debit
+  withdrawal
+}
+
+enum WithdrawalStatus {
+  pending
+  processing
+  completed
+  failed
+  reversed
+}
+
+enum NotificationRole {
+  user
+  vendor
+  admin
+  rider
+}
+
+enum NotificationType {
+  order_placed
+  order_confirmed
+  order_preparing
+  order_ready
+  order_dispatched
+  order_delivered
+  order_cancelled
+  order_assigned
+  rider_order_rejected
+  vendor_new_order
+  vendor_order_cancelled
+  vendor_rider_assigned
+  admin_order_ready
+  admin_order_delivered
+  rider_assignment_needed
+  rider_assignment_accepted
+  rider_assignment_timeout
+  vendor_review
+  support_ticket
+  system
+  promo
+  discount
+  delivery_nearby
+  account_update
+  general
+}
+
+enum DiscountType {
+  PERCENTAGE
+  FIXED
+}
+
+enum DiscountScope {
+  GLOBAL_ORDER
+  VENDOR_ORDER
+  SPECIFIC_ITEMS
+  DELIVERY_FEE
+}
+
+enum PromoFundedBy {
+  PLATFORM
+  VENDOR
+}
+
+enum RiderAssignmentStatus {
+  pending
+  accepted
+  rejected
+  timeout
+  picked_up
+  delivered
+}
+
+enum SupportTicketStatus {
+  open
+  pending
+  resolved
+  closed
+}
+
+enum ReportStatus {
+  pending
+  reviewed
+  resolved
+  dismissed
+}
+
+enum RefundStatus {
+  pending
+  processing
+  completed
+  failed
+}
+
+model State {
+  id            String   @id @default(uuid()) @db.Uuid
+  legacyMongoId String?  @unique @map("legacy_mongo_id")
+  name          String   @unique
+  isActive      Boolean  @default(true) @map("is_active")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  cities City[]
+  vendors Vendor[]
+  riders Rider[]
+  userAddresses UserAddress[]
+  riderAssignments RiderAssignment[]
+
+  @@index([name, isActive])
+  @@map("states")
+}
+
+model City {
+  id                  String   @id @default(uuid()) @db.Uuid
+  legacyMongoId       String?  @unique @map("legacy_mongo_id")
+  name                String
+  stateId             String   @map("state_id") @db.Uuid
+  isActive            Boolean  @default(true) @map("is_active")
+  platformDeliveryFee Int      @default(0) @map("platform_delivery_fee_kobo")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  state State @relation(fields: [stateId], references: [id], onDelete: Restrict)
+  vendors Vendor[]
+  riders Rider[]
+  userAddresses UserAddress[]
+  riderAssignments RiderAssignment[]
+  searchTrends SearchTrend[]
+
+  @@unique([name, stateId])
+  @@index([stateId, isActive])
+  @@map("cities")
+}
+
+model Category {
+  id            String     @id @default(uuid()) @db.Uuid
+  legacyMongoId String?    @unique @map("legacy_mongo_id")
+  name          String
+  slug          String
+  parentId      String?    @map("parent_id") @db.Uuid
+  description   String     @default("")
+  image         String     @default("")
+  isActive      Boolean    @default(true) @map("is_active")
+  createdAt     DateTime   @default(now()) @map("created_at")
+  updatedAt     DateTime   @updatedAt @map("updated_at")
+
+  parent   Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children Category[] @relation("CategoryTree")
+  menuItems MenuItem[]
+  comboItems ComboItem[]
+
+  @@index([parentId])
+  @@index([slug, parentId])
+  @@map("categories")
+}
+
+model User {
+  id                   String    @id @default(uuid()) @db.Uuid
+  legacyMongoId        String?   @unique @map("legacy_mongo_id")
+  firstname            String?
+  lastname             String?
+  fullName             String?   @map("full_name")
+  email                String    @unique
+  password             String?
+  phone                String?
+  avatar               String?
+  walletBalance        Int       @default(0) @map("wallet_balance_kobo")
+  totalOrders          Int       @default(0) @map("total_orders")
+  isVerified           Boolean   @default(false) @map("is_verified")
+  isActive             Boolean   @default(true) @map("is_active")
+  lastLogin            DateTime? @map("last_login")
+  resetPasswordToken   String?   @map("reset_password_token")
+  resetPasswordExpires DateTime? @map("reset_password_expires")
+  loginAttempts        Int       @default(0) @map("login_attempts")
+  lockUntil            DateTime? @map("lock_until")
+  suspended            Boolean   @default(false)
+  banned               Boolean   @default(false)
+  suspensionReason     String?   @map("suspension_reason")
+  banReason            String?   @map("ban_reason")
+  activityLog          Json      @default("[]") @map("activity_log")
+  role                 AccountRole @default(user)
+  otp                  String?
+  otpExpires           DateTime? @map("otp_expires")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  addresses UserAddress[]
+  carts Cart[]
+  orders Order[]
+  paymentAttempts PaymentAttempt[]
+  refunds Refund[]
+  transactions Transaction[]
+  invoices Invoice[]
+  reviews Review[]
+  reports Report[]
+  supportTickets SupportTicket[]
+  discountUsages DiscountUsage[]
+  notifications Notification[]
+  freeDeliveryClaims FreeDeliveryClaim[]
+  vendorDeliveryClaims VendorDeliveryClaim[]
+  searchTrends SearchTrend[]
+
+  @@index([email])
+  @@index([phone])
+  @@index([isActive])
+  @@map("users")
+}
+
+model UserAddress {
+  id            String   @id @default(uuid()) @db.Uuid
+  legacyMongoId String?  @unique @map("legacy_mongo_id")
+  userId        String   @map("user_id") @db.Uuid
+  label         String   @default("Home")
+  addressLine   String   @map("address_line")
+  cityText      String?  @map("city")
+  stateText     String?  @map("state")
+  cityId        String?  @map("city_id") @db.Uuid
+  stateId       String?  @map("state_id") @db.Uuid
+  cityName      String?  @map("city_name")
+  stateName     String?  @map("state_name")
+  postalCode    String?  @map("postal_code")
+  latitude      Float?
+  longitude     Float?
+  isDefault     Boolean  @default(false) @map("is_default")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  city City? @relation(fields: [cityId], references: [id], onDelete: SetNull)
+  state State? @relation(fields: [stateId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([cityId])
+  @@index([stateId])
+  @@map("user_addresses")
+}
+
+model Admin {
+  id                   String    @id @default(uuid()) @db.Uuid
+  legacyMongoId        String?   @unique @map("legacy_mongo_id")
+  name                 String
+  email                String    @unique
+  password             String
+  role                 AdminRole @default(admin)
+  resetPasswordToken   String?   @map("reset_password_token")
+  resetPasswordExpires DateTime? @map("reset_password_expires")
+  loginAttempts        Int       @default(0) @map("login_attempts")
+  lockUntil            DateTime? @map("lock_until")
+  lastLogin            DateTime? @map("last_login")
+  otp                  String?
+  otpExpires           DateTime? @map("otp_expires")
+  walletId             String?   @map("wallet_id") @db.Uuid
+  isActive             Boolean   @default(true) @map("is_active")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  notifications Notification[]
+  platformConfigs PlatformConfig[]
+
+  @@index([email])
+  @@index([role])
+  @@map("admins")
+}
+
+model Vendor {
+  id                       String    @id @default(uuid()) @db.Uuid
+  legacyMongoId            String?   @unique @map("legacy_mongo_id")
+  name                     String
+  email                    String
+  phone                    String
+  password                 String?
+  resetPasswordToken       String?   @map("reset_password_token")
+  resetPasswordExpires     DateTime? @map("reset_password_expires")
+  loginAttempts            Int       @default(0) @map("login_attempts")
+  lockUntil                DateTime? @map("lock_until")
+  lastLogin                DateTime? @map("last_login")
+  otp                      String?
+  otpExpires               DateTime? @map("otp_expires")
+  storeName                String    @map("store_name")
+  storeSlug                String?   @unique @map("store_slug")
+  storeDescription         String    @default("") @map("store_description")
+  logo                     String    @default("")
+  coverImage               String    @default("") @map("cover_image")
+  address                  Json      @default("{}")
+  stateId                  String?   @map("state_id") @db.Uuid
+  cityId                   String?   @map("city_id") @db.Uuid
+  locationStatus           LocationStatus? @map("location_status")
+  requestedState           String    @default("") @map("requested_state")
+  requestedCity            String    @default("") @map("requested_city")
+  cuisineTypes             String[]  @default([]) @map("cuisine_types")
+  openingHours             Json      @default("{}") @map("opening_hours")
+  walletId                 String?   @map("wallet_id") @db.Uuid
+  payoutDetails            Json?     @map("payout_details")
+  totalSales               Int       @default(0) @map("total_sales_kobo")
+  totalOrders              Int       @default(0) @map("total_orders")
+  commissionRate           Float     @default(0.1) @map("commission_rate")
+  rating                   Float     @default(0)
+  ratingCount              Int       @default(0) @map("rating_count")
+  verified                 Boolean   @default(false)
+  isApproved               Boolean   @default(false) @map("is_approved")
+  termsAcceptance          Json      @default("{}") @map("terms_acceptance")
+  suspended                Boolean   @default(false)
+  active                   Boolean   @default(true)
+  hasActiveDeliveryPromo   Boolean   @default(false) @map("has_active_delivery_promo")
+  suspensionReason         String    @default("") @map("suspension_reason")
+  acceptsDelivery          Boolean   @default(true) @map("accepts_delivery")
+  flatRateDeliveryFee      Int       @default(0) @map("flat_rate_delivery_fee_kobo")
+  deliveryRadiusKm         Float     @default(5) @map("delivery_radius_km")
+  tags                     String[]  @default([])
+  metadata                 Json      @default("{}")
+  ownerIds                 String[]  @default([]) @map("owner_ids")
+  deletedAt                DateTime? @map("deleted_at")
+  adminNotes               String    @default("") @map("admin_notes")
+  deliveryManagedBy        DeliveryManagedBy @default(admin) @map("delivery_managed_by")
+  platformDeliveryFeeOverride Int?   @map("platform_delivery_fee_override_kobo")
+  role                     AccountRole @default(vendor)
+  createdAt                DateTime  @default(now()) @map("created_at")
+  updatedAt                DateTime  @updatedAt @map("updated_at")
+
+  state State? @relation(fields: [stateId], references: [id], onDelete: SetNull)
+  city City? @relation(fields: [cityId], references: [id], onDelete: SetNull)
+  menuSections VendorMenuSection[]
+  menuItems MenuItem[]
+  legacyFoods Food[]
+  comboItems ComboItem[]
+  subCarts VendorSubCart[]
+  vendorOrders VendorOrder[]
+  orderItems OrderItem[]
+  vendorDeliveryFees VendorDeliveryFee[]
+  riders Rider[]
+  reviews Review[]
+  withdrawals Withdrawal[]
+  transactions Transaction[]
+  notifications Notification[]
+  discounts Discount[]
+  vendorDeliveryPromos VendorDeliveryPromo[]
+  vendorDeliveryClaims VendorDeliveryClaim[]
+  riderAssignments RiderAssignment[]
+  searchTrends SearchTrend[]
+
+  @@index([email])
+  @@index([phone])
+  @@index([storeName])
+  @@index([stateId])
+  @@index([cityId])
+  @@index([locationStatus])
+  @@index([verified])
+  @@index([isApproved])
+  @@index([active, suspended])
+  @@index([hasActiveDeliveryPromo])
+  @@map("vendors")
+}
+
+model Rider {
+  id                   String    @id @default(uuid()) @db.Uuid
+  legacyMongoId        String?   @unique @map("legacy_mongo_id")
+  name                 String
+  phone                String
+  email                String?
+  avatar               String    @default("")
+  vendorId             String?   @map("vendor_id") @db.Uuid
+  stateId              String?   @map("state_id") @db.Uuid
+  cityId               String?   @map("city_id") @db.Uuid
+  locationStatus       LocationStatus? @map("location_status")
+  requestedState       String    @default("") @map("requested_state")
+  requestedCity        String    @default("") @map("requested_city")
+  serviceZones         String[]  @default([]) @map("service_zones")
+  vehicleOwnership     VehicleOwnership @default(own) @map("vehicle_ownership")
+  vehicleType          VehicleType @default(bicycle) @map("vehicle_type")
+  platformVehicleId    String?   @map("platform_vehicle_id") @db.Uuid
+  managedBy            DeliveryManagedBy @default(vendor) @map("managed_by")
+  password             String?
+  otp                  String?
+  otpExpires           DateTime? @map("otp_expires")
+  resetPasswordToken   String?   @map("reset_password_token")
+  resetPasswordExpires DateTime? @map("reset_password_expires")
+  loginAttempts        Int       @default(0) @map("login_attempts")
+  lockUntil            DateTime? @map("lock_until")
+  lastLogin            DateTime? @map("last_login")
+  status               RiderStatus @default(offline)
+  currentOrderId       String?   @map("current_order_id") @db.Uuid
+  assignmentExpiresAt  DateTime? @map("assignment_expires_at")
+  approvedAt           DateTime? @map("approved_at")
+  approvedBy           String?   @map("approved_by") @db.Uuid
+  isActive             Boolean   @default(true) @map("is_active")
+  isVerified           Boolean   @default(false) @map("is_verified")
+  deletedAt            DateTime? @map("deleted_at")
+  totalDeliveries      Int       @default(0) @map("total_deliveries")
+  totalEarnings        Int       @default(0) @map("total_earnings")
+  rating               Float     @default(0)
+  ratingCount          Int       @default(0) @map("rating_count")
+  notes                String?
+  metadata             Json      @default("{}")
+  payoutDetails        Json      @default("{}") @map("payout_details")
+  role                 AccountRole @default(rider)
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  vendor Vendor? @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  state State? @relation(fields: [stateId], references: [id], onDelete: SetNull)
+  city City? @relation(fields: [cityId], references: [id], onDelete: SetNull)
+  platformVehicle PlatformVehicle? @relation(fields: [platformVehicleId], references: [id], onDelete: SetNull)
+  orders Order[]
+  vendorOrders VendorOrder[]
+  riderWithdrawals RiderWithdrawal[]
+  notifications Notification[]
+  riderAssignments RiderAssignment[]
+
+  @@index([phone])
+  @@index([email])
+  @@index([vendorId, status])
+  @@index([vendorId, isActive, deletedAt])
+  @@index([cityId, status, isActive, isVerified])
+  @@index([platformVehicleId])
+  @@index([assignmentExpiresAt])
+  @@map("riders")
+}
+
+model PlatformVehicle {
+  id            String   @id @default(uuid()) @db.Uuid
+  legacyMongoId String?  @unique @map("legacy_mongo_id")
+  label         String
+  identifier    String?  @unique
+  vehicleType   VehicleType @default(bicycle) @map("vehicle_type")
+  status        VehicleStatus @default(available)
+  metadata      Json     @default("{}")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  riders Rider[]
+
+  @@index([status])
+  @@map("platform_vehicles")
+}
+
+model VendorMenuSection {
+  id            String    @id @default(uuid()) @db.Uuid
+  legacyMongoId String?   @unique @map("legacy_mongo_id")
+  vendorId      String    @map("vendor_id") @db.Uuid
+  name          String
+  description   String?
+  sortOrder     Int       @default(0) @map("sort_order")
+  isVisible     Boolean   @default(true) @map("is_visible")
+  deletedAt     DateTime? @map("deleted_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  menuItems MenuItem[]
+  comboItems ComboItem[]
+
+  @@index([vendorId, isVisible, sortOrder, deletedAt])
+  @@map("vendor_menu_sections")
+}
+
+model MenuItem {
+  id                 String   @id @default(uuid()) @db.Uuid
+  legacyMongoId      String?  @unique @map("legacy_mongo_id")
+  vendorId           String   @map("vendor_id") @db.Uuid
+  platformCategoryId String   @map("platform_category_id") @db.Uuid
+  vendorSectionId    String?  @map("vendor_section_id") @db.Uuid
+  name               String
+  description        String?
+  imageUrl           String?  @map("image_url")
+  itemType           ItemType @default(FOOD) @map("item_type")
+  dietaryType        DietaryType @default(mixed) @map("dietary_type")
+  isAvailable        Boolean  @default(true) @map("is_available")
+  isInStock          Boolean  @default(true) @map("is_in_stock")
+  isArchived         Boolean  @default(false) @map("is_archived")
+  categoryDeactivated Boolean @default(false) @map("category_deactivated")
+  sortOrder          Int      @default(0) @map("sort_order")
+  prepTimeMinutes    Int?     @map("prep_time_minutes")
+  tags               String[] @default([])
+  rating             Float    @default(0)
+  ratingCount        Int      @default(0) @map("rating_count")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  platformCategory Category @relation(fields: [platformCategoryId], references: [id], onDelete: Restrict)
+  vendorSection VendorMenuSection? @relation(fields: [vendorSectionId], references: [id], onDelete: SetNull)
+  portions MenuItemPortion[]
+  choiceGroups MenuItemChoiceGroup[]
+  cartLineItems CartLineItem[]
+  orderItems OrderItem[]
+  reviews Review[]
+
+  @@index([vendorId, isArchived, isAvailable, isInStock])
+  @@index([platformCategoryId, isArchived, isAvailable, isInStock])
+  @@index([vendorId, vendorSectionId])
+  @@index([vendorId, platformCategoryId])
+  @@map("menu_items")
+}
+
+model MenuItemPortion {
+  id            String   @id @default(uuid()) @db.Uuid
+  legacyMongoId String?  @unique @map("legacy_mongo_id")
+  menuItemId    String   @map("menu_item_id") @db.Uuid
+  label         String
+  price         Int      @map("price_kobo")
+  isDefault     Boolean  @default(false) @map("is_default")
+  isAvailable   Boolean  @default(true) @map("is_available")
+  isInStock     Boolean  @default(true) @map("is_in_stock")
+  maxQuantity   Int?     @map("max_quantity")
+  sortOrder     Int      @default(0) @map("sort_order")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  cartLineItems CartLineItem[]
+  orderItems OrderItem[]
+
+  @@index([menuItemId, isAvailable, isInStock])
+  @@index([menuItemId, isDefault])
+  @@map("menu_item_portions")
+}
+
+model MenuItemChoiceGroup {
+  id            String   @id @default(uuid()) @db.Uuid
+  legacyMongoId String?  @unique @map("legacy_mongo_id")
+  menuItemId    String   @map("menu_item_id") @db.Uuid
+  name          String
+  minSelections Int      @default(0) @map("min_selections")
+  maxSelections Int      @default(1) @map("max_selections")
+  isRequired    Boolean  @default(false) @map("is_required")
+  sortOrder     Int      @default(0) @map("sort_order")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id], onDelete: Cascade)
+  options MenuItemChoiceOption[]
+
+  @@index([menuItemId])
+  @@map("menu_item_choice_groups")
+}
+
+model MenuItemChoiceOption {
+  id            String   @id @default(uuid()) @db.Uuid
+  legacyMongoId String?  @unique @map("legacy_mongo_id")
+  groupId       String   @map("group_id") @db.Uuid
+  label         String
+  imageUrl      String?  @map("image_url")
+  priceModifier Int      @default(0) @map("price_modifier")
+  isAvailable   Boolean  @default(true) @map("is_available")
+  sortOrder     Int      @default(0) @map("sort_order")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  group MenuItemChoiceGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+
+  @@index([groupId])
+  @@map("menu_item_choice_options")
+}
+
+model ComboItem {
+  id                 String   @id @default(uuid()) @db.Uuid
+  legacyMongoId      String?  @unique @map("legacy_mongo_id")
+  vendorId           String   @map("vendor_id") @db.Uuid
+  platformCategoryId String   @map("platform_category_id") @db.Uuid
+  vendorSectionId    String?  @map("vendor_section_id") @db.Uuid
+  name               String
+  description        String?
+  imageUrl           String?  @map("image_url")
+  price              Int      @map("price_kobo")
+  dietaryType        DietaryType @default(mixed) @map("dietary_type")
+  prepTimeMinutes    Int?     @map("prep_time_minutes")
+  tags               String[] @default([])
+  contents           String[] @default([])
+  choiceGroups       Json     @default("[]") @map("choice_groups")
+  isAvailable        Boolean  @default(true) @map("is_available")
+  isInStock          Boolean  @default(true) @map("is_in_stock")
+  isArchived         Boolean  @default(false) @map("is_archived")
+  sortOrder          Int      @default(0) @map("sort_order")
+  rating             Float    @default(0)
+  ratingCount        Int      @default(0) @map("rating_count")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  platformCategory Category @relation(fields: [platformCategoryId], references: [id], onDelete: Restrict)
+  vendorSection VendorMenuSection? @relation(fields: [vendorSectionId], references: [id], onDelete: SetNull)
+  cartLineItems CartLineItem[]
+  orderItems OrderItem[]
+
+  @@index([vendorId, isArchived, isAvailable])
+  @@index([platformCategoryId, isArchived])
+  @@index([vendorId, vendorSectionId])
+  @@map("combo_items")
+}
+
+model Cart {
+  id            String   @id @default(uuid()) @db.Uuid
+  legacyMongoId String?  @unique @map("legacy_mongo_id")
+  customerId    String   @map("customer_id") @db.Uuid
+  status        CartStatus @default(ACTIVE)
+  expiresAt     DateTime @map("expires_at")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  subCarts VendorSubCart[]
+  customer User @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId, status])
+  @@map("carts")
+}
+
+model VendorSubCart {
+  id            String   @id @default(uuid()) @db.Uuid
+  legacyMongoId String?  @unique @map("legacy_mongo_id")
+  cartId        String   @map("cart_id") @db.Uuid
+  vendorId      String   @map("vendor_id") @db.Uuid
+  vendorName    String   @map("vendor_name")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  cart Cart @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  lineItems CartLineItem[]
+
+  @@unique([cartId, vendorId])
+  @@index([vendorId])
+  @@map("vendor_sub_carts")
+}
+
+model CartLineItem {
+  id                String   @id @default(uuid()) @db.Uuid
+  legacyMongoId     String?  @unique @map("legacy_mongo_id")
+  vendorSubCartId   String   @map("vendor_sub_cart_id") @db.Uuid
+  lineItemType      CartLineItemType @map("line_item_type")
+  menuItemId        String?  @map("menu_item_id") @db.Uuid
+  portionId         String?  @map("portion_id") @db.Uuid
+  selectedChoices   Json     @default("[]") @map("selected_choices")
+  unitPrice         Int?     @map("unit_price_kobo")
+  variantId         String?  @map("variant_id") @db.Uuid
+  variantChoices    Json     @default("[]") @map("variant_choices")
+  basePrice         Int?     @map("base_price_kobo")
+  choicesPrice      Int      @default(0) @map("choices_price_kobo")
+  totalPrice        Int      @map("total_price_kobo")
+  quantity          Int
+  specialInstructions String? @map("special_instructions")
+  addedAt           DateTime @default(now()) @map("added_at")
+  itemStatusAtAdd   CartItemStatusAtAdd @default(AVAILABLE) @map("item_status_at_add")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  vendorSubCart VendorSubCart @relation(fields: [vendorSubCartId], references: [id], onDelete: Cascade)
+  menuItem MenuItem? @relation(fields: [menuItemId], references: [id], onDelete: SetNull)
+  portion MenuItemPortion? @relation(fields: [portionId], references: [id], onDelete: SetNull)
+  comboItem ComboItem? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@index([vendorSubCartId])
+  @@index([menuItemId])
+  @@index([portionId])
+  @@map("cart_line_items")
+}
+
+model Order {
+  id                  String    @id @default(uuid()) @db.Uuid
+  legacyMongoId       String?   @unique @map("legacy_mongo_id")
+  userId              String    @map("user_id") @db.Uuid
+  deliveryAddress     Json      @map("delivery_address")
+  phone               String
+  subtotal            Int       @map("subtotal_kobo")
+  deliveryFee         Int       @map("delivery_fee_kobo")
+  serviceFee          Int       @default(0) @map("service_fee_kobo")
+  appliedDiscount     Json?     @map("applied_discount")
+  freeDeliveryPromo   Json      @default("{}") @map("free_delivery_promo")
+  vendorDeliveryPromo Json      @default("{}") @map("vendor_delivery_promo")
+  total               Int       @map("total_kobo")
+  orderCode           String    @unique @map("order_code")
+  paymentStatus       PaymentStatus @default(pending) @map("payment_status")
+  paymentReference    String?   @unique @map("payment_reference")
+  idempotencyKey      String?   @unique @map("idempotency_key")
+  orderStatus         OrderStatus @default(pending) @map("order_status")
+  riderId             String?   @map("rider_id") @db.Uuid
+  riderAssignment     Json      @default("{}") @map("rider_assignment")
+  riderEarnings       Int?      @map("rider_earnings_kobo")
+  statusLog           Json      @default("[]") @map("status_log")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  items OrderItem[]
+  vendorDeliveryFees VendorDeliveryFee[]
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+  rider Rider? @relation(fields: [riderId], references: [id], onDelete: SetNull)
+  vendorOrders VendorOrder[]
+  paymentAttempts PaymentAttempt[]
+  refunds Refund[]
+  transactions Transaction[]
+  walletTransactions WalletTransaction[]
+  invoices Invoice[]
+  riderAssignments RiderAssignment[]
+  discountUsages DiscountUsage[]
+  freeDeliveryClaims FreeDeliveryClaim[]
+  vendorDeliveryClaims VendorDeliveryClaim[]
+  supportTickets SupportTicket[]
+
+  @@index([userId, createdAt])
+  @@index([userId, orderStatus])
+  @@index([orderStatus, createdAt])
+  @@index([riderId, orderStatus])
+  @@map("orders")
+}
+
+model OrderItem {
+  id                 String   @id @default(uuid()) @db.Uuid
+  legacyMongoId      String?  @unique @map("legacy_mongo_id")
+  orderId            String   @map("order_id") @db.Uuid
+  type               OrderItemType @default(item)
+  foodId             String?  @map("food_id") @db.Uuid
+  portionId          String?  @map("portion_id") @db.Uuid
+  variantId          String?  @map("variant_id") @db.Uuid
+  restaurantId       String?  @map("restaurant_id") @db.Uuid
+  storeName          String   @default("") @map("store_name")
+  variant            Json     @default("{}")
+  name               String   @default("")
+  imageUrl           String   @default("") @map("image_url")
+  portionLabel       String   @default("") @map("portion_label")
+  quantity           Int
+  portionQuantity    Int      @default(1) @map("portion_quantity")
+  price              Int      @map("price_kobo")
+  note               String   @default("")
+  dietaryType        DietaryType? @map("dietary_type")
+  itemType           ItemType? @map("item_type")
+  selectedOptions    Json     @default("[]") @map("selected_options")
+  metadata           Json     @default("{}")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItem MenuItem? @relation(fields: [foodId], references: [id], onDelete: SetNull)
+  restaurant Vendor? @relation(fields: [restaurantId], references: [id], onDelete: SetNull)
+  portion MenuItemPortion? @relation(fields: [portionId], references: [id], onDelete: SetNull)
+  comboItem ComboItem? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@index([restaurantId])
+  @@index([foodId])
+  @@map("order_items")
+}
+
+model VendorDeliveryFee {
+  id            String   @id @default(uuid()) @db.Uuid
+  orderId       String   @map("order_id") @db.Uuid
+  restaurantId  String   @map("restaurant_id") @db.Uuid
+  deliveryFee   Int      @map("delivery_fee_kobo")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  restaurant Vendor @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+
+  @@unique([orderId, restaurantId])
+  @@index([restaurantId])
+  @@map("vendor_delivery_fees")
+}
+
+model VendorOrder {
+  id             String   @id @default(uuid()) @db.Uuid
+  legacyMongoId  String?  @unique @map("legacy_mongo_id")
+  restaurantId   String   @map("restaurant_id") @db.Uuid
+  userOrderId    String   @map("user_order_id") @db.Uuid
+  items          Json     @default("[]")
+  commission     Int?     @map("commission_kobo")
+  vendorTotal    Int?     @map("vendor_total_kobo")
+  deliveryShare  Int?     @map("delivery_share_kobo")
+  escrowAmount   Int      @default(0) @map("escrow_amount_kobo")
+  escrowReleased Boolean  @default(false) @map("escrow_released")
+  orderStatus    OrderStatus @default(pending) @map("order_status")
+  riderId        String?  @map("rider_id") @db.Uuid
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  restaurant Vendor @relation(fields: [restaurantId], references: [id], onDelete: Restrict)
+  userOrder Order @relation(fields: [userOrderId], references: [id], onDelete: Cascade)
+  rider Rider? @relation(fields: [riderId], references: [id], onDelete: SetNull)
+  riderAssignments RiderAssignment[]
+
+  @@index([restaurantId, createdAt])
+  @@index([restaurantId, orderStatus])
+  @@index([userOrderId])
+  @@index([restaurantId, riderId])
+  @@index([riderId, orderStatus])
+  @@map("vendor_orders")
+}
+
+model Wallet {
+  id             String   @id @default(uuid()) @db.Uuid
+  legacyMongoId  String?  @unique @map("legacy_mongo_id")
+  ownerId        String   @map("owner_id") @db.Uuid
+  ownerModel     WalletOwnerModel @map("owner_model")
+  balance        Int      @default(0) @map("balance_kobo")
+  totalEarned    Int      @default(0) @map("total_earned_kobo")
+  totalWithdrawn Int      @default(0) @map("total_withdrawn_kobo")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  transactions WalletTransaction[]
+  withdrawals Withdrawal[]
+  riderWithdrawals RiderWithdrawal[]
+
+  @@unique([ownerId, ownerModel])
+  @@index([ownerModel])
+  @@map("wallets")
+}
+
+model WalletTransaction {
+  id                String   @id @default(uuid()) @db.Uuid
+  legacyMongoId     String?  @unique @map("legacy_mongo_id")
+  walletId          String   @map("wallet_id") @db.Uuid
+  type              WalletTransactionDirection
+  amount            Int      @map("amount_kobo")
+  transactionType   WalletTransactionType? @map("transaction_type")
+  description       String?
+  reportingAmount   Int?     @map("reporting_amount_kobo")
+  orderId           String?  @map("order_id") @db.Uuid
+  date              DateTime @default(now())
+  metadata          Json     @default("{}")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Cascade)
+  order Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([walletId, date])
+  @@index([transactionType, date])
+  @@index([orderId])
+  @@map("wallet_transactions")
+}
+
+model Withdrawal {
+  id                    String    @id @default(uuid()) @db.Uuid
+  legacyMongoId         String?   @unique @map("legacy_mongo_id")
+  vendorId              String    @map("vendor_id") @db.Uuid
+  walletId              String    @map("wallet_id") @db.Uuid
+  requestedAmount       Int       @map("requested_amount_kobo")
+  transferFee           Int       @default(0) @map("transfer_fee_kobo")
+  netAmount             Int       @map("net_amount_kobo")
+  status                WithdrawalStatus @default(pending)
+  paystackReference     String    @unique @map("paystack_reference")
+  paystackTransferCode  String?   @map("paystack_transfer_code")
+  recipientCode         String    @map("recipient_code")
+  bankName              String    @default("") @map("bank_name")
+  accountNumber         String    @default("") @map("account_number")
+  accountName           String    @default("") @map("account_name")
+  failureReason         String?   @map("failure_reason")
+  initiatedAt           DateTime  @default(now()) @map("initiated_at")
+  settledAt             DateTime? @map("settled_at")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Restrict)
+
+  @@index([vendorId, status])
+  @@map("withdrawals")
+}
+
+model RiderWithdrawal {
+  id                    String    @id @default(uuid()) @db.Uuid
+  legacyMongoId         String?   @unique @map("legacy_mongo_id")
+  riderId               String    @map("rider_id") @db.Uuid
+  walletId              String    @map("wallet_id") @db.Uuid
+  requestedAmount       Int       @map("requested_amount_kobo")
+  transferFee           Int       @default(0) @map("transfer_fee_kobo")
+  netAmount             Int       @map("net_amount_kobo")
+  status                WithdrawalStatus @default(pending)
+  paystackReference     String    @unique @map("paystack_reference")
+  paystackTransferCode  String?   @map("paystack_transfer_code")
+  recipientCode         String    @map("recipient_code")
+  bankName              String    @default("") @map("bank_name")
+  accountNumber         String    @default("") @map("account_number")
+  accountName           String    @default("") @map("account_name")
+  failureReason         String?   @map("failure_reason")
+  initiatedAt           DateTime  @default(now()) @map("initiated_at")
+  settledAt             DateTime? @map("settled_at")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  rider Rider @relation(fields: [riderId], references: [id], onDelete: Restrict)
+  wallet Wallet @relation(fields: [walletId], references: [id], onDelete: Restrict)
+
+  @@index([riderId, status])
+  @@map("rider_withdrawals")
+}
+
+model PaymentAttempt {
+  id                 String   @id @default(uuid()) @db.Uuid
+  legacyMongoId      String?  @unique @map("legacy_mongo_id")
+  reference          String   @unique
+  provider           String   @default("paystack")
+  orderId            String?  @map("order_id") @db.Uuid
+  orderCode          String   @default("") @map("order_code")
+  userId             String?  @map("user_id") @db.Uuid
+  status             PaymentAttemptStatus @default(initialized)
+  expectedAmount     BigInt   @default(0) @map("expected_amount_kobo")
+  expectedAmountKobo BigInt   @default(0) @map("legacy_expected_amount_kobo")
+  paidAmount         BigInt   @default(0) @map("paid_amount_kobo")
+  paidAmountKobo     BigInt   @default(0) @map("legacy_paid_amount_kobo")
+  currency           String   @default("NGN")
+  providerStatus     String   @default("") @map("provider_status")
+  gatewayResponse    String   @default("") @map("gateway_response")
+  authorizationUrl   String   @default("") @map("authorization_url")
+  accessCode         String   @default("") @map("access_code")
+  failureReason      String   @default("") @map("failure_reason")
+  recoveryState      PaymentRecoveryState @default(awaiting_verification) @map("recovery_state")
+  orderSnapshot      Json     @default("{}") @map("order_snapshot")
+  cartSnapshot       Json     @default("{}") @map("cart_snapshot")
+  providerPayload    Json     @default("{}") @map("provider_payload")
+  events             Json     @default("[]")
+  createdAt          DateTime @default(now()) @map("created_at")
+  updatedAt          DateTime @updatedAt @map("updated_at")
+
+  order Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([provider])
+  @@index([orderId])
+  @@index([orderCode])
+  @@index([userId, createdAt])
+  @@index([status])
+  @@index([recoveryState])
+  @@map("payment_attempts")
+}
+
+model PaymentLock {
+  id            String   @id @default(uuid()) @db.Uuid
+  legacyMongoId String?  @unique @map("legacy_mongo_id")
+  reference     String   @unique
+  lockedAt      DateTime @default(now()) @map("locked_at")
+  expiresAt     DateTime @map("expires_at")
+  metadata      Json     @default("{}")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@index([expiresAt])
+  @@map("payment_locks")
+}
+
+model Refund {
+  id            String   @id @default(uuid()) @db.Uuid
+  legacyMongoId String?  @unique @map("legacy_mongo_id")
+  orderId       String?  @map("order_id") @db.Uuid
+  userId        String?  @map("user_id") @db.Uuid
+  amount        BigInt   @map("amount_kobo")
+  reason        String?
+  status        RefundStatus @default(pending)
+  metadata      Json     @default("{}")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  order Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([userId, createdAt])
+  @@index([orderId])
+  @@map("refunds")
+}
+
+model Transaction {
+  id            String   @id @default(uuid()) @db.Uuid
+  legacyMongoId String?  @unique @map("legacy_mongo_id")
+  userId        String?  @map("user_id") @db.Uuid
+  vendorId      String?  @map("vendor_id") @db.Uuid
+  orderId       String?  @map("order_id") @db.Uuid
+  reference     String?  @unique
+  amount        BigInt   @map("amount_kobo")
+  type          String?
+  status        String?
+  provider      String?
+  metadata      Json     @default("{}")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  vendor Vendor? @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  order Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([vendorId])
+  @@index([orderId])
+  @@map("transactions")
+}
+
+model Invoice {
+  id               String   @id @default(uuid()) @db.Uuid
+  legacyMongoId    String?  @unique @map("legacy_mongo_id")
+  type             String
+  invoiceNumber    String   @unique @map("invoice_number")
+  userId           String?  @map("user_id") @db.Uuid
+  orderId          String?  @map("order_id") @db.Uuid
+  paymentReference String?  @map("payment_reference")
+  amount           BigInt   @map("amount_kobo")
+  lines            Json     @default("[]")
+  metadata         Json     @default("{}")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  order Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([orderId])
+  @@index([paymentReference])
+  @@map("invoices")
+}
+
+model Review {
+  id            String   @id @default(uuid()) @db.Uuid
+  legacyMongoId String?  @unique @map("legacy_mongo_id")
+  userId        String   @map("user_id") @db.Uuid
+  vendorId      String   @map("vendor_id") @db.Uuid
+  foodId        String?  @map("food_id") @db.Uuid
+  rating        Int
+  comment       String?
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  menuItem MenuItem? @relation(fields: [foodId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([vendorId])
+  @@index([foodId])
+  @@map("reviews")
+}
+
+model Report {
+  id             String   @id @default(uuid()) @db.Uuid
+  legacyMongoId  String?  @unique @map("legacy_mongo_id")
+  reporterId     String   @map("reporter_id") @db.Uuid
+  targetId       String?  @map("target_id") @db.Uuid
+  targetModel    String?  @map("target_model")
+  reason         String?
+  status         ReportStatus @default(pending)
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  reporter User @relation(fields: [reporterId], references: [id], onDelete: Cascade)
+
+  @@index([reporterId])
+  @@index([targetId, targetModel])
+  @@index([status])
+  @@map("reports")
+}
+
+model SupportTicket {
+  id               String   @id @default(uuid()) @db.Uuid
+  legacyMongoId    String?  @unique @map("legacy_mongo_id")
+  ticketNumber     String   @unique @map("ticket_number")
+  userId           String?  @map("user_id") @db.Uuid
+  orderId          String?  @map("order_id") @db.Uuid
+  subject          String
+  message          String
+  category         String?
+  priority         String?
+  status           SupportTicketStatus @default(open)
+  orderReference   String?  @map("order_reference")
+  paymentReference String?  @map("payment_reference")
+  adminNotes       Json     @default("[]") @map("admin_notes")
+  timeline         Json     @default("[]")
+  metadata         Json     @default("{}")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  order Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([status, priority, createdAt])
+  @@index([category, createdAt])
+  @@map("support_tickets")
+}
+
+model Notification {
+  id            String   @id @default(uuid()) @db.Uuid
+  legacyMongoId String?  @unique @map("legacy_mongo_id")
+  userId        String?  @map("user_id") @db.Uuid
+  riderId       String?  @map("rider_id") @db.Uuid
+  adminId       String?  @map("admin_id") @db.Uuid
+  restaurantId  String?  @map("restaurant_id") @db.Uuid
+  role          NotificationRole @default(user)
+  title         String
+  body          String
+  type          NotificationType @default(general)
+  orderId       String?  @map("order_id")
+  url           String?
+  image         String?
+  icon          String?
+  read          Boolean  @default(false)
+  data          Json     @default("{}")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rider Rider? @relation(fields: [riderId], references: [id], onDelete: Cascade)
+  admin Admin? @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  restaurant Vendor? @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([riderId, createdAt])
+  @@index([adminId, createdAt])
+  @@index([role, createdAt])
+  @@index([userId, read])
+  @@index([riderId, read])
+  @@index([restaurantId, createdAt])
+  @@index([restaurantId, read])
+  @@map("notifications")
+}
+
+model PushSubscription {
+  id            String   @id @default(uuid()) @db.Uuid
+  legacyMongoId String?  @unique @map("legacy_mongo_id")
+  ownerId       String   @map("owner_id") @db.Uuid
+  ownerModel    WalletOwnerModel @map("owner_model")
+  endpoint      String   @unique
+  subscription  Json
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@index([ownerId, ownerModel])
+  @@map("push_subscriptions")
+}
+
+model Discount {
+  id                String   @id @default(uuid()) @db.Uuid
+  legacyMongoId     String?  @unique @map("legacy_mongo_id")
+  code              String   @unique
+  description       String
+  type              DiscountType
+  value             Int      @map("value_kobo")
+  scope             DiscountScope
+  vendorId          String?  @map("vendor_id") @db.Uuid
+  targetFoodIds     String[] @default([]) @map("target_food_ids")
+  minOrderAmount    Int      @default(0) @map("min_order_amount_kobo")
+  maxDiscountAmount Int?     @map("max_discount_amount_kobo")
+  isActive          Boolean  @default(true) @map("is_active")
+  startDate         DateTime @default(now()) @map("start_date")
+  endDate           DateTime? @map("end_date")
+  usageLimit        Int?     @map("usage_limit")
+  usageCount        Int      @default(0) @map("usage_count")
+  userUsageLimit    Int      @default(1) @map("user_usage_limit")
+  fundedBy          PromoFundedBy @default(VENDOR) @map("funded_by")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  usages DiscountUsage[]
+  vendor Vendor? @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+
+  @@index([vendorId])
+  @@index([isActive, startDate, endDate])
+  @@map("discounts")
+}
+
+model DiscountUsage {
+  id             String   @id @default(uuid()) @db.Uuid
+  discountId     String   @map("discount_id") @db.Uuid
+  userId         String?  @map("user_id") @db.Uuid
+  orderId        String?  @map("order_id") @db.Uuid
+  hashedDeviceId String? @map("hashed_device_id")
+  phoneHash      String? @map("phone_hash")
+  usedAt         DateTime @default(now()) @map("used_at")
+
+  discount Discount @relation(fields: [discountId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  order Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([discountId, userId])
+  @@index([discountId, hashedDeviceId])
+  @@index([discountId, phoneHash])
+  @@map("discount_usages")
+}
+
+model FreeDeliveryPromo {
+  id            String   @id @default(uuid()) @db.Uuid
+  legacyMongoId String?  @unique @map("legacy_mongo_id")
+  maxOrders     Int?     @map("max_orders")
+  usedOrders    Int      @default(0) @map("used_orders")
+  startsAt      DateTime? @map("starts_at")
+  endsAt        DateTime? @map("ends_at")
+  isActive      Boolean  @default(true) @map("is_active")
+  metadata      Json     @default("{}")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  claims FreeDeliveryClaim[]
+
+  @@index([isActive])
+  @@map("free_delivery_promos")
+}
+
+model FreeDeliveryClaim {
+  id             String   @id @default(uuid()) @db.Uuid
+  legacyMongoId  String?  @unique @map("legacy_mongo_id")
+  promoId        String   @map("promo_id") @db.Uuid
+  userId         String?  @map("user_id") @db.Uuid
+  orderId        String?  @map("order_id") @db.Uuid
+  hashedIp       String?  @map("hashed_ip")
+  hashedDeviceId String? @map("hashed_device_id")
+  phoneHash      String? @map("phone_hash")
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  promo FreeDeliveryPromo @relation(fields: [promoId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  order Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([promoId])
+  @@index([userId])
+  @@index([hashedIp])
+  @@map("free_delivery_claims")
+}
+
+model VendorDeliveryPromo {
+  id            String   @id @default(uuid()) @db.Uuid
+  legacyMongoId String?  @unique @map("legacy_mongo_id")
+  vendorId      String   @map("vendor_id") @db.Uuid
+  maxOrders     Int?     @map("max_orders")
+  usedOrders    Int      @default(0) @map("used_orders")
+  startsAt      DateTime? @map("starts_at")
+  endsAt        DateTime? @map("ends_at")
+  isActive      Boolean  @default(true) @map("is_active")
+  metadata      Json     @default("{}")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  claims VendorDeliveryClaim[]
+
+  @@index([vendorId, isActive])
+  @@index([createdAt])
+  @@map("vendor_delivery_promos")
+}
+
+model VendorDeliveryClaim {
+  id             String   @id @default(uuid()) @db.Uuid
+  legacyMongoId  String?  @unique @map("legacy_mongo_id")
+  promoId        String   @map("promo_id") @db.Uuid
+  vendorId       String   @map("vendor_id") @db.Uuid
+  userId         String?  @map("user_id") @db.Uuid
+  orderId        String?  @map("order_id") @db.Uuid
+  hashedDeviceId String? @map("hashed_device_id")
+  phoneHash      String? @map("phone_hash")
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  promo VendorDeliveryPromo @relation(fields: [promoId], references: [id], onDelete: Cascade)
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  order Order? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  @@index([promoId, userId])
+  @@index([vendorId, userId])
+  @@map("vendor_delivery_claims")
+}
+
+model RiderAssignment {
+  id            String    @id @default(uuid()) @db.Uuid
+  legacyMongoId String?   @unique @map("legacy_mongo_id")
+  orderId       String    @map("order_id") @db.Uuid
+  vendorOrderId String?   @map("vendor_order_id") @db.Uuid
+  riderId       String?   @map("rider_id") @db.Uuid
+  vendorId      String?   @map("vendor_id") @db.Uuid
+  cityId        String?   @map("city_id") @db.Uuid
+  stateId       String?   @map("state_id") @db.Uuid
+  status        RiderAssignmentStatus @default(pending)
+  reason        String?
+  expiresAt     DateTime? @map("expires_at")
+  respondedAt   DateTime? @map("responded_at")
+  metadata      Json      @default("{}")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  vendorOrder VendorOrder? @relation(fields: [vendorOrderId], references: [id], onDelete: SetNull)
+  rider Rider? @relation(fields: [riderId], references: [id], onDelete: SetNull)
+  vendor Vendor? @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  city City? @relation(fields: [cityId], references: [id], onDelete: SetNull)
+  state State? @relation(fields: [stateId], references: [id], onDelete: SetNull)
+
+  @@index([orderId, status, createdAt])
+  @@index([riderId, status, createdAt])
+  @@index([expiresAt])
+  @@map("rider_assignments")
+}
+
+model SearchTrend {
+  id            String   @id @default(uuid()) @db.Uuid
+  legacyMongoId String?  @unique @map("legacy_mongo_id")
+  keyword       String
+  count         Int      @default(1)
+  userId        String?  @map("user_id") @db.Uuid
+  vendorId      String?  @map("vendor_id") @db.Uuid
+  cityId        String?  @map("city_id") @db.Uuid
+  metadata      Json     @default("{}")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  vendor Vendor? @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  city City? @relation(fields: [cityId], references: [id], onDelete: SetNull)
+
+  @@index([keyword])
+  @@index([count])
+  @@map("search_trends")
+}
+
+model ActivityLog {
+  id            String   @id @default(uuid()) @db.Uuid
+  legacyMongoId String?  @unique @map("legacy_mongo_id")
+  actorId       String?  @map("actor_id") @db.Uuid
+  actorModel    String?  @map("actor_model")
+  action        String
+  targetId      String?  @map("target_id") @db.Uuid
+  targetModel   String?  @map("target_model")
+  metadata      Json     @default("{}")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  @@index([createdAt])
+  @@index([actorId, actorModel])
+  @@index([targetId, targetModel])
+  @@map("activity_logs")
+}
+
+model PlatformConfig {
+  id            String   @id @default(uuid()) @db.Uuid
+  legacyMongoId String?  @unique @map("legacy_mongo_id")
+  type          String   @unique
+  value         Json     @default("{}")
+  lastUpdatedBy String?  @map("last_updated_by") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  lastUpdatedByAdmin Admin? @relation(fields: [lastUpdatedBy], references: [id], onDelete: SetNull)
+
+  @@index([lastUpdatedBy])
+  @@map("platform_configs")
+}
+
+model Food {
+  id                    String      @id @default(uuid()) @db.Uuid
+  legacyMongoId         String?     @unique @map("legacy_mongo_id")
+  vendorId              String      @map("vendor_id") @db.Uuid
+  name                  String
+  slug                  String?     @unique
+  description           String      @default("")
+  images                Json        @default("[]")
+  price                 Int         @map("price_kobo")
+  categories            String[]    @default([])
+  portions              Json        @default("[]")
+  stock                 Int?
+  discount              Json        @default("{}")
+  activePromotionIds    String[]    @default([]) @map("active_promotion_ids")
+  orderCount            Int         @default(0) @map("order_count")
+  availabilitySchedule  Json        @default("{}") @map("availability_schedule")
+  allowInstructions     Boolean     @default(true) @map("allow_instructions")
+  packagingFee          Int         @default(0) @map("packaging_fee_kobo")
+  nutrition             Json        @default("{}")
+  prepTime              Int         @default(15) @map("prep_time")
+  foodType              DietaryType @default(mixed) @map("food_type")
+  choiceGroups          Json        @default("[]") @map("choice_groups")
+  available             Boolean     @default(true)
+  tags                  String[]    @default([])
+  estimatedDeliveryTime Int         @default(30) @map("estimated_delivery_time")
+  rating                Float       @default(0)
+  ratingCount           Int         @default(0) @map("rating_count")
+  metadata              Json        @default("{}")
+  variants              Json        @default("[]")
+  createdAt             DateTime    @default(now()) @map("created_at")
+  updatedAt             DateTime    @updatedAt @map("updated_at")
+
+  vendor Vendor @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  @@index([vendorId])
+  @@map("foods")
+}
+
+model DeliveryAgent {
+  id               String      @id @default(uuid()) @db.Uuid
+  legacyMongoId    String?     @unique @map("legacy_mongo_id")
+  fullName         String      @map("full_name")
+  phone            String      @unique
+  email            String?
+  password         String
+  vehicleType      VehicleType @default(bicycle) @map("vehicle_type")
+  latitude         Float?
+  longitude        Float?
+  isAvailable      Boolean     @default(true) @map("is_available")
+  assignedOrderIds String[]    @default([]) @map("assigned_order_ids")
+  earnings         Int         @default(0) @map("earnings_kobo")
+  rating           Float       @default(0)
+  totalDeliveries  Int         @default(0) @map("total_deliveries")
+  dateJoined       DateTime    @default(now()) @map("date_joined")
+  createdAt        DateTime    @default(now()) @map("created_at")
+  updatedAt        DateTime    @updatedAt @map("updated_at")
+
+  @@index([phone])
+  @@index([isAvailable])
+  @@map("delivery_agents")
+}

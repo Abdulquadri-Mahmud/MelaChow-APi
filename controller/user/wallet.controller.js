@@ -2,6 +2,8 @@ import Wallet from "../../model/wallet/wallet.mode.js";
 import axios from "axios";
 import crypto from "crypto";
 import { generateWalletFundingInvoice } from "../../services/invoice.service.js";
+import { usePostgresWalletReads } from "../../services/postgres/compat.js";
+import { walletRepository } from "../../services/postgres/wallet.repository.js";
 
 // =======================
 // GET USER WALLET
@@ -9,6 +11,11 @@ import { generateWalletFundingInvoice } from "../../services/invoice.service.js"
 export const getUserWallet = async (req, res) => {
     try {
         const userId = req.userId;
+
+        if (usePostgresWalletReads()) {
+            const response = await walletRepository.getUserWallet(userId);
+            return res.status(200).json(response);
+        }
 
         let wallet = await Wallet.findOne({ ownerId: userId, ownerModel: "User" });
 

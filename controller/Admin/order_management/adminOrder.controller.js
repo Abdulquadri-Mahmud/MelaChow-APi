@@ -5,9 +5,12 @@ import Wallet from "../../../model/wallet/wallet.mode.js";
 import User from "../../../model/user.model.js";
 import Rider from "../../../model/rider.model.js";
 import RiderAssignment from "../../../model/riderAssignment.model.js";
+import "../../../model/menu/MenuItem.js";
 import mongoose from "mongoose";
 import { getPlatformConfig } from "../../../services/platformConfig.service.js";
 import { expireStaleRiderAssignmentOffers } from "../../../services/riderAssignment.service.js";
+import { usePostgresAdminOrderReads, usePostgresOrderStatusWrites } from "../../../services/postgres/compat.js";
+import { adminOrdersRepository } from "../../../services/postgres/adminOrders.repository.js";
 
 /**
  * GET ALL ORDERS
@@ -15,6 +18,11 @@ import { expireStaleRiderAssignmentOffers } from "../../../services/riderAssignm
  */
 export const getAllOrders = async (req, res) => {
     try {
+        if (usePostgresAdminOrderReads()) {
+            const response = await adminOrdersRepository.listOrders(req.query);
+            return res.status(200).json(response);
+        }
+
         const {
             status,
             paymentStatus,
@@ -100,6 +108,14 @@ export const getSingleOrder = async (req, res) => {
     try {
         const { orderId } = req.params;
 
+        if (usePostgresAdminOrderReads()) {
+            const response = await adminOrdersRepository.getOrder(orderId);
+            if (!response) {
+                return res.status(404).json({ success: false, message: "Order not found" });
+            }
+            return res.status(200).json(response);
+        }
+
         const query = String(orderId).match(/^[0-9a-fA-F]{24}$/) 
             ? { _id: orderId } 
             : { orderId: orderId };
@@ -176,6 +192,11 @@ export const getSingleOrder = async (req, res) => {
 
 export const getOrderStats = async (req, res) => {
     try {
+        if (usePostgresAdminOrderReads()) {
+            const response = await adminOrdersRepository.getStats(req.query);
+            return res.status(200).json(response);
+        }
+
         const { startDate, endDate } = req.query;
         const dateFilter = {};
         if (startDate || endDate) {
@@ -282,6 +303,40 @@ export const adminOverrideOrderStatus = async (req, res) => {
             return res.status(400).json({ success: false, message: "Invalid order status" });
         }
 
+        if (usePostgresOrderStatusWrites()) {
+            const response = await adminOrdersRepository.adminOverrideOrderStatus({
+                orderCode: orderId,
+                status,
+                reason,
+                adminId: req.admin?._id,
+            });
+
+            if (response.status) {
+                return res.status(response.status).json({ success: false, message: response.message });
+            }
+
+            try {
+                const { sendOrderNotification, sendVendorNotification } = await import("../../../services/notification.service.js");
+                await sendOrderNotification(response.notificationContext.userId, orderId, status, {
+                    orderDatabaseId: response.notificationContext.orderLegacyId,
+                    cancellationReason: status === 'cancelled' ? reason : undefined
+                });
+
+                for (const vendorOrder of response.notificationContext.vendorOrders) {
+                    await sendVendorNotification(vendorOrder.restaurantId, response.notificationContext.orderLegacyId, "system", {
+                        orderId,
+                        title: `Status Updated by Admin`,
+                        message: `The status of Order #${orderId} has been updated to "${status}" by platform administration.`
+                    });
+                }
+            } catch (notifErr) {
+                console.warn('⚠️ Admin override notifications failed:', notifErr.message);
+            }
+
+            const { notificationContext, ...payload } = response;
+            return res.status(200).json(payload);
+        }
+
         const order = await Order.findOne({ orderId });
         if (!order) {
             return res.status(404).json({ success: false, message: "Order not found" });
@@ -357,6 +412,11 @@ export const adminOverrideOrderStatus = async (req, res) => {
  */
 export const getPlatformManagedOrders = async (req, res) => {
     try {
+        if (usePostgresAdminOrderReads()) {
+            const response = await adminOrdersRepository.listPlatformManagedOrders(req.query);
+            return res.status(200).json(response);
+        }
+
         const { status, statusGroup, paymentStatus, startDate, endDate, search, page = 1, limit = 20 } = req.query;
         const filter = {};
         if (status) {
@@ -412,6 +472,11 @@ export const getPlatformManagedOrders = async (req, res) => {
  */
 export const getCommissionLedger = async (req, res) => {
     try {
+        if (usePostgresAdminOrderReads()) {
+            const response = await adminOrdersRepository.getCommissionLedger(req.query);
+            return res.status(200).json(response);
+        }
+
         const { startDate, endDate, page = 1, limit = 20 } = req.query;
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const platformConfig = await getPlatformConfig();

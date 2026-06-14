@@ -1,6 +1,7 @@
 import State from "../../model/location/State.js";
 import City from "../../model/location/City.js";
 import Vendor from "../../model/vendor/vendor.model.js";
+import { toMongoCityShape, toMongoStateShape, usePostgresReads } from "../../services/postgres/compat.js";
 
 /**
  * @desc Get all active states (available for selection)
@@ -9,6 +10,17 @@ import Vendor from "../../model/vendor/vendor.model.js";
  */
 export const getActiveStates = async (req, res) => {
     try {
+        if (usePostgresReads()) {
+            const { locationCategoryRepository } = await import("../../services/postgres/locationCategory.repository.js");
+            const states = (await locationCategoryRepository.listActiveStates()).map(toMongoStateShape);
+
+            return res.status(200).json({
+                success: true,
+                count: states.length,
+                states,
+            });
+        }
+
         // Get all active states (not filtered by vendor presence)
         // This allows users to select states during registration/address setup
         const states = await State.find({
@@ -43,6 +55,27 @@ export const getActiveCities = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: "stateId is required",
+            });
+        }
+
+        if (usePostgresReads()) {
+            const { locationCategoryRepository } = await import("../../services/postgres/locationCategory.repository.js");
+            const state = await locationCategoryRepository.getActiveStateById(stateId);
+
+            if (!state) {
+                return res.status(404).json({
+                    success: false,
+                    message: "State not found or inactive",
+                });
+            }
+
+            const cities = (await locationCategoryRepository.listActiveCitiesByState(stateId)).map(toMongoCityShape);
+
+            return res.status(200).json({
+                success: true,
+                count: cities.length,
+                state: state.name,
+                cities,
             });
         }
 

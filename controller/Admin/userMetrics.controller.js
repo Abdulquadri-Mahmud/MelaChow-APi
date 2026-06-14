@@ -1,11 +1,18 @@
 // controller/Admin/userMetrics.controller.js
 import User from "../../model/user.model.js";
+import { usePostgresUserMetricsReads } from "../../services/postgres/compat.js";
+import { userMetricsRepository } from "../../services/postgres/userMetrics.repository.js";
 
 /**
  * Get User Analytics (Signup Trends)
  */
 export const getUserMetrics = async (req, res) => {
     try {
+        if (usePostgresUserMetricsReads()) {
+            const response = await userMetricsRepository.getUserMetrics();
+            return res.status(200).json(response);
+        }
+
         const days = 7;
         const result = [];
         const dateNow = new Date();

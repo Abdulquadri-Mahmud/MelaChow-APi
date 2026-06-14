@@ -456,13 +456,15 @@ export async function sendOrderNotification(userId, orderId, status, orderDetail
     // Convert to String if it's an ObjectId
     const userIdString = String(userId);
 
-    // Validate orderId
-    if (!orderId) {
+    // Determine the canonical order identifier for user-facing notifications
+    const effectiveOrderId = orderDetails.orderId || orderId;
+
+    if (!effectiveOrderId) {
         console.error('sendOrderNotification: orderId is missing');
         throw new Error('orderId is required for sending notifications');
     }
 
-    console.log(`Sending order notification: User ${userIdString}, Order ${orderId}, Status: ${status}`);
+    console.log(`Sending order notification: User ${userIdString}, Order ${effectiveOrderId}, Status: ${status}`);
 
     const typeMap = {
         'placed': 'order_placed',
@@ -492,7 +494,7 @@ export async function sendOrderNotification(userId, orderId, status, orderDetail
     console.log(`Mapped status "${status}" to notification type "${type}"`);
 
     return sendNotification(userIdString, type, {
-        orderId,
+        orderId: effectiveOrderId,
         orderDatabaseId: orderDetails.orderDatabaseId,
         restaurantName: orderDetails.restaurantName,
         additionalData: orderDetails
@@ -509,10 +511,12 @@ export async function sendRiderNotification(riderId, orderId, type, data = {}) {
     }
 
     const riderIdString = String(riderId);
-    console.log(`Sending rider notification: Rider ${riderIdString}, Order ${orderId}, Type: ${type}`);
+    const effectiveOrderId = data.orderId || orderId;
+
+    console.log(`Sending rider notification: Rider ${riderIdString}, Order ${effectiveOrderId}, Type: ${type}`);
 
     return sendNotification(riderIdString, type, {
-        orderId,
+        orderId: effectiveOrderId,
         orderDatabaseId: data.orderDatabaseId,
         restaurantName: data.restaurantName,
         url: `/rider/notifications`,

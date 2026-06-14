@@ -1,12 +1,19 @@
 // controller/Admin/categoryMetrics.controller.js
 import MenuItem from "../../model/menu/MenuItem.js";
 import Category from "../../model/category.model.js";
+import { usePostgresCategoryMetricsReads } from "../../services/postgres/compat.js";
+import { categoryMetricsRepository } from "../../services/postgres/categoryMetrics.repository.js";
 
 /**
  * Get Category Analytics (Inventory Distribution)
  */
 export const getCategoryMetrics = async (req, res) => {
     try {
+        if (usePostgresCategoryMetricsReads()) {
+            const response = await categoryMetricsRepository.getCategoryMetrics();
+            return res.status(200).json(response);
+        }
+
         const categories = await Category.find({ isActive: true });
         const result = [];
 

@@ -1,5 +1,7 @@
 import { CartService } from '../../services/cart.service.js';
 import { Cart, VendorSubCart, CartLineItem } from '../../model/menu/Cart.js';
+import { usePostgresCartReads, usePostgresCartWrites } from '../../services/postgres/compat.js';
+import { postgresCartRepository } from '../../services/postgres/cart.repository.js';
 
 /**
  * Add an item to the cart. Always creates a new row.
@@ -11,9 +13,13 @@ export const addCartItem = async (req, res) => {
 
         let result;
         if (line_item_type === 'PORTION_ITEM') {
-            result = await CartService.addPortionItem(userId, payload);
+            result = usePostgresCartWrites()
+                ? await postgresCartRepository.addPortionItem(userId, payload)
+                : await CartService.addPortionItem(userId, payload);
         } else if (line_item_type === 'VARIANT_ITEM') {
-            result = await CartService.addVariantItem(userId, payload);
+            result = usePostgresCartWrites()
+                ? await postgresCartRepository.addVariantItem(userId, payload)
+                : await CartService.addVariantItem(userId, payload);
         } else {
             return res.status(400).json({ success: false, message: 'Invalid line_item_type' });
         }
@@ -33,7 +39,9 @@ export const addCartItem = async (req, res) => {
 export const getCart = async (req, res) => {
     try {
         const userId = req.user._id;
-        const cart = await CartService.getCart(userId);
+        const cart = usePostgresCartReads()
+            ? await postgresCartRepository.getCart(userId)
+            : await CartService.getCart(userId);
         if (!cart) {
             return res.status(200).json({ success: true, message: "Cart is empty", vendor_sub_carts: [], cart_summary: { vendor_count: 0, total_items: 0, subtotal: 0 } });
         }
@@ -51,6 +59,13 @@ export const removeCartItem = async (req, res) => {
     try {
         const { lineItemId } = req.params;
         const userId = req.user._id;
+
+        if (usePostgresCartWrites()) {
+            const result = await postgresCartRepository.removeCartItem(userId, lineItemId);
+            if (result.unauthorized) return res.status(403).json({ success: false, message: 'Unauthorized' });
+            if (!result.removed) return res.status(404).json({ success: false, message: 'Item not found' });
+            return res.status(200).json({ success: true, message: 'Item removed' });
+        }
 
         // 1. Find the line item
         const lineItem = await CartLineItem.findById(lineItemId);
@@ -99,6 +114,13 @@ export const removeVendorSubCart = async (req, res) => {
     try {
         const { vendorId } = req.params;
         const userId = req.user._id;
+
+        if (usePostgresCartWrites()) {
+            const result = await postgresCartRepository.removeVendorSubCart(userId, vendorId);
+            if (!result.cartFound) return res.status(404).json({ success: false, message: 'Cart not found' });
+            if (!result.subCartFound) return res.status(404).json({ success: false, message: 'Vendor sub-cart not found' });
+            return res.status(200).json({ success: true, message: 'Vendor items removed' });
+        }
 
         const cart = await Cart.findOne({ customer_id: userId, status: 'ACTIVE' });
         if (!cart) return res.status(404).json({ success: false, message: 'Cart not found' });

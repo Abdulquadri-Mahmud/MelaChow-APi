@@ -5,6 +5,12 @@ import ComboItem from "../../model/menu/ComboItem.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 import City from "../../model/location/City.js";
 import Category from "../../model/category.model.js";
+import { usePostgresFoodsByLocationReads } from "../../services/postgres/compat.js";
+
+const getPostgresFoodsByLocationRepository = async () => {
+  const { foodsByLocationRepository } = await import("../../services/postgres/foodsByLocation.repository.js");
+  return foodsByLocationRepository;
+};
 
 /**
  * @desc    Get foods by location (City & State)
@@ -26,6 +32,12 @@ export const getFoodsByLocation = async (req, res) => {
     }
 
     // ── STEP 2: Resolve Location Information ─────────────
+    if (usePostgresFoodsByLocationReads()) {
+      const foodsByLocationRepository = await getPostgresFoodsByLocationRepository();
+      const response = await foodsByLocationRepository.listFoodsByLocation({ city, state, cityId, stateId });
+      return res.status(200).json(response);
+    }
+
     let vendorQuery = {
       active: true,
       suspended: false,
