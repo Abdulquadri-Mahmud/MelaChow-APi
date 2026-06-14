@@ -9,11 +9,6 @@ import PlatformVehicle from "../model/platformVehicle.model.js";
 import { sendDeliveryOTP, verifyDeliveryOTP, getActiveDeliveryOTP } from '../services/otp.service.js';
 import { validateVendorLocation } from "../services/locationService.js";
 import mongoose from "mongoose";
-import { usePostgresAdminRiderReads, usePostgresRiderAssignmentWrites, usePostgresRiderReads } from "../services/postgres/compat.js";
-import { adminRidersRepository } from "../services/postgres/adminRiders.repository.js";
-import { riderSelfRepository } from "../services/postgres/riderSelf.repository.js";
-import { usePostgresWalletReads } from "../services/postgres/compat.js";
-import { walletRepository } from "../services/postgres/wallet.repository.js";
 
 export const createRider = async (req, res, next) => {
     try {
@@ -228,9 +223,7 @@ export const getActiveOrder = async (req, res, next) => {
             return res.status(403).json({ success: false, message: "Unauthorized" });
         }
 
-        const order = usePostgresRiderReads()
-            ? await riderSelfRepository.getActiveOrder(riderId)
-            : await riderService.getActiveOrder(riderId);
+        const order = await riderService.getActiveOrder(riderId);
         
         let deliveryOtp = null;
         if (order) {
@@ -256,9 +249,7 @@ export const getPendingOffers = async (req, res, next) => {
             return res.status(403).json({ success: false, message: "Unauthorized" });
         }
 
-        const offers = usePostgresRiderReads()
-            ? await riderSelfRepository.getPendingOffers(riderId)
-            : await riderService.getPendingOffers(riderId);
+        const offers = await riderService.getPendingOffers(riderId);
         
         res.status(200).json({ 
             success: true, 
@@ -275,16 +266,6 @@ export const getRiderOrderDetails = async (req, res, next) => {
 
         if (!req.rider || req.rider._id.toString() !== riderId) {
             return res.status(403).json({ success: false, message: "Unauthorized to view this order" });
-        }
-
-        if (usePostgresRiderReads()) {
-            const orderObj = await riderSelfRepository.getOrderDetails(riderId, orderId);
-            if (!orderObj) {
-                return res.status(404).json({ success: false, message: "Order not found" });
-            }
-
-            const deliveryOtp = await getActiveDeliveryOTP(orderId);
-            return res.status(200).json({ success: true, data: { ...orderObj, deliveryOtp } });
         }
 
         // 1. Fetch Basic Order first for Auth Check
@@ -331,103 +312,6 @@ export const updateRiderStatus = async (req, res, next) => {
 
         if (req.rider._id.toString() !== riderId) {
             return res.status(403).json({ success: false, message: "Unauthorized to update this rider status" });
-        }
-
-        if (usePostgresRiderAssignmentWrites() && (status === "on_delivery" || ((reason || reqOrderId) && status === "available"))) {
-            const response = status === "on_delivery"
-                ? await riderSelfRepository.acceptAssignment(riderId, reqOrderId)
-                : await riderSelfRepository.rejectAssignment(riderId, { orderId: reqOrderId, reason, changedBy: "rider" });
-
-            if (response.status) {
-                return res.status(response.status).json({
-                    success: response.success,
-                    message: response.message,
-                    ...(response.data ? { data: response.data } : {}),
-                });
-            }
-
-            let io;
-            try {
-                io = getIO();
-            } catch (err) {
-                console.warn("Socket.IO not initialized during Postgres rider assignment update", err.message);
-            }
-
-            if (status === "on_delivery") {
-                const context = response.notificationContext || {};
-                if (io && context.vendorId) {
-                    io.to(SOCKET_ROOMS.vendor(context.vendorId)).emit(
-                        SOCKET_EVENTS.ORDER_STATUS_UPDATE,
-                        buildPayload.statusUpdate({
-                            orderId: context.orderDatabaseId || reqOrderId,
-                            status: "rider_accepted",
-                            changedBy: "rider",
-                            message: `Rider ${context.riderName || req.rider.name} has accepted the delivery assignment.`,
-                            riderName: context.riderName || req.rider.name
-                        })
-                    );
-                }
-
-                if (io) {
-                    for (const losingRiderId of context.losingRiderIds || []) {
-                        io.to(SOCKET_ROOMS.rider(losingRiderId)).emit(
-                            SOCKET_EVENTS.ASSIGNMENT_CANCELLED,
-                            buildPayload.assignmentCancelled({
-                                orderId: context.orderDatabaseId || reqOrderId,
-                                reason: 'accepted_by_another_rider',
-                                message: 'This order has been accepted by another rider.'
-                            })
-                        );
-                    }
-                }
-
-                try {
-                    const { sendNotification } = await import("../services/notification.service.js");
-                    await sendNotification(null, 'rider_assignment_accepted', {
-                        orderId: context.orderId || reqOrderId,
-                        orderDatabaseId: context.orderDatabaseId || reqOrderId,
-                        riderName: context.riderName || req.rider.name,
-                        message: `Rider ${context.riderName || req.rider.name} accepted delivery assignment for Order #${context.orderId || reqOrderId}. Order is now in transit.`
-                    }, 'admin');
-                } catch (notifErr) {
-                    console.warn('Admin notification failed for Postgres rider accept:', notifErr.message);
-                }
-            } else {
-                const context = response.notificationContext || {};
-                for (const orderContext of context.orders || []) {
-                    if (io && orderContext.vendorId && orderContext.remainingOffers === 0) {
-                        io.to(SOCKET_ROOMS.vendor(orderContext.vendorId)).emit(
-                            SOCKET_EVENTS.ORDER_STATUS_UPDATE,
-                            buildPayload.statusUpdate({
-                                orderId: orderContext.orderDatabaseId || orderContext.orderId,
-                                status: context.actionStatus,
-                                changedBy: "rider",
-                                message: context.reason === "timeout"
-                                    ? `Rider ${context.riderName || req.rider.name} did not respond before the assignment timer expired. Manual reassignment required.`
-                                    : `Rider ${context.riderName || req.rider.name} rejected the assignment. Please assign another rider.`,
-                                riderName: context.riderName || req.rider.name
-                            })
-                        );
-                    }
-
-                    try {
-                        const { sendNotification } = await import("../services/notification.service.js");
-                        await sendNotification(null, context.reason === "timeout" ? 'rider_assignment_timeout' : 'rider_assignment_needed', {
-                            orderId: orderContext.orderId || reqOrderId,
-                            orderDatabaseId: orderContext.orderDatabaseId || reqOrderId,
-                            riderName: context.riderName || req.rider.name,
-                            reason: context.reason,
-                            message: context.reason === "timeout"
-                                ? `Rider ${context.riderName || req.rider.name} did not respond to Order #${orderContext.orderId || reqOrderId}. Manual reassignment required.`
-                                : `Rider ${context.riderName || req.rider.name} rejected Order #${orderContext.orderId || reqOrderId}. Manual reassignment required.`
-                        }, 'admin');
-                    } catch (notifErr) {
-                        console.warn('Admin notification failed for Postgres rider rejection:', notifErr.message);
-                    }
-                }
-            }
-
-            return res.status(200).json({ success: true, data: response.data });
         }
 
         // ✅ FIX: Was calling getSingleRiderForVendor(riderId, req.rider?.vendorId || "dummy")
@@ -515,7 +399,6 @@ export const updateRiderStatus = async (req, res, next) => {
                     {
                         $set: {
                             riderId,
-                            orderStatus: "rider_assigned",
                             "riderAssignment.status": "accepted",
                             "riderAssignment.acceptedAt": new Date(),
                             "riderAssignment.lastReason": ""
@@ -528,18 +411,6 @@ export const updateRiderStatus = async (req, res, next) => {
                     vendorOrder.riderId = riderId;
                     vendorOrder.orderStatus = "rider_assigned";
                     await vendorOrder.save();
-                }
-
-                if (acceptedOrderUpdate) {
-                    if (!acceptedOrderUpdate.statusLog) {
-                        acceptedOrderUpdate.statusLog = [];
-                    }
-                    acceptedOrderUpdate.statusLog.push({
-                        status: "rider_assigned",
-                        changedBy: "rider",
-                        timestamp: new Date()
-                    });
-                    await acceptedOrderUpdate.save();
                 }
 
                 if (!acceptedOrderUpdate) {
@@ -812,9 +683,7 @@ export const markPickedUp = async (req, res, next) => {
             return res.status(403).json({ success: false, message: "Unauthorized to update this order" });
         }
 
-        const order = usePostgresRiderAssignmentWrites()
-            ? await riderSelfRepository.markPickedUp(orderId, riderId)
-            : await riderService.markPickedUp(orderId, riderId);
+        const order = await riderService.markPickedUp(orderId, riderId);
 
         // Resolve vendorId from order items — handles admin-managed riders
         // where req.rider.vendorId is null
@@ -1050,9 +919,7 @@ export const confirmDelivery = async (req, res, next) => {
 
         // OTP verified — proceed with delivery confirmation
         // markDelivered now returns a structured result, not raw order
-        const { order, payoutCredited, isVendorManagedDelivery, payoutBlockedReason, escrowReleaseFailures = [] } = usePostgresRiderAssignmentWrites()
-            ? await riderSelfRepository.markDelivered(actualOrderId, riderId)
-            : await riderService.markDelivered(actualOrderId, riderId);
+        const { order, payoutCredited, isVendorManagedDelivery } = await riderService.markDelivered(actualOrderId, riderId);
 
         // Emit real-time status update to customer tracking page
         try {
@@ -1131,25 +998,6 @@ export const confirmDelivery = async (req, res, next) => {
                 restaurantName: order.restaurantName || 'the store'
             }, 'admin');
 
-            if (payoutBlockedReason) {
-                await sendNotification(null, 'admin_insufficient_funds', {
-                    riderPayout: order.riderEarnings || 0,
-                    orderId: order.orderId || order._id,
-                    orderDatabaseId: order._id,
-                    reason: payoutBlockedReason
-                }, 'admin');
-            }
-
-            for (const escrowFailure of escrowReleaseFailures) {
-                await sendNotification(null, 'admin_insufficient_funds', {
-                    riderPayout: escrowFailure.amount || 0,
-                    orderId: order.orderId || order._id,
-                    orderDatabaseId: order._id,
-                    vendorOrderId: escrowFailure.vendorOrderId,
-                    reason: escrowFailure.reason
-                }, 'admin');
-            }
-
             // 4. Notify rider — only if payout was platform-managed AND actually credited.
             // Vendor-managed riders are paid cash by the vendor — no wallet credit occurs.
             // If admin wallet was insufficient, payout was staged for manual review — do not
@@ -1225,11 +1073,6 @@ export const deactivateRider = async (req, res, next) => {
 
 export const adminGetAllRiders = async (req, res, next) => {
     try {
-        if (usePostgresAdminRiderReads()) {
-            const response = await adminRidersRepository.listRiders(req.query);
-            return res.status(200).json(response);
-        }
-
         const riders = await riderService.getAllRiders(req.query);
         res.status(200).json({ success: true, count: riders.length, data: riders });
     } catch (error) {
@@ -1266,11 +1109,6 @@ export const adminApproveRider = async (req, res, next) => {
 
 export const adminGetAssignmentHistory = async (req, res, next) => {
     try {
-        if (usePostgresAdminRiderReads()) {
-            const response = await adminRidersRepository.listAssignmentHistory(req.query);
-            return res.status(200).json(response);
-        }
-
         const assignments = await riderService.getAssignmentHistory(req.query);
         res.status(200).json({ success: true, count: assignments.length, data: assignments });
     } catch (error) {
@@ -1290,11 +1128,6 @@ export const adminGetRiderHistory = async (req, res, next) => {
 
 export const adminGetPlatformVehicles = async (req, res, next) => {
     try {
-        if (usePostgresAdminRiderReads()) {
-            const response = await adminRidersRepository.listPlatformVehicles(req.query);
-            return res.status(200).json(response);
-        }
-
         const query = {};
         if (req.query.status) query.status = req.query.status;
         if (req.query.vehicleType) query.vehicleType = req.query.vehicleType;
@@ -1394,54 +1227,6 @@ export const adminRejectRiderAssignment = async (req, res, next) => {
     try {
         const { riderId } = req.params;
         const { reason } = req.body;
-
-        if (usePostgresRiderAssignmentWrites()) {
-            const response = await riderSelfRepository.rejectAssignment(riderId, { reason: reason || "rejected_by_admin", changedBy: "admin" });
-
-            if (response.status) {
-                return res.status(response.status).json({
-                    success: response.success,
-                    message: response.message,
-                    ...(response.data ? { data: response.data } : {}),
-                });
-            }
-
-            let io;
-            try { io = getIO(); } catch (e) {}
-
-            const context = response.notificationContext || {};
-            for (const orderContext of context.orders || []) {
-                if (io && orderContext.vendorId && orderContext.remainingOffers === 0) {
-                    io.to(SOCKET_ROOMS.vendor(orderContext.vendorId)).emit(
-                        SOCKET_EVENTS.ORDER_STATUS_UPDATE,
-                        buildPayload.statusUpdate({
-                            orderId: orderContext.orderDatabaseId || orderContext.orderId,
-                            status: "rider_rejected",
-                            changedBy: "admin",
-                            message: `Rider ${context.riderName}'s offer was rejected by admin. Manual reassignment required.`,
-                            riderName: context.riderName
-                        })
-                    );
-                }
-            }
-
-            if (io) {
-                io.to(SOCKET_ROOMS.rider(riderId)).emit(
-                    SOCKET_EVENTS.ASSIGNMENT_CANCELLED,
-                    buildPayload.assignmentCancelled({
-                        orderId: context.orders?.[0]?.orderDatabaseId || context.orders?.[0]?.orderId,
-                        reason: 'rejected_by_admin',
-                        message: 'This assignment was cancelled by an admin.'
-                    })
-                );
-            }
-
-            return res.status(200).json({
-                success: true,
-                message: "Offer rejected successfully. Rider is now available.",
-                data: response.data
-            });
-        }
 
         const Rider = (await import("../model/rider.model.js")).default;
         const RiderAssignment = (await import("../model/riderAssignment.model.js")).default;
@@ -1591,11 +1376,6 @@ export const getRiderWallet = async (req, res, next) => {
             return res.status(403).json({ success: false, message: "Unauthorized to view this wallet" });
         }
 
-        if (usePostgresWalletReads()) {
-            const response = await walletRepository.getRiderWallet(riderId);
-            return res.status(200).json(response);
-        }
-
         const wallet = await riderService.getRiderWallet(riderId);
         res.status(200).json({ success: true, data: wallet });
     } catch (error) {
@@ -1613,11 +1393,6 @@ export const getRiderOrders = async (req, res, next) => {
         // Auth guard — rider can only fetch their own orders
         if (req.rider._id.toString() !== riderId) {
             return res.status(403).json({ success: false, message: "Unauthorized" });
-        }
-
-        if (usePostgresRiderReads()) {
-            const orders = await riderSelfRepository.listOrders(riderId);
-            return res.status(200).json({ success: true, orders });
         }
 
         const Order = (await import("../model/order/Order.js")).default;
