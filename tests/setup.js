@@ -6,6 +6,8 @@ process.env.NODE_ENV = process.env.NODE_ENV || 'test';
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-jwt-secret';
 process.env.RESEND_API_KEY = process.env.RESEND_API_KEY || 're_test_key';
 process.env.MONGOMS_MD5_CHECK = process.env.MONGOMS_MD5_CHECK || 'false';
+process.env.IP_HASH_SALT = process.env.IP_HASH_SALT || 'test-ip-hash-salt';
+process.env.FRONTEND_URL = process.env.FRONTEND_URL || 'https://melachow.com';
 
 let mongod;
 
