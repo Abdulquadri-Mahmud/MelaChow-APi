@@ -12,6 +12,10 @@ import City from "../../model/location/City.js";
 import VendorDeliveryPromo from "../../model/promo/VendorDeliveryPromo.js";
 import VendorDeliveryClaim from "../../model/promo/VendorDeliveryClaim.js";
 import { buildPromoIdentity } from "../../utils/promoIdentity.js";
+import { usePostgresVendorOrderReads } from "../../services/postgres/compat.js";
+import { vendorOrdersRepository } from "../../services/postgres/vendorOrders.repository.js";
+import { usePostgresWalletReads } from "../../services/postgres/compat.js";
+import { walletRepository } from "../../services/postgres/wallet.repository.js";
 
 const getActiveVendorDeliveryPromoContext = async (vendorId, promoIdentity = {}) => {
   const now = new Date();
@@ -541,6 +545,14 @@ export const getWalletForVendor = async (req, res) => {
 
     const id = req.vendor._id;
 
+    if (usePostgresWalletReads()) {
+      const response = await walletRepository.getVendorWallet(id);
+      if (response.status) {
+        return res.status(response.status).json({ success: false, message: response.message });
+      }
+      return res.status(200).json(response);
+    }
+
     const vendor = await vendorModel.findById(id);
     if (!vendor) {
       return res.status(404).json({
@@ -603,6 +615,14 @@ export const getVendorPayoutDetails = async (req, res) => {
       return res.status(401).json({ success: false, message: "Unauthorized. Authentication required." });
     }
 
+    if (usePostgresWalletReads()) {
+      const response = await walletRepository.getVendorPayoutDetails(req.vendor._id);
+      if (response.status) {
+        return res.status(response.status).json({ success: false, message: response.message });
+      }
+      return res.status(200).json(response);
+    }
+
     const vendor = await vendorModel.findById(req.vendor._id).select("+payoutDetails");
     if (!vendor) {
       return res.status(404).json({ success: false, message: "Vendor not found" });
@@ -651,6 +671,14 @@ export const getVendorOrders = async (req, res) => {
       return res.status(404).json({
         success: false,
         message: "Vendor not found",
+      });
+    }
+
+    if (usePostgresVendorOrderReads()) {
+      const vendorOrders = await vendorOrdersRepository.listVendorOrders(id);
+      return res.status(200).json({
+        success: true,
+        data: vendorOrders,
       });
     }
 
@@ -714,6 +742,28 @@ export const getVendorOrderById = async (req, res) => {
         received: vendorOrderId,
         receivedLength: vendorOrderId.length,
         hint: "Make sure you're sending the MongoDB _id from the VendorOrder document, not the user-facing orderId"
+      });
+    }
+
+    if (usePostgresVendorOrderReads()) {
+      const vendorOrder = await vendorOrdersRepository.getVendorOrder(vendorOrderId);
+      if (!vendorOrder) {
+        return res.status(404).json({
+          success: false,
+          message: "Vendor order not found",
+        });
+      }
+
+      if (req.vendor && String(vendorOrder.restaurantId) !== String(req.vendor._id)) {
+        return res.status(403).json({
+          success: false,
+          message: "Unauthorized access to order",
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        data: vendorOrder,
       });
     }
 

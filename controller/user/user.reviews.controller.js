@@ -1,6 +1,11 @@
 import Reviews from "../../model/reviews/review.model.js";
+import "../../model/user.model.js";
+import "../../model/vendor/food.model.js";
+import "../../model/category.model.js";
 import vendorModel from "../../model/vendor/vendor.model.js";
 import MenuItem from "../../model/menu/MenuItem.js";
+import { usePostgresReviewReads } from "../../services/postgres/compat.js";
+import { reviewManagementRepository } from "../../services/postgres/reviewManagement.repository.js";
 
 /**
  * @desc User creates a review for a vendor or food
@@ -69,6 +74,15 @@ export const getUserReviews = async (req, res) => {
       return res.status(400).json({ success: false, message: "User ID is required" });
     }
 
+    if (usePostgresReviewReads()) {
+      const reviews = await reviewManagementRepository.getUserReviews(userId);
+      return res.status(200).json({
+        success: true,
+        total: reviews.length,
+        reviews,
+      });
+    }
+
     const reviews = await Reviews
       .find({ userId })
       .populate("vendorId", "storeName")
@@ -104,6 +118,15 @@ export const getVendorReviews = async (req, res) => {
 
     if (!vendorId) {
       return res.status(400).json({ success: false, message: "Vendor ID is required" });
+    }
+
+    if (usePostgresReviewReads()) {
+      const reviews = await reviewManagementRepository.getVendorReviews(vendorId);
+      return res.status(200).json({
+        success: true,
+        total: reviews.length,
+        reviews,
+      });
     }
 
     const reviews = await Reviews
@@ -147,6 +170,17 @@ export const getAllVendorReviews = async (req, res) => {
     const safePage = Math.max(Number(page) || 1, 1);
     const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
     const skip = (safePage - 1) * safeLimit;
+
+    if (usePostgresReviewReads()) {
+      const response = await reviewManagementRepository.getAllVendorReviews({
+        vendorId,
+        rating,
+        search,
+        page: safePage,
+        limit: safeLimit,
+      });
+      return res.status(200).json(response);
+    }
 
     let vendorIdsFromSearch = [];
     if (search) {

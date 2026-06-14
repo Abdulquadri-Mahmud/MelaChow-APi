@@ -10,11 +10,43 @@ import VendorDeliveryPromo from "../../model/promo/VendorDeliveryPromo.js";
 import VendorDeliveryClaim from "../../model/promo/VendorDeliveryClaim.js";
 import { buildPromoIdentity } from "../../utils/promoIdentity.js";
 import mongoose from 'mongoose';
+import { usePostgresMenuReads } from "../../services/postgres/compat.js";
+
+const getPostgresMenuRepository = async () => {
+    const { menuCatalogRepository } = await import("../../services/postgres/menuCatalog.repository.js");
+    return menuCatalogRepository;
+};
 
 const getRequestPromoIdentity = (req) => buildPromoIdentity({
     deviceId: req.headers["x-melachow-device-id"] || req.query?.deviceId,
     phone: req.query?.phone,
 });
+
+const toPublicMenuVendor = (vendor, { includeDeliveryFee = false } = {}) => {
+    if (!vendor) return null;
+
+    const publicVendor = {
+        _id: vendor._id,
+        storeName: vendor.storeName,
+        logo: vendor.logo,
+        city: vendor.address?.city,
+        state: vendor.address?.state,
+        openingHours: vendor.openingHours,
+        rating: vendor.rating ?? null,
+        ratingCount: vendor.ratingCount ?? 0,
+        storeSlug: vendor.storeSlug,
+        isOpen: vendor.isOpen ?? true,
+        estimatedDeliveryTime: vendor.estimatedDeliveryTime ?? 30,
+        hasActiveDeliveryPromo: vendor.hasActiveDeliveryPromo || false,
+        activeDeliveryPromo: vendor.activeDeliveryPromo || null,
+    };
+
+    if (includeDeliveryFee) {
+        publicVendor.deliveryFee = vendor.deliveryFee || 0;
+    }
+
+    return publicVendor;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPER: Resolve platform_category with parent populated
@@ -189,6 +221,22 @@ async function buildVendorDeliveryPromoContext(vendor) {
 export const getFullVendorMenu = async (req, res) => {
     try {
         const { vendorId } = req.params;
+
+        if (usePostgresMenuReads()) {
+            const menuCatalogRepository = await getPostgresMenuRepository();
+            const menu = await menuCatalogRepository.getFullVendorMenu(vendorId);
+            if (!menu) {
+                return res.status(404).json({ success: false, message: "Vendor not found" });
+            }
+
+            return res.status(200).json({
+                success: true,
+                vendor: menu.vendor,
+                combos: menu.combos,
+                sections: menu.sections,
+                unsectioned: menu.unsectioned,
+            });
+        }
 
         // Step 1 — Fetch the vendor (Support both ID and Slug)
         const vendor = await Vendor.findOne({
@@ -414,12 +462,28 @@ export const getFullVendorMenu = async (req, res) => {
 export const getMenuItemDetails = async (req, res) => {
     try {
         const { itemId } = req.params;
+        const isVendorRequest = !!req.params.vendorId;
+
+        if (usePostgresMenuReads()) {
+            const menuCatalogRepository = await getPostgresMenuRepository();
+            const full = await menuCatalogRepository.getMenuItemDetails(itemId, { vendorView: isVendorRequest });
+            if (!full) return res.status(404).json({ success: false, message: 'Item not found' });
+
+            return res.status(200).json({
+                success: true,
+                item: {
+                    ...full,
+                    vendor: isVendorRequest
+                        ? null
+                        : toPublicMenuVendor(full.vendor, { includeDeliveryFee: true }),
+                },
+            });
+        }
         const item = await MenuItem.findOne({ _id: itemId, is_archived: false }).lean();
         if (!item) return res.status(404).json({ success: false, message: 'Item not found' });
 
         // Determine if this is a vendor request
         // vendorId in the URL means vendor is viewing their own item
-        const isVendorRequest = !!req.params.vendorId;
         const full = await buildFullItem(item, { vendorView: isVendorRequest });
 
         // Fetch vendor for customer view
@@ -468,6 +532,23 @@ export const getMenuItemDetails = async (req, res) => {
 export const getComboDetails = async (req, res) => {
     try {
         const { comboId } = req.params;
+
+        if (usePostgresMenuReads()) {
+            const menuCatalogRepository = await getPostgresMenuRepository();
+            const combo = await menuCatalogRepository.getComboDetails(comboId);
+            if (!combo) {
+                return res.status(404).json({ success: false, message: 'Combo not found' });
+            }
+
+            return res.status(200).json({
+                success: true,
+                combo: {
+                    ...combo,
+                    deliveryFee: combo.vendor?.deliveryFee || 0,
+                    vendor: toPublicMenuVendor(combo.vendor, { includeDeliveryFee: true }),
+                },
+            });
+        }
         const combo = await ComboItem.findOne({
             _id: comboId, is_archived: false
         }).lean();
@@ -546,6 +627,24 @@ export const getItemsByPlatformCategory = async (req, res) => {
     try {
         const { categoryId } = req.params;
         const { page = 1, limit = 20 } = req.query;
+
+        if (usePostgresMenuReads()) {
+            const menuCatalogRepository = await getPostgresMenuRepository();
+            const { items, total } = await menuCatalogRepository.listItemsByPlatformCategory(categoryId, { page, limit });
+
+            return res.status(200).json({
+                success: true,
+                category_id: categoryId,
+                items,
+                pagination: {
+                    page: Number(page),
+                    limit: Number(limit),
+                    total,
+                    totalPages: Math.ceil(total / Number(limit)),
+                },
+            });
+        }
+
         const skip = (Number(page) - 1) * Number(limit);
 
         const [items, total] = await Promise.all([
@@ -605,6 +704,13 @@ export const getVendorsByPlatformCategory = async (req, res) => {
     try {
         const { categoryId } = req.params;
 
+        if (usePostgresMenuReads()) {
+            const menuCatalogRepository = await getPostgresMenuRepository();
+            const vendorIds = await menuCatalogRepository.listVendorIdsByPlatformCategory(categoryId);
+
+            return res.status(200).json({ success: true, category_id: categoryId, vendor_ids: vendorIds });
+        }
+
         const vendorIds = await MenuItem.distinct('vendor_id', {
             platform_category_id: categoryId,
             is_archived: false,
@@ -630,6 +736,39 @@ export const getPublicFoodDetail = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: "foodId is required",
+            });
+        }
+
+        if (usePostgresMenuReads()) {
+            const menuCatalogRepository = await getPostgresMenuRepository();
+            const item = await menuCatalogRepository.getMenuItemDetails(foodId);
+            if (item) {
+                return res.status(200).json({
+                    success: true,
+                    food: {
+                        ...item,
+                        deliveryFee: item.vendor?.deliveryFee || 0,
+                        vendor: toPublicMenuVendor(item.vendor),
+                    },
+                });
+            }
+
+            const combo = await menuCatalogRepository.getComboDetails(foodId);
+            if (combo) {
+                return res.status(200).json({
+                    success: true,
+                    food: {
+                        ...combo,
+                        type: 'combo',
+                        deliveryFee: combo.vendor?.deliveryFee || 0,
+                        vendor: toPublicMenuVendor(combo.vendor),
+                    },
+                });
+            }
+
+            return res.status(404).json({
+                success: false,
+                message: "Food item or combo not found or unavailable",
             });
         }
 

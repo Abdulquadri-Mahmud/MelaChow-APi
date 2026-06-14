@@ -3,6 +3,8 @@ import { randomUUID } from "crypto";
 import Vendor from "../../model/vendor/vendor.model.js";
 import Wallet from "../../model/wallet/wallet.mode.js";
 import Withdrawal from "../../model/wallet/Withdrawal.model.js";
+import { usePostgresWalletReads } from "../../services/postgres/compat.js";
+import { walletRepository } from "../../services/postgres/wallet.repository.js";
 
 /**
  * ─── FUNCTION 1: initiateWithdrawal ───
@@ -182,6 +184,11 @@ export const initiateWithdrawal = async (req, res) => {
  */
 export const getWithdrawalHistory = async (req, res) => {
   try {
+    if (usePostgresWalletReads()) {
+      const response = await walletRepository.getVendorWithdrawalHistory(req.vendor._id);
+      return res.json(response);
+    }
+
     const withdrawals = await Withdrawal.find({ vendorId: req.vendor._id })
       .sort({ createdAt: -1 })
       .limit(50)

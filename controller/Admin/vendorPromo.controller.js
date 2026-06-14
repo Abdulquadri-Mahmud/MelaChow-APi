@@ -3,6 +3,15 @@ import VendorDeliveryPromo from "../../model/promo/VendorDeliveryPromo.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 import logger from "../../config/logger.js";
 
+const parseAdminLocalDate = (value) => {
+  if (!value) return null;
+  const raw = String(value);
+  if (/[zZ]$|[+-]\d{2}:\d{2}$/.test(raw)) return new Date(raw);
+  // Admin datetime-local inputs are entered in Nigeria business time.
+  // Without an offset, Node may store them as UTC and make promos start one hour late.
+  return new Date(`${raw}+01:00`);
+};
+
 /**
  * GET /api/admin/promos/vendor-delivery
  * List all vendor delivery promos (newest first).
@@ -45,7 +54,17 @@ export const createVendorDeliveryPromo = async (req, res) => {
       });
     }
 
-    if (new Date(endsAt) <= new Date(startsAt)) {
+    const parsedStartsAt = parseAdminLocalDate(startsAt);
+    const parsedEndsAt = parseAdminLocalDate(endsAt);
+
+    if (!parsedStartsAt || !parsedEndsAt || Number.isNaN(parsedStartsAt.getTime()) || Number.isNaN(parsedEndsAt.getTime())) {
+      return res.status(400).json({
+        success: false,
+        message: "startsAt and endsAt must be valid dates",
+      });
+    }
+
+    if (parsedEndsAt <= parsedStartsAt) {
       return res.status(400).json({
         success: false,
         message: "endsAt must be after startsAt",
@@ -81,8 +100,8 @@ export const createVendorDeliveryPromo = async (req, res) => {
         {
           vendorId,
           isActive:   true,
-          startsAt:   new Date(startsAt),
-          endsAt:     new Date(endsAt),
+          startsAt:   parsedStartsAt,
+          endsAt:     parsedEndsAt,
           maxOrders:  maxOrders ? Number(maxOrders) : null,
           usedOrders: 0,
           adminNote:  adminNote || "",

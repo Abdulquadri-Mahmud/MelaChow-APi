@@ -27,6 +27,9 @@ import { orderAutoCancelQueue } from "../../config/queue.js";
 import { assertVendorIsOpen } from "../../utils/vendorOpenStatus.js";
 import { recordPaymentAttemptEvent } from "../../services/paymentHardening.service.js";
 import { generateOrderInvoice } from "../../services/invoice.service.js";
+import { usePostgresOrderWrites, usePostgresPaymentWrites } from "../../services/postgres/compat.js";
+import { postgresOrderCreationRepository } from "../../services/postgres/orderCreation.repository.js";
+import { postgresPaymentRepository } from "../../services/postgres/payment.repository.js";
 
 // Max number of claims allowed from the same IP address.
 // Set to 3 to allow legitimate students sharing campus/hostel WiFi
@@ -2103,6 +2106,115 @@ export const createOrderController = async (req, res) => {
         const { items, vendorDeliveryFees, deliveryAddress, phone, discountCode, useWallet, idempotencyKey, deviceId } = req.body;
         const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip || "unknown";
         const userId = req.userId; // From auth middleware
+
+        if (usePostgresOrderWrites()) {
+            if (useWallet) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Postgres wallet order creation is blocked until wallet debit writes are migrated.",
+                });
+            }
+            if (discountCode) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Postgres discount order creation is blocked until discount usage writes are migrated.",
+                });
+            }
+
+            const result = await postgresOrderCreationRepository.createPendingOrder({
+                userId,
+                items,
+                vendorDeliveryFees,
+                deliveryAddress,
+                phone,
+                idempotencyKey: idempotencyKey || null,
+            });
+
+            if (!usePostgresPaymentWrites()) {
+                return res.status(result.idempotent ? 200 : 201).json({
+                    success: true,
+                    message: "Order created in Postgres. Online payment initialization is intentionally disabled until DB_PAYMENT_WRITE_PROVIDER=postgres.",
+                    order: result.order,
+                    payment: {
+                        provider: "none",
+                        status: "not_initialized",
+                        reason: "payment_writes_not_enabled",
+                    },
+                });
+            }
+
+            reference = `PSK_${result.order.orderId}_${Date.now()}`;
+            await postgresPaymentRepository.initializeOrderPaymentReference({
+                orderId: result.order.id,
+                reference,
+                cartSnapshot: {
+                    items,
+                    vendorDeliveryFees,
+                    deliveryAddress,
+                    phone,
+                    discountCode,
+                    useWallet,
+                    idempotencyKey,
+                    deviceId: deviceId || req.headers["x-melachow-device-id"] || null,
+                },
+            });
+
+            const userEmail = req.user?.email || req.body.email;
+            if (!userEmail) throw new Error("Email required for payment initialization");
+
+            let paystackResponse;
+            try {
+                paystackResponse = await axios.post(
+                    "https://api.paystack.co/transaction/initialize",
+                    {
+                        email: userEmail,
+                        amount: Math.round(Number(result.order.total || 0)),
+                        reference,
+                        callback_url: process.env.CALL_BACK_URL,
+                        metadata: {
+                            orderId: result.order.orderId,
+                            postgresOrderId: result.order.id,
+                            userId: String(userId),
+                            moneyUnit: "kobo",
+                        }
+                    },
+                    {
+                        headers: {
+                            Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+                            "Content-Type": "application/json"
+                        }
+                    }
+                );
+            } catch (paystackError) {
+                await postgresPaymentRepository.recordInitializationFailed({
+                    reference,
+                    message: paystackError.response?.data?.message || paystackError.message || "Payment initialization failed",
+                    metadata: {
+                        providerError: paystackError.response?.data || null,
+                    },
+                }).catch((auditError) => logger.warn({ error: auditError.message }, "Failed to record Postgres payment initialization failure"));
+                throw paystackError;
+            }
+
+            const data = paystackResponse.data?.data;
+            await postgresPaymentRepository.recordProviderInitialized({
+                reference: data.reference || reference,
+                authorizationUrl: data.authorization_url,
+                accessCode: data.access_code,
+                providerPayload: data,
+            });
+
+            return res.status(result.idempotent ? 200 : 201).json({
+                success: true,
+                message: "Order created successfully. Proceed to payment.",
+                authorization_url: data.authorization_url,
+                reference: data.reference,
+                order: {
+                    ...result.order,
+                    paymentReference: data.reference || reference,
+                }
+            });
+        }
 
         order = await createOrderV2({
             userId,

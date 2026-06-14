@@ -4,6 +4,8 @@ import MenuItemPortion from "../../model/menu/MenuItemPortion.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 import Order from "../../model/order/Order.js";
 import City from "../../model/location/City.js";
+import { usePostgresRecommendationReads } from "../../services/postgres/compat.js";
+import { recommendationRepository } from "../../services/postgres/recommendation.repository.js";
 
 /**
  * 🛠 SHARED HELPERS
@@ -159,6 +161,11 @@ export const getRecommendations = async (req, res) => {
             const defaultAddr = req.user.addresses.find(a => a.isDefault) || req.user.addresses[0];
             if (!city) city = defaultAddr.city;
             if (!state) state = defaultAddr.state;
+        }
+
+        if (usePostgresRecommendationReads()) {
+            const response = await recommendationRepository.getRecommendations({ city, state, weather });
+            return res.status(200).json(response);
         }
 
         // Normalize location for regex

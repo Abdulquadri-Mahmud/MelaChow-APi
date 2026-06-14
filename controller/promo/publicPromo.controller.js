@@ -8,11 +8,13 @@ import { buildPromoIdentity } from "../../utils/promoIdentity.js";
  * GET /api/promos/active
  * Public endpoint — no auth required.
  * Returns active platform promo and vendor promo summary for banner rendering.
- * Never exposes sensitive fields (adminNote, hashedIp, internal IDs beyond promoId).
+ * Exposes vendor adminNote as public campaign copy for customer-facing adverts.
+ * Never exposes sensitive fields (hashedIp, internal IDs beyond promoId).
  */
 export const getActivePromos = async (req, res) => {
   try {
     const now = new Date();
+    const adminLocalStartGrace = new Date(now.getTime() + 90 * 60 * 1000);
 
     // 1. Platform promo — at most one active at a time
     const platformPromo = await FreeDeliveryPromo.findOne({
@@ -34,7 +36,7 @@ export const getActivePromos = async (req, res) => {
         },
       ],
     })
-      .select("totalSlots usedSlots startsAt endsAt")
+      .select("name totalSlots usedSlots startsAt endsAt")
       .sort({ updatedAt: -1, createdAt: -1 })
       .lean();
 
@@ -67,27 +69,61 @@ export const getActivePromos = async (req, res) => {
     const activePlatformPromo = platformPromo && slotsRemaining > 0 && !userClaim;
 
     // 2. Count of vendors currently running delivery promos
-    const vendorPromoCount = await VendorDeliveryPromo.countDocuments({
+    const activeVendorPromoQuery = {
       isActive: true,
-      startsAt: { $lte: now },
+      startsAt: { $lte: adminLocalStartGrace },
       endsAt:   { $gte: now },
       $or: [
         { maxOrders: null },
         { $expr: { $lt: ["$usedOrders", "$maxOrders"] } },
       ],
-    });
+    };
+
+    const [vendorPromoCount, vendorPromos] = await Promise.all([
+      VendorDeliveryPromo.countDocuments(activeVendorPromoQuery),
+      VendorDeliveryPromo.find(activeVendorPromoQuery)
+        .sort({ updatedAt: -1, createdAt: -1 })
+        .limit(8)
+        .select("_id vendorId maxOrders usedOrders startsAt endsAt adminNote")
+        .populate("vendorId", "storeName logo address")
+        .lean(),
+    ]);
 
     return res.json({
       success: true,
       platformPromo: activePlatformPromo
-        ? {
+          ? {
+            promoId: platformPromo._id,
+            name: platformPromo.name,
             slotsRemaining,
             totalSlots,
-            endsAt:         platformPromo.endsAt || null,
+            usedSlots,
+            startsAt: platformPromo.startsAt || null,
+            endsAt: platformPromo.endsAt || null,
+            sponsorType: "platform",
+            sponsorLabel: "MelaChow",
           }
         : null,
       platformPromoUsed: !!userClaim,
       vendorPromoCount,
+      vendorPromos: vendorPromos.map((promo) => ({
+        promoId: promo._id,
+        vendorId: promo.vendorId?._id || promo.vendorId,
+        vendorName: promo.vendorId?.storeName || "Selected restaurant",
+        vendorLogo: promo.vendorId?.logo || null,
+        adminNote: promo.adminNote || "",
+        city: promo.vendorId?.address?.city || null,
+        maxOrders: promo.maxOrders,
+        usedOrders: promo.usedOrders,
+        remainingOrders:
+          promo.maxOrders == null
+            ? null
+            : Math.max(0, Number(promo.maxOrders || 0) - Number(promo.usedOrders || 0)),
+        startsAt: promo.startsAt,
+        endsAt: promo.endsAt,
+        sponsorType: "vendor",
+        sponsorLabel: "Restaurant sponsored",
+      })),
     });
   } catch (err) {
     logger.error({ error: err.message }, "❌ getActivePromos failed");

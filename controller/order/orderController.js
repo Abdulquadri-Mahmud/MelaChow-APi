@@ -29,6 +29,9 @@ import {
   recordPaymentAttemptEvent,
   validateSuccessfulPaymentForOrder,
 } from "../../services/paymentHardening.service.js";
+import { usePostgresOrderStatusWrites, usePostgresPaymentWrites, usePostgresRiderAssignmentWrites } from "../../services/postgres/compat.js";
+import { adminOrdersRepository } from "../../services/postgres/adminOrders.repository.js";
+import { postgresPaymentRepository } from "../../services/postgres/payment.repository.js";
 
 // Helper function to normalize metadata from Paystack (Object or String)
 // Kept for backward compatibility if needed, though pendingOrder strategy supercedes it.
@@ -44,6 +47,64 @@ function normalizePaystackMetadata(rawMetadata) {
   }
   return rawMetadata;
 }
+
+const handlePostgresPaymentVerification = async ({ reference, label = "" }) => {
+  const order = await postgresPaymentRepository.findOrderByPaymentReference(reference);
+  if (!order) return null;
+
+  if (order.paymentStatus === "paid") {
+    return {
+      statusCode: 200,
+      body: {
+        success: true,
+        message: "Order already processed",
+        order: postgresPaymentRepository.shapeOrder(order),
+      },
+    };
+  }
+
+  const verifyResp = await axios.get(
+    `https://api.paystack.co/transaction/verify/${reference}`,
+    {
+      headers: {
+        Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+      },
+    }
+  );
+
+  const payData = verifyResp.data?.data;
+
+  if (!payData || payData.status !== "success") {
+    const failedOrder = await postgresPaymentRepository.markOrderPaymentFailed(order, payData);
+    return {
+      statusCode: 400,
+      body: {
+        success: false,
+        message: "Payment not successful",
+        order: failedOrder,
+      },
+    };
+  }
+
+  await postgresPaymentRepository.validateSuccessfulPaymentForOrder(order, payData);
+  const fulfillment = await postgresPaymentRepository.fulfillPaidOrder(reference);
+
+  return {
+    statusCode: 200,
+    body: {
+      success: true,
+      message: `${label ? `${label} ` : ""}Payment verified and order confirmed.`,
+      order: fulfillment.order,
+      payment: {
+        reference: payData.reference,
+        status: "fulfilled",
+        paid_at: payData.paid_at,
+        amount: Number(payData.amount || 0) / 100,
+        creditedKobo: fulfillment.creditedKobo,
+      },
+    },
+  };
+};
 
 /**
  * =======================
@@ -825,6 +886,13 @@ export const verifyPayment = async (req, res) => {
     return res.status(400).json({ message: "Reference is required" });
 
   try {
+    if (usePostgresPaymentWrites()) {
+      const postgresResult = await handlePostgresPaymentVerification({ reference });
+      if (postgresResult) {
+        return res.status(postgresResult.statusCode).json(postgresResult.body);
+      }
+    }
+
     /* ========================================
      * 1️⃣ FIND EXISTING ORDER
      * ========================================
@@ -1009,6 +1077,13 @@ export const verifyPaymentV2 = async (req, res) => {
     return res.status(400).json({ message: "Reference is required" });
 
   try {
+    if (usePostgresPaymentWrites()) {
+      const postgresResult = await handlePostgresPaymentVerification({ reference, label: "[V2]" });
+      if (postgresResult) {
+        return res.status(postgresResult.statusCode).json(postgresResult.body);
+      }
+    }
+
     /* ========================================
      * 1️⃣ FIND EXISTING ORDER
      * ======================================== */
@@ -1436,6 +1511,78 @@ export const updateVendorOrderStatus = async (req, res) => {
 
     // ✅ Find vendor order
     console.log(`🔍 Searching for VendorOrder: ${vendorOrderId}`);
+
+    if (usePostgresOrderStatusWrites()) {
+      const response = await adminOrdersRepository.updateVendorOrderStatus({
+        vendorOrderLegacyId: vendorOrderId,
+        vendorLegacyId: vendorId,
+        status,
+      });
+
+      if (response.status) {
+        return res.status(response.status).json({ success: false, message: response.message });
+      }
+
+      const { notificationContext, ...payload } = response;
+
+      try {
+        emitOrderStatusUpdate(
+          {
+            userId: notificationContext.userId,
+            orderId: notificationContext.orderId,
+            status,
+            restaurantName: notificationContext.restaurantName,
+            totalAmount: notificationContext.totalAmount,
+            restaurantId: notificationContext.restaurantId
+          },
+          response.previousStatus
+        );
+      } catch (socketError) {
+        console.error('❌ Socket.IO error:', socketError.message);
+      }
+
+      try {
+        await sendOrderNotification(
+          notificationContext.userId,
+          notificationContext.orderId,
+          status,
+          {
+            orderDatabaseId: notificationContext.vendorOrderLegacyId,
+            restaurantName: notificationContext.restaurantName,
+            totalAmount: notificationContext.totalAmount,
+            items: notificationContext.items
+          }
+        );
+      } catch (notifError) {
+        console.error('❌ Customer Notification error:', notifError.message);
+      }
+
+      if (notificationContext.isReadyTransition && usePostgresRiderAssignmentWrites()) {
+        try {
+          const assignmentResult = await adminOrdersRepository.offerReadyVendorOrderToAvailableRiders({
+            vendorOrderLegacyId: vendorOrderId,
+            assignedBy: null,
+          });
+          console.log(`📡 Postgres broadcast assignment for Order ${notificationContext.orderId}:`, assignmentResult);
+
+          if (!assignmentResult.success) {
+            const { sendNotification } = await import('../../services/notification.service.js');
+            await sendNotification(null, 'rider_assignment_needed', {
+              orderId: notificationContext.orderId,
+              orderDatabaseId: notificationContext.vendorOrderLegacyId,
+              vendorOrderId: notificationContext.vendorOrderLegacyId,
+              reason: assignmentResult.reason,
+              url: `/admin/orders/${notificationContext.vendorOrderLegacyId}`,
+              message: `Automatic broadcast assignment could not find available riders for Order #${notificationContext.orderId}. Admin attention required.`,
+            }, 'admin');
+          }
+        } catch (autoAssignError) {
+          console.error('❌ Postgres automatic broadcast assignment error:', autoAssignError.message);
+        }
+      }
+
+      return res.json(payload);
+    }
 
     const vendorOrder = await VendorOrder.findOne({
       _id: vendorOrderId,
@@ -1981,6 +2128,26 @@ export const paystackWebhook = async (req, res) => {
   const reference = event.data.reference;
 
   try {
+    if (usePostgresPaymentWrites()) {
+      const postgresOrder = await postgresPaymentRepository.findOrderByPaymentReference(reference);
+      if (postgresOrder) {
+        if (postgresOrder.paymentStatus === "paid") {
+          console.log("⚡ Postgres order already paid, ignoring webhook:", reference);
+          return res.status(200).send("Postgres order already processed");
+        }
+
+        try {
+          await postgresPaymentRepository.validateSuccessfulPaymentForOrder(postgresOrder, event.data);
+          await postgresPaymentRepository.fulfillPaidOrder(reference);
+        } catch (validationErr) {
+          console.error("Postgres webhook payment validation failed:", validationErr.message);
+          return res.status(200).send("Postgres webhook payment validation recorded for manual review");
+        }
+
+        return res.status(200).send("Postgres webhook payment verified and fulfilled");
+      }
+    }
+
     /* -------------------------------
      * 3️⃣ TRY FIND EXISTING ORDER (NEW FLOW)
      * ------------------------------- */

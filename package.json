@@ -1,5 +1,6 @@
 {
   "dependencies": {
+    "@prisma/client": "6.19.1",
     "@sentry/node": "^10.45.0",
     "@socket.io/redis-adapter": "^8.3.0",
     "axios": "^1.13.6",
@@ -36,7 +37,8 @@
     "jest": "^30.3.0",
     "mongodb-memory-server": "^11.0.1",
     "nodemon": "^3.1.10",
-    "pino-pretty": "^13.1.3"
+    "pino-pretty": "^13.1.3",
+    "prisma": "6.19.1"
   },
   "engines": {
     "node": ">=18.0.0"
@@ -50,7 +52,48 @@
     "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch",
     "test:coverage": "node --experimental-vm-modules node_modules/jest/bin/jest.js --coverage",
     "start": "node index.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon index.js",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate": "prisma migrate dev",
+    "prisma:studio": "prisma studio",
+    "prisma:seed": "node prisma/seed.js",
+    "prisma:import-admins": "node prisma/import-admins-from-mongo.js",
+    "prisma:import-users": "node prisma/import-users-from-mongo.js",
+    "prisma:import-menu": "node prisma/import-menu-from-mongo.js",
+    "prisma:import-reviews": "node prisma/import-reviews-from-mongo.js",
+    "prisma:import-orders": "node prisma/import-orders-from-mongo.js",
+    "prisma:import-vendor-orders": "node prisma/import-vendor-orders-from-mongo.js",
+    "prisma:import-wallets": "node prisma/import-wallets-from-mongo.js",
+    "prisma:import-finance-payments": "node prisma/import-finance-payments-from-mongo.js",
+    "prisma:import-logistics-support": "node prisma/import-logistics-support-from-mongo.js",
+    "prisma:check-menu-parity": "node prisma/check-menu-response-parity.js",
+    "prisma:check-search-parity": "node prisma/check-search-response-parity.js",
+    "prisma:check-foods-location-parity": "node prisma/check-foods-by-location-parity.js",
+    "prisma:check-recommendation-parity": "node prisma/check-recommendation-response-parity.js",
+    "prisma:check-public-reviews-parity": "node prisma/check-public-reviews-parity.js",
+    "prisma:check-review-management-parity": "node prisma/check-review-management-parity.js",
+    "prisma:check-category-metrics-parity": "node prisma/check-category-metrics-parity.js",
+    "prisma:check-user-metrics-parity": "node prisma/check-user-metrics-parity.js",
+    "prisma:check-vendor-metrics-parity": "node prisma/check-vendor-metrics-parity.js",
+    "prisma:check-vendor-orders-parity": "node prisma/check-vendor-orders-parity.js",
+    "prisma:check-admin-orders-parity": "node prisma/check-admin-orders-parity.js",
+    "prisma:check-logistics-support-parity": "node prisma/check-logistics-support-parity.js",
+    "prisma:check-admin-riders-parity": "node prisma/check-admin-riders-parity.js",
+    "prisma:check-platform-config-parity": "node prisma/check-platform-config-parity.js",
+    "prisma:check-rider-self-parity": "node prisma/check-rider-self-parity.js",
+    "prisma:check-wallet-parity": "node prisma/check-wallet-parity.js",
+    "prisma:check-finance-payments-parity": "node prisma/check-finance-payments-parity.js",
+    "prisma:check-admin-finance-parity": "node prisma/check-admin-finance-parity.js",
+    "prisma:smoke-rider-delivery-preflight": "node prisma/smoke-rider-delivery-preflight.js",
+    "prisma:smoke-rider-assignment-flow": "node prisma/smoke-rider-assignment-flow.js",
+    "prisma:smoke-cart-flow": "node prisma/smoke-cart-flow.js",
+    "prisma:smoke-order-creation-flow": "node prisma/smoke-order-creation-flow.js",
+    "prisma:smoke-payment-initialization-flow": "node prisma/smoke-payment-initialization-flow.js",
+    "prisma:smoke-payment-verification-flow": "node prisma/smoke-payment-verification-flow.js",
+    "prisma:smoke-payment-fulfillment-flow": "node prisma/smoke-payment-fulfillment-flow.js"
+  },
+  "prisma": {
+    "seed": "node prisma/seed.js"
   },
   "keywords": [],
   "author": "",

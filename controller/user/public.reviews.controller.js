@@ -1,8 +1,13 @@
 import Reviews from "../../model/reviews/review.model.js";
+import "../../model/user.model.js";
+import "../../model/vendor/food.model.js";
+import "../../model/category.model.js";
 import vendorModel from "../../model/vendor/vendor.model.js";
 import MenuItem from "../../model/menu/MenuItem.js";
 import MenuItemPortion from "../../model/menu/MenuItemPortion.js";
 import City from "../../model/location/City.js";
+import { usePostgresPublicReviewReads } from "../../services/postgres/compat.js";
+import { publicReviewsRepository } from "../../services/postgres/publicReviews.repository.js";
 
 /**
  * @desc Get all reviews for a specific restaurant/vendor (Public)
@@ -19,6 +24,17 @@ export const getRestaurantReviews = async (req, res) => {
         success: false, 
         message: "Vendor ID is required" 
       });
+    }
+
+    if (usePostgresPublicReviewReads()) {
+      const response = await publicReviewsRepository.getRestaurantReviews(vendorId, { page, limit, rating });
+      if (!response) {
+        return res.status(404).json({
+          success: false,
+          message: "Restaurant not found"
+        });
+      }
+      return res.status(200).json(response);
     }
 
     // Check if vendor exists
@@ -155,6 +171,17 @@ export const getFoodReviews = async (req, res) => {
         success: false, 
         message: "Food ID is required" 
       });
+    }
+
+    if (usePostgresPublicReviewReads()) {
+      const response = await publicReviewsRepository.getFoodReviews(foodId, { page, limit, rating });
+      if (!response) {
+        return res.status(404).json({
+          success: false,
+          message: "Food item not found"
+        });
+      }
+      return res.status(200).json(response);
     }
 
     // Check if food exists
@@ -340,6 +367,17 @@ export const getRestaurantReviewsSummary = async (req, res) => {
         success: false, 
         message: "Vendor ID is required" 
       });
+    }
+
+    if (usePostgresPublicReviewReads()) {
+      const response = await publicReviewsRepository.getRestaurantReviewsSummary(vendorId);
+      if (!response) {
+        return res.status(404).json({
+          success: false,
+          message: "Restaurant not found"
+        });
+      }
+      return res.status(200).json(response);
     }
 
     // Check if vendor exists

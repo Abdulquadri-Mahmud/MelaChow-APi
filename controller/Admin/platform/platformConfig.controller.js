@@ -1,5 +1,8 @@
 import PlatformConfig from "../../../model/platform/PlatformConfig.model.js";
+import "../../../model/Admin/admin.model.js";
 import logger from "../../../config/logger.js";
+import { usePostgresPlatformConfigReads } from "../../../services/postgres/compat.js";
+import { platformConfigRepository } from "../../../services/postgres/platformConfig.repository.js";
 
 /**
  * GET /api/admin/platform-config
@@ -8,6 +11,11 @@ import logger from "../../../config/logger.js";
  */
 export const getAdminPlatformConfig = async (req, res) => {
   try {
+    if (usePostgresPlatformConfigReads()) {
+      const response = await platformConfigRepository.getAdminConfig();
+      return res.json(response);
+    }
+
     const config = await PlatformConfig.findOne({ type: "singleton" })
       .populate("lastUpdatedBy", "email name")
       .lean();

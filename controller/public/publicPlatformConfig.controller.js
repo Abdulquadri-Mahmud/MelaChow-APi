@@ -1,4 +1,6 @@
 import { getPlatformConfig } from '../../services/platformConfig.service.js';
+import { usePostgresPlatformConfigReads } from '../../services/postgres/compat.js';
+import { platformConfigRepository } from '../../services/postgres/platformConfig.repository.js';
 
 /**
  * GET /api/public/platform-config
@@ -8,6 +10,11 @@ import { getPlatformConfig } from '../../services/platformConfig.service.js';
  */
 export const getPublicPlatformConfig = async (req, res) => {
   try {
+    if (usePostgresPlatformConfigReads()) {
+      const response = await platformConfigRepository.getPublicConfig();
+      return res.json(response);
+    }
+
     const config = await getPlatformConfig();
     return res.json({
       success: true,
