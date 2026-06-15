@@ -9,18 +9,28 @@ import {
     checkPaystackBalance,
     initiatePaystackTransfer,
 } from "../services/paystackTransfer.service.js";
+import PlatformConfig from "../model/platform/PlatformConfig.model.js";
 
 // ── REDIS CONNECTION ───────────────────────────────────────────────────────────
 import { bullmqRedisConnection } from "../config/redis.js";
 
 const QUEUE_NAME = "scheduled-payout";
-const MIN_PAYOUT_BALANCE = 1500; // ₦1,500 minimum to trigger auto-payout
 
-const getTransferFee = (amount) => {
-    if (amount <= 5000) return 10;
-    if (amount <= 50000) return 25;
-    return 50;
+// Reads the minimum payout balance from PlatformConfig.
+// Falls back to ₦500 (rider-friendly default) if the config doc is missing.
+const getMinPayoutBalance = async () => {
+    try {
+        const config = await PlatformConfig.findOne({ type: "singleton" }).lean();
+        return config?.riderMinPayoutBalance ?? 500;
+    } catch {
+        return 500;
+    }
 };
+
+// NOTE: Paystack deducts its own transfer fee (₦10/₦25/₦50) directly from the
+// MelaChow Paystack balance — NOT from the transfer amount the recipient receives.
+// We therefore send the rider's FULL wallet balance and record transferFee: 0 on
+// our side. The rider receives the exact amount we debit from their wallet.
 
 // ── Queue & Scheduler ─────────────────────────────────────────────────────────
 export const scheduledPayoutQueue = new Queue(QUEUE_NAME, {
@@ -64,19 +74,21 @@ const processPayoutJob = async (job) => {
 
     // 2. Re-fetch live wallet balance (race condition safety)
     const wallet = await Wallet.findById(walletId);
-    if (!wallet || wallet.balance < MIN_PAYOUT_BALANCE) {
-        console.log(`⏭️ Skipping ${actorType} ${actorId} — balance too low at processing time`);
+    const minBalance = await getMinPayoutBalance();
+    if (!wallet || wallet.balance < minBalance) {
+        console.log(`⏭️ Skipping ${actorType} ${actorId} — balance too low at processing time (balance: ₦${wallet?.balance ?? 0}, min: ₦${minBalance})`);
         return { skipped: true, reason: "balance insufficient at processing time" };
     }
 
     const actualAmount = Math.floor(wallet.balance); // Whole naira only
-    const transferFee = getTransferFee(actualAmount);
-    const netAmount = actualAmount - transferFee;
+    // Paystack deducts its own transfer fee from the MelaChow Paystack account balance.
+    // The rider receives the full actualAmount — we do NOT deduct any fee on our side.
+    const netAmount = actualAmount;
     const paystackReference = `AUTO_${actorType.toUpperCase()}_${randomUUID()
         .replace(/-/g, "")
         .toUpperCase()}`;
 
-    // 3. Check Paystack platform balance
+    // 3. Check Paystack platform balance (must cover transfer + Paystack's own fee)
     const { sufficient } = await checkPaystackBalance(netAmount * 100);
     if (!sufficient) {
         console.error(
@@ -90,7 +102,7 @@ const processPayoutJob = async (job) => {
         [idField]: actorId,
         walletId: wallet._id,
         requestedAmount: actualAmount,
-        transferFee,
+        transferFee: 0, // Paystack deducts its fee from platform balance, not transfer amount
         netAmount,
         status: "pending",
         paystackReference,
@@ -175,12 +187,14 @@ scheduledPayoutWorker.on("failed", (job, err) => {
     console.error(`❌ [ScheduledPayout] Job ${job?.id} failed: ${err.message}`);
 });
 
-const enqueueVendorPayouts = async (today) => {
+const enqueueVendorPayouts = async (today, minBalance) => {
     let vendorCount = 0;
 
+    // Vendors use ₦1,500 minimum (same rider-friendly default is fine here too)
+    const vendorMinBalance = minBalance > 1500 ? minBalance : 1500;
     const vendorWallets = await Wallet.find({
         ownerModel: "Vendor",
-        balance: { $gte: MIN_PAYOUT_BALANCE },
+        balance: { $gte: vendorMinBalance },
     }).select("_id ownerId balance");
 
     for (const wallet of vendorWallets) {
@@ -224,12 +238,12 @@ const enqueueVendorPayouts = async (today) => {
     return vendorCount;
 };
 
-const enqueueRiderPayouts = async (today) => {
+const enqueueRiderPayouts = async (today, minBalance) => {
     let riderCount = 0;
 
     const riderWallets = await Wallet.find({
         ownerModel: "Rider",
-        balance: { $gte: MIN_PAYOUT_BALANCE },
+        balance: { $gte: minBalance },
     }).select("_id ownerId balance");
 
     for (const wallet of riderWallets) {
@@ -286,15 +300,19 @@ export const triggerScheduledPayouts = async (actorType = "all") => {
     const today = new Date().toDateString(); // e.g. "Sat Apr 19 2026"
 
     try {
+        // Read threshold dynamically so admin changes take effect without a redeploy
+        const minBalance = await getMinPayoutBalance();
+        console.log(`🕗 [ScheduledPayout] Min balance threshold: ₦${minBalance}`);
+
         let vendorCount = 0;
         let riderCount = 0;
 
         if (actorType === "vendor" || actorType === "all") {
-            vendorCount = await enqueueVendorPayouts(today);
+            vendorCount = await enqueueVendorPayouts(today, minBalance);
         }
 
         if (actorType === "rider" || actorType === "all") {
-            riderCount = await enqueueRiderPayouts(today);
+            riderCount = await enqueueRiderPayouts(today, minBalance);
         }
 
         console.log(

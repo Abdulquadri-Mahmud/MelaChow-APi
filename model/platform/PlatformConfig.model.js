@@ -30,6 +30,15 @@ const platformConfigSchema = new mongoose.Schema(
       min: [0, "Rider payout cannot be negative"],
     },
 
+    // Minimum wallet balance a rider must accumulate before the nightly
+    // payout sweep will initiate a transfer. Defaults to ₦500 so riders
+    // are paid out quickly after even a single delivery.
+    riderMinPayoutBalance: {
+      type: Number,
+      default: 500,
+      min: [0, "Min payout balance cannot be negative"],
+    },
+
     riderAssignmentMode: {
       type: String,
       enum: ["manual", "automatic"],
