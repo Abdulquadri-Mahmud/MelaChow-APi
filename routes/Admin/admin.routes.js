@@ -114,4 +114,19 @@ router.get("/finance/payout-history", adminAuth, getPayoutHistory);
 router.get("/platform-config", adminAuth, getAdminPlatformConfig);
 router.put("/platform-config", adminAuth, updateAdminPlatformConfig);
 
+// Manual payout trigger — admin only, fires the same sweep as the nightly cron
+// POST /api/admin/payouts/trigger?type=rider|vendor|all
+router.post("/payouts/trigger", adminAuth, async (req, res) => {
+    const { type = "all" } = req.query;
+    if (!["rider", "vendor", "all"].includes(type)) {
+        return res.status(400).json({ success: false, message: "type must be rider, vendor, or all" });
+    }
+    const { triggerScheduledPayouts } = await import("../../jobs/scheduledPayout.job.js");
+    // Fire and forget — sweep runs in background, respond immediately
+    triggerScheduledPayouts(type).catch(err =>
+        console.error("❌ Manual payout trigger error:", err.message)
+    );
+    return res.json({ success: true, message: `${type} payout sweep triggered. Check Render logs for progress.` });
+});
+
 export default router;
