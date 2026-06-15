@@ -26,6 +26,7 @@ export const getAdminPlatformConfig = async (req, res) => {
         success: true,
         data: {
           riderFixedPayout: 600,
+          riderMinPayoutBalance: 500,
           riderAssignmentMode: "manual",
           commissionEnabled: false,
           commissionRate: 0,
@@ -64,6 +65,7 @@ export const updateAdminPlatformConfig = async (req, res) => {
     const adminId = req.admin?._id;
     const {
       riderFixedPayout,
+      riderMinPayoutBalance,
       riderAssignmentMode,
       commissionEnabled,
       commissionRate,
@@ -79,6 +81,12 @@ export const updateAdminPlatformConfig = async (req, res) => {
     if (riderFixedPayout !== undefined) {
       if (typeof riderFixedPayout !== "number" || riderFixedPayout < 0) {
         errors.push("riderFixedPayout must be a non-negative number");
+      }
+    }
+
+    if (riderMinPayoutBalance !== undefined) {
+      if (typeof riderMinPayoutBalance !== "number" || riderMinPayoutBalance < 0) {
+        errors.push("riderMinPayoutBalance must be a non-negative number");
       }
     }
 
@@ -117,6 +125,7 @@ export const updateAdminPlatformConfig = async (req, res) => {
     // ── Build update payload (only provided fields) ─────────────────────
     const update = { lastUpdatedBy: adminId };
     if (riderFixedPayout !== undefined) update.riderFixedPayout = riderFixedPayout;
+    if (riderMinPayoutBalance !== undefined) update.riderMinPayoutBalance = riderMinPayoutBalance;
     if (riderAssignmentMode !== undefined) update.riderAssignmentMode = riderAssignmentMode;
     if (commissionEnabled !== undefined) update.commissionEnabled = commissionEnabled;
     if (commissionRate !== undefined) update.commissionRate = commissionRate;
