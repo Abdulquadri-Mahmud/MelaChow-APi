@@ -27,11 +27,10 @@ const getMinPayoutBalance = async () => {
     }
 };
 
-const getTransferFee = (amount) => {
-    if (amount <= 5000) return 10;
-    if (amount <= 50000) return 25;
-    return 50;
-};
+// NOTE: Paystack deducts its own transfer fee (₦10/₦25/₦50) directly from the
+// MelaChow Paystack balance — NOT from the transfer amount the recipient receives.
+// We therefore send the rider's FULL wallet balance and record transferFee: 0 on
+// our side. The rider receives the exact amount we debit from their wallet.
 
 // ── Queue & Scheduler ─────────────────────────────────────────────────────────
 export const scheduledPayoutQueue = new Queue(QUEUE_NAME, {
@@ -82,13 +81,14 @@ const processPayoutJob = async (job) => {
     }
 
     const actualAmount = Math.floor(wallet.balance); // Whole naira only
-    const transferFee = getTransferFee(actualAmount);
-    const netAmount = actualAmount - transferFee;
+    // Paystack deducts its own transfer fee from the MelaChow Paystack account balance.
+    // The rider receives the full actualAmount — we do NOT deduct any fee on our side.
+    const netAmount = actualAmount;
     const paystackReference = `AUTO_${actorType.toUpperCase()}_${randomUUID()
         .replace(/-/g, "")
         .toUpperCase()}`;
 
-    // 3. Check Paystack platform balance
+    // 3. Check Paystack platform balance (must cover transfer + Paystack's own fee)
     const { sufficient } = await checkPaystackBalance(netAmount * 100);
     if (!sufficient) {
         console.error(
@@ -102,7 +102,7 @@ const processPayoutJob = async (job) => {
         [idField]: actorId,
         walletId: wallet._id,
         requestedAmount: actualAmount,
-        transferFee,
+        transferFee: 0, // Paystack deducts its fee from platform balance, not transfer amount
         netAmount,
         status: "pending",
         paystackReference,
