@@ -1,48 +1,48 @@
-export const usePostgresReads = () => process.env.DB_READ_PROVIDER === "postgres";
+export const usePostgresReads = () => false; // process.env.DB_READ_PROVIDER === "postgres";
 
-export const usePostgresMenuReads = () => process.env.DB_MENU_READ_PROVIDER === "postgres";
+export const usePostgresMenuReads = () => false; // process.env.DB_MENU_READ_PROVIDER === "postgres";
 
-export const usePostgresSearchReads = () => process.env.DB_SEARCH_READ_PROVIDER === "postgres";
+export const usePostgresSearchReads = () => false; // process.env.DB_SEARCH_READ_PROVIDER === "postgres";
 
-export const usePostgresFoodsByLocationReads = () => process.env.DB_FOODS_BY_LOCATION_READ_PROVIDER === "postgres";
+export const usePostgresFoodsByLocationReads = () => false; // process.env.DB_FOODS_BY_LOCATION_READ_PROVIDER === "postgres";
 
-export const usePostgresRecommendationReads = () => process.env.DB_RECOMMENDATION_READ_PROVIDER === "postgres";
+export const usePostgresRecommendationReads = () => false; // process.env.DB_RECOMMENDATION_READ_PROVIDER === "postgres";
 
-export const usePostgresPublicReviewReads = () => process.env.DB_PUBLIC_REVIEW_READ_PROVIDER === "postgres";
+export const usePostgresPublicReviewReads = () => false; // process.env.DB_PUBLIC_REVIEW_READ_PROVIDER === "postgres";
 
-export const usePostgresReviewReads = () => process.env.DB_REVIEW_READ_PROVIDER === "postgres";
+export const usePostgresReviewReads = () => false; // process.env.DB_REVIEW_READ_PROVIDER === "postgres";
 
-export const usePostgresCategoryMetricsReads = () => process.env.DB_CATEGORY_METRICS_READ_PROVIDER === "postgres";
+export const usePostgresCategoryMetricsReads = () => false; // process.env.DB_CATEGORY_METRICS_READ_PROVIDER === "postgres";
 
-export const usePostgresUserMetricsReads = () => process.env.DB_USER_METRICS_READ_PROVIDER === "postgres";
+export const usePostgresUserMetricsReads = () => false; // process.env.DB_USER_METRICS_READ_PROVIDER === "postgres";
 
-export const usePostgresVendorMetricsReads = () => process.env.DB_VENDOR_METRICS_READ_PROVIDER === "postgres";
+export const usePostgresVendorMetricsReads = () => false; // process.env.DB_VENDOR_METRICS_READ_PROVIDER === "postgres";
 
-export const usePostgresVendorOrderReads = () => process.env.DB_VENDOR_ORDER_READ_PROVIDER === "postgres";
+export const usePostgresVendorOrderReads = () => false; // process.env.DB_VENDOR_ORDER_READ_PROVIDER === "postgres";
 
-export const usePostgresAdminOrderReads = () => process.env.DB_ADMIN_ORDER_READ_PROVIDER === "postgres";
+export const usePostgresAdminOrderReads = () => false; // process.env.DB_ADMIN_ORDER_READ_PROVIDER === "postgres";
 
-export const usePostgresOrderStatusWrites = () => process.env.DB_ORDER_STATUS_WRITE_PROVIDER === "postgres";
+export const usePostgresOrderStatusWrites = () => false; // process.env.DB_ORDER_STATUS_WRITE_PROVIDER === "postgres";
 
-export const usePostgresRiderAssignmentWrites = () => process.env.DB_RIDER_ASSIGNMENT_WRITE_PROVIDER === "postgres";
+export const usePostgresRiderAssignmentWrites = () => false; // process.env.DB_RIDER_ASSIGNMENT_WRITE_PROVIDER === "postgres";
 
-export const usePostgresAdminRiderReads = () => process.env.DB_ADMIN_RIDER_READ_PROVIDER === "postgres";
+export const usePostgresAdminRiderReads = () => false; // process.env.DB_ADMIN_RIDER_READ_PROVIDER === "postgres";
 
-export const usePostgresPlatformConfigReads = () => process.env.DB_PLATFORM_CONFIG_READ_PROVIDER === "postgres";
+export const usePostgresPlatformConfigReads = () => false; // process.env.DB_PLATFORM_CONFIG_READ_PROVIDER === "postgres";
 
-export const usePostgresRiderReads = () => process.env.DB_RIDER_READ_PROVIDER === "postgres";
+export const usePostgresRiderReads = () => false; // process.env.DB_RIDER_READ_PROVIDER === "postgres";
 
-export const usePostgresWalletReads = () => process.env.DB_WALLET_READ_PROVIDER === "postgres";
+export const usePostgresWalletReads = () => false; // process.env.DB_WALLET_READ_PROVIDER === "postgres";
 
-export const usePostgresAdminFinanceReads = () => process.env.DB_ADMIN_FINANCE_READ_PROVIDER === "postgres";
+export const usePostgresAdminFinanceReads = () => false; // process.env.DB_ADMIN_FINANCE_READ_PROVIDER === "postgres";
 
-export const usePostgresCartReads = () => process.env.DB_CART_READ_PROVIDER === "postgres";
+export const usePostgresCartReads = () => false; // process.env.DB_CART_READ_PROVIDER === "postgres";
 
-export const usePostgresCartWrites = () => process.env.DB_CART_WRITE_PROVIDER === "postgres";
+export const usePostgresCartWrites = () => false; // process.env.DB_CART_WRITE_PROVIDER === "postgres";
 
-export const usePostgresOrderWrites = () => process.env.DB_ORDER_WRITE_PROVIDER === "postgres";
+export const usePostgresOrderWrites = () => false; // process.env.DB_ORDER_WRITE_PROVIDER === "postgres";
 
-export const usePostgresPaymentWrites = () => process.env.DB_PAYMENT_WRITE_PROVIDER === "postgres";
+export const usePostgresPaymentWrites = () => false; // process.env.DB_PAYMENT_WRITE_PROVIDER === "postgres";
 
 export const toMongoIdShape = (record) => {
   if (!record) return record;
