@@ -512,26 +512,26 @@ const startServer = async () => {
       logger.info('🔌 Socket.IO ready for connections');
     });
 
-    // ── Scheduled Payouts: riders 7:30 PM WAT, vendors 8:00 PM WAT ────────────
+    // ── Scheduled Payouts: riders 11:40 PM WAT, vendors 11:45 PM WAT ───────────
     cron.schedule(
-        "30 19 * * *",
+        "40 23 * * *",
         async () => {
-            console.log("🕢 [CRON] 7:30 PM WAT rider payout sweep triggered...");
+            console.log("🕢 [CRON] 11:40 PM WAT rider payout sweep triggered...");
             await triggerScheduledPayouts("rider");
         },
         { timezone: "Africa/Lagos" }
     );
 
     cron.schedule(
-        "0 20 * * *",
+        "45 23 * * *",
         async () => {
-            console.log("🕗 [CRON] 8 PM WAT vendor payout sweep triggered...");
+            console.log("🕗 [CRON] 11:45 PM WAT vendor payout sweep triggered...");
             await triggerScheduledPayouts("vendor");
         },
         { timezone: "Africa/Lagos" }
     );
 
-    console.log("✅ Scheduled payout crons registered (riders 7:30 PM WAT, vendors 8 PM WAT daily)");
+    console.log("✅ Scheduled payout crons registered (riders 11:40 PM WAT, vendors 11:45 PM WAT daily)");
 
     cron.schedule(
         "* * * * *",
