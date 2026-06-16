@@ -38,8 +38,8 @@ export const scheduledPayoutQueue = new Queue(QUEUE_NAME, {
     defaultJobOptions: {
         attempts: 2,
         backoff: { type: "exponential", delay: 30000 },
-        removeOnComplete: 50,
-        removeOnFail: 100,
+        removeOnComplete: true,
+        removeOnFail: true,
     },
 });
 
@@ -298,6 +298,15 @@ const enqueueRiderPayouts = async (today, minBalance) => {
 export const triggerScheduledPayouts = async (actorType = "all") => {
     console.log(`🕗 [ScheduledPayout] Starting ${actorType} payout sweep...`);
     const today = new Date().toDateString(); // e.g. "Sat Apr 19 2026"
+
+    // Clean old completed/failed jobs from Redis to release deduplication locks for retries
+    try {
+        await scheduledPayoutQueue.clean(0, 1000, "completed");
+        await scheduledPayoutQueue.clean(0, 1000, "failed");
+        console.log(`🕗 [ScheduledPayout] Cleaned old completed/failed queue jobs from Redis`);
+    } catch (cleanErr) {
+        console.warn(`⚠️ [ScheduledPayout] Failed to clean queue: ${cleanErr.message}`);
+    }
 
     try {
         // Read threshold dynamically so admin changes take effect without a redeploy
