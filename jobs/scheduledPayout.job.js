@@ -249,7 +249,7 @@ const enqueueRiderPayouts = async (today, minBalance) => {
     for (const wallet of riderWallets) {
         try {
             const rider = await Rider.findById(wallet.ownerId).select(
-                "+payoutDetails.recipientCode payoutDetails"
+                "+payoutDetails.recipientCode"
             );
             if (!rider?.payoutDetails?.payoutEnabled || !rider?.payoutDetails?.recipientCode) {
                 continue;
