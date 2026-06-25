@@ -1,11 +1,22 @@
-// routes/paymentRoutes.js
+/**
+ * ⛔ DEPRECATED PAYMENT ROUTE — DO NOT USE
+ *
+ * Returns 410 Gone for any client still hitting the old /api/payment/verify endpoint.
+ * The controller import has been intentionally removed to ensure this route
+ * cannot delegate to any live payment processing logic under any circumstance.
+ *
+ * Correct routes: /api/orders/initialize-payment and /api/orders/verify-payment
+ */
 import express from "express";
-import { verifyPayment } from "../controllers/paymentController.js";
 
 const router = express.Router();
 
-// Verify Paystack payment using reference
-// Example: GET /api/payment/verify?reference=abc123&user=xyz&vendor=uvw&order=789
-router.get("/verify", verifyPayment);
+const gone = (_req, res) => res.status(410).json({
+    success: false,
+    message: "This endpoint is deprecated. Use POST /api/orders/verify-payment.",
+});
+
+router.get("/verify", gone);
+router.post("/verify", gone);
 
 export default router;

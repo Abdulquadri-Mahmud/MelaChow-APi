@@ -40,7 +40,7 @@ const riderAssignmentSchema = new mongoose.Schema(
         },
         status: {
             type: String,
-            enum: ["assigned", "accepted", "rejected", "timeout", "picked_up", "delivered", "cancelled"],
+            enum: ["assigned", "accepted", "rejected", "timeout", "picked_up", "delivered", "cancelled", "terminated_by_rider"],
             default: "assigned",
             index: true,
         },

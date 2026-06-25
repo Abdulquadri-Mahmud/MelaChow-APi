@@ -10,6 +10,8 @@ import {
     initiatePaystackTransfer,
 } from "../services/paystackTransfer.service.js";
 import PlatformConfig from "../model/platform/PlatformConfig.model.js";
+import { calcVendorNetPayout } from "../utils/paystackFees.js";
+import { RIDER_PAYOUT_THRESHOLD, VENDOR_PAYOUT_THRESHOLD } from "../config/payouts.js";
 
 // ── REDIS CONNECTION ───────────────────────────────────────────────────────────
 import { bullmqRedisConnection } from "../config/redis.js";
@@ -36,10 +38,15 @@ const getMinPayoutBalance = async () => {
 export const scheduledPayoutQueue = new Queue(QUEUE_NAME, {
     connection: bullmqRedisConnection,
     defaultJobOptions: {
-        attempts: 2,
+        // ── LOOPHOLE 5 FIX ────────────────────────────────────────────────────
+        // attempts: was 2 — audit requires minimum 3 for financial operations
+        // removeOnFail: was true — silently deleted failed payout jobs with no
+        //   audit trail. Now false: failed jobs remain in the BullMQ failed set
+        //   so ops can inspect, replay, or alert on them.
+        attempts: 3,
         backoff: { type: "exponential", delay: 30000 },
         removeOnComplete: true,
-        removeOnFail: true,
+        removeOnFail: false,
     },
 });
 
@@ -74,16 +81,27 @@ const processPayoutJob = async (job) => {
 
     // 2. Re-fetch live wallet balance (race condition safety)
     const wallet = await Wallet.findById(walletId);
-    const minBalance = await getMinPayoutBalance();
-    if (!wallet || wallet.balance < minBalance) {
-        console.log(`⏭️ Skipping ${actorType} ${actorId} — balance too low at processing time (balance: ₦${wallet?.balance ?? 0}, min: ₦${minBalance})`);
+    const threshold = actorType === "vendor" ? VENDOR_PAYOUT_THRESHOLD : RIDER_PAYOUT_THRESHOLD;
+    if (!wallet || wallet.balance < threshold) {
+        console.log(`⏭️ Skipping ${actorType} ${actorId} — balance too low at processing time (balance: ₦${wallet?.balance ?? 0}, threshold: ₦${threshold})`);
         return { skipped: true, reason: "balance insufficient at processing time" };
     }
 
     const actualAmount = Math.floor(wallet.balance); // Whole naira only
-    // Paystack deducts its own transfer fee from the MelaChow Paystack account balance.
-    // The rider receives the full actualAmount — we do NOT deduct any fee on our side.
-    const netAmount = actualAmount;
+    let netAmount = actualAmount;
+    let transferFee = 0;
+
+    if (actorType === "vendor") {
+        const vendorNet = calcVendorNetPayout(actualAmount);
+        netAmount = vendorNet.net;
+        transferFee = vendorNet.fee;
+    }
+
+    if (netAmount <= 0) {
+        console.log(`⏭️ Skipping ${actorType} ${actorId} — net amount is zero or negative after fees (netAmount: ₦${netAmount})`);
+        return { skipped: true, reason: "net amount is zero or negative after fees" };
+    }
+
     const paystackReference = `AUTO_${actorType.toUpperCase()}_${randomUUID()
         .replace(/-/g, "")
         .toUpperCase()}`;
@@ -102,8 +120,8 @@ const processPayoutJob = async (job) => {
         [idField]: actorId,
         walletId: wallet._id,
         requestedAmount: actualAmount,
-        transferFee: 0, // Paystack deducts its fee from platform balance, not transfer amount
-        netAmount,
+        transferFee, // Save calculated transfer fee
+        netAmount,   // Save net amount
         status: "pending",
         paystackReference,
         recipientCode,
@@ -141,7 +159,7 @@ const processPayoutJob = async (job) => {
         });
 
         console.log(
-            `✅ [ScheduledPayout] ${actorType} ${actorId} | ₦${actualAmount} | ref: ${paystackReference}`
+            `✅ [ScheduledPayout] ${actorType} ${actorId} | ₦${actualAmount} (Net: ₦${netAmount}, Fee: ₦${transferFee}) | ref: ${paystackReference}`
         );
         return { success: true, reference: paystackReference, amount: actualAmount };
 
@@ -187,14 +205,12 @@ scheduledPayoutWorker.on("failed", (job, err) => {
     console.error(`❌ [ScheduledPayout] Job ${job?.id} failed: ${err.message}`);
 });
 
-const enqueueVendorPayouts = async (today, minBalance) => {
+const enqueueVendorPayouts = async (today) => {
     let vendorCount = 0;
 
-    // Vendors use ₦1,500 minimum (same rider-friendly default is fine here too)
-    const vendorMinBalance = minBalance > 1500 ? minBalance : 1500;
     const vendorWallets = await Wallet.find({
         ownerModel: "Vendor",
-        balance: { $gte: vendorMinBalance },
+        balance: { $gte: VENDOR_PAYOUT_THRESHOLD },
     }).select("_id ownerId balance");
 
     for (const wallet of vendorWallets) {
@@ -238,12 +254,12 @@ const enqueueVendorPayouts = async (today, minBalance) => {
     return vendorCount;
 };
 
-const enqueueRiderPayouts = async (today, minBalance) => {
+const enqueueRiderPayouts = async (today) => {
     let riderCount = 0;
 
     const riderWallets = await Wallet.find({
         ownerModel: "Rider",
-        balance: { $gte: minBalance },
+        balance: { $gte: RIDER_PAYOUT_THRESHOLD },
     }).select("_id ownerId balance");
 
     for (const wallet of riderWallets) {
@@ -291,7 +307,7 @@ const enqueueRiderPayouts = async (today, minBalance) => {
 
 // ── Trigger functions — riders at 7:30 PM WAT, vendors at 8 PM WAT ───────────
 /**
- * Finds actors with balance >= ₦1,500 and a verified bank account,
+ * Finds actors with balance >= ₦0 and a verified bank account,
  * then enqueues one BullMQ job per actor.
  * jobId deduplication ensures only one job per actor per calendar day.
  */
@@ -309,19 +325,17 @@ export const triggerScheduledPayouts = async (actorType = "all") => {
     }
 
     try {
-        // Read threshold dynamically so admin changes take effect without a redeploy
-        const minBalance = await getMinPayoutBalance();
-        console.log(`🕗 [ScheduledPayout] Min balance threshold: ₦${minBalance}`);
+        console.log(`🕗 [ScheduledPayout] Thresholds: Rider: ₦${RIDER_PAYOUT_THRESHOLD}, Vendor: ₦${VENDOR_PAYOUT_THRESHOLD}`);
 
         let vendorCount = 0;
         let riderCount = 0;
 
         if (actorType === "vendor" || actorType === "all") {
-            vendorCount = await enqueueVendorPayouts(today, minBalance);
+            vendorCount = await enqueueVendorPayouts(today);
         }
 
         if (actorType === "rider" || actorType === "all") {
-            riderCount = await enqueueRiderPayouts(today, minBalance);
+            riderCount = await enqueueRiderPayouts(today);
         }
 
         console.log(

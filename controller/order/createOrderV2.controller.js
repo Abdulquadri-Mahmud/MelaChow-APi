@@ -1720,12 +1720,19 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
         // Delivery fee is retained by the platform — never escrowed to vendor.
         const escrowAmount = Number(vendorTotal.toFixed(2));
 
+        // Retrieve cityId and stateId using Vendor location or order.deliveryAddress
+        const vendor = await Vendor.findById(vendorId).select("cityId stateId").session(session);
+        const cityId = order.deliveryAddress?.cityId || vendor?.cityId || null;
+        const stateId = order.deliveryAddress?.stateId || vendor?.stateId || null;
+
         // Create VendorOrder
         const [vendorOrder] = await VendorOrder.create(
             [
                 {
                     restaurantId: vendorId,
                     userOrderId: order._id,
+                    cityId,
+                    stateId,
                     items: vendorItems.map(item => ({
                       // ── Type & References ──
                       type:      item.type      || "item",
@@ -1798,6 +1805,16 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
                 description: `Escrow: vendor food revenue held for Order ${order.orderId}`,
                 orderId: order._id,
                 transactionType: 'escrow_hold',
+            });
+
+            // Platform commission is credited immediately
+            adminWallet.balance = Number((adminWallet.balance + commission).toFixed(2));
+            adminWallet.transactions.push({
+                type: "credit",
+                amount: commission,
+                description: `Commission received - Order ${order.orderId}`,
+                orderId: order._id,
+                transactionType: 'commission',
             });
 
             // Platform always retains the delivery fee — credit immediately

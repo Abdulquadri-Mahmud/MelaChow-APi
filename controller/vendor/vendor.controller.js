@@ -909,3 +909,127 @@ export const updateVendorOrderStatus = async (req, res) => {
     });
   }
 };
+
+// ---------------------------------
+// VENDOR REMAKE REQUEST RESPONSE
+// ---------------------------------
+/**
+ * POST /vendors/orders/:vendorOrderId/remake-response
+ * Body: { decision: 'yes' | 'no' }
+ *
+ * Called when the vendor responds to a "Can you remake this order?" notification.
+ *
+ * YES → order pushed back to 'preparing'. Rider is asked to return for fresh food.
+ * NO  → admin notified immediately; dispute escalation timer cancelled.
+ */
+export const respondToRemakeRequest = async (req, res) => {
+  try {
+    if (!req.vendor) {
+      return res.status(401).json({ success: false, message: "Unauthorized." });
+    }
+
+    const { vendorOrderId } = req.params;
+    const { decision } = req.body;
+
+    if (!["yes", "no"].includes(String(decision).toLowerCase())) {
+      return res.status(400).json({
+        success: false,
+        message: "decision must be 'yes' or 'no'",
+      });
+    }
+
+    if (!vendorOrderId?.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({ success: false, message: "Invalid order ID format." });
+    }
+
+    // Load order
+    const vendorOrder = await VendorOrder.findOne({
+      _id: vendorOrderId,
+      restaurantId: req.vendor._id,
+    });
+
+    if (!vendorOrder) {
+      return res.status(404).json({ success: false, message: "Vendor order not found." });
+    }
+
+    const Order = (await import("../../model/order/Order.js")).default;
+    const userOrder = await Order.findById(vendorOrder.userOrderId);
+    if (!userOrder) {
+      return res.status(404).json({ success: false, message: "Master order not found." });
+    }
+
+    if (userOrder.orderStatus !== "disputed_delivery") {
+      return res.status(409).json({
+        success: false,
+        message: "This order is no longer in a disputed state. The window may have expired.",
+      });
+    }
+
+    const { sendNotification } = await import("../../services/notification.service.js");
+    const isYes = String(decision).toLowerCase() === "yes";
+
+    if (isYes) {
+      // ── YES: vendor will remake — reset order flow ─────────────────────────
+      const newStatus = "preparing";
+      vendorOrder.orderStatus = newStatus;
+      await vendorOrder.save();
+
+      userOrder.orderStatus = newStatus;
+      userOrder.statusLog = userOrder.statusLog || [];
+      userOrder.statusLog.push({
+        status: newStatus,
+        changedBy: `vendor:${req.vendor._id}`,
+        timestamp: new Date(),
+        note: "Vendor agreed to remake after disputed delivery",
+      });
+      await userOrder.save();
+
+      // Notify the currently assigned rider (if any) to return / await fresh food
+      try {
+        if (userOrder.riderId) {
+          await sendNotification(userOrder.riderId, "order_status_update", {
+            orderId: userOrder.orderId,
+            orderDatabaseId: userOrder._id.toString(),
+            newStatus,
+            message: "Good news! The vendor is remaking the food. Please wait for the new pickup notification.",
+          }, "rider");
+        }
+      } catch (notifyErr) {
+        // eslint-disable-next-line no-console
+        console.warn("Rider remake notify failed — non-fatal", notifyErr);
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: "Great! Order reset to 'preparing'. A fresh batch is being prepared.",
+      });
+
+    } else {
+      // ── NO: vendor cannot remake — escalate to admin ───────────────────────
+      // Keep status as disputed_delivery — admin must handle
+      try {
+        await sendNotification(null, "dispute_escalation_admin", {
+          orderId: userOrder.orderId,
+          orderDatabaseId: userOrder._id.toString(),
+          message: `Vendor declined to remake Order #${userOrder.orderId}. Admin resolution required.`,
+          vendorDecision: "declined",
+        }, "admin");
+      } catch (notifyErr) {
+        // eslint-disable-next-line no-console
+        console.warn("Admin dispute notify failed — non-fatal", notifyErr);
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: "Response recorded. Admin has been notified to resolve this order.",
+      });
+    }
+
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Failed to process remake response.",
+      error: error.message,
+    });
+  }
+};

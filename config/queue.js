@@ -7,6 +7,9 @@ export const QUEUE_NAMES = {
     ESCROW_RELEASE:     'escrow-release',
     EMAIL:              'email',
     ORDER_AUTO_CANCEL:  'order-auto-cancel',
+    BROADCAST_TIMEOUT:  'broadcast-timeout',
+    DELIVERY_WATCHDOG:  'delivery-watchdog',
+    DISPUTE_ESCALATION: 'dispute-escalation',
 };
 
 // ─── Queue Instances ──────────────────────────────────────────────────────────
@@ -48,11 +51,49 @@ export const orderAutoCancelQueue = new Queue(QUEUE_NAMES.ORDER_AUTO_CANCEL, {
     },
 });
 
+export const broadcastTimeoutQueue = new Queue(QUEUE_NAMES.BROADCAST_TIMEOUT, {
+    connection: bullmqRedisConnection.duplicate(),
+    defaultJobOptions: {
+        attempts: 2,
+        backoff: {
+            type: 'fixed',
+            delay: 3000,
+        },
+        removeOnComplete: true,
+        removeOnFail: false,
+    },
+});
+
+export const deliveryWatchdogQueue = new Queue(QUEUE_NAMES.DELIVERY_WATCHDOG, {
+    connection: bullmqRedisConnection.duplicate(),
+    defaultJobOptions: {
+        attempts: 2,
+        backoff: {
+            type: 'fixed',
+            delay: 30000,
+        },
+        removeOnComplete: true,
+        removeOnFail: false,
+    },
+});
+
+export const disputeEscalationQueue = new Queue(QUEUE_NAMES.DISPUTE_ESCALATION, {
+    connection: bullmqRedisConnection.duplicate(),
+    defaultJobOptions: {
+        attempts: 2,
+        removeOnComplete: true,
+        removeOnFail: false,
+    },
+});
+
 // ─── Queue Event Logging ──────────────────────────────────────────────────────
 const queues = [
-    { queue: escrowReleaseQueue,    name: QUEUE_NAMES.ESCROW_RELEASE },
-    { queue: emailQueue,            name: QUEUE_NAMES.EMAIL },
-    { queue: orderAutoCancelQueue,  name: QUEUE_NAMES.ORDER_AUTO_CANCEL },
+    { queue: escrowReleaseQueue,     name: QUEUE_NAMES.ESCROW_RELEASE },
+    { queue: emailQueue,             name: QUEUE_NAMES.EMAIL },
+    { queue: orderAutoCancelQueue,   name: QUEUE_NAMES.ORDER_AUTO_CANCEL },
+    { queue: broadcastTimeoutQueue,  name: QUEUE_NAMES.BROADCAST_TIMEOUT },
+    { queue: deliveryWatchdogQueue,  name: QUEUE_NAMES.DELIVERY_WATCHDOG },
+    { queue: disputeEscalationQueue, name: QUEUE_NAMES.DISPUTE_ESCALATION },
 ];
 
 queues.forEach(({ queue, name }) => {

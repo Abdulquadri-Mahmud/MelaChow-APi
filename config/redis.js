@@ -108,4 +108,6 @@ bullmqRedisConnection.on('connect', () => {
     console.log('✅ Redis [bullmq] connected');
 });
 
+export const redisConnection = bullmqRedisConnection;
+
 export default redisClient;

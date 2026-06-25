@@ -58,6 +58,7 @@ import { scheduledPayoutWorker, triggerScheduledPayouts } from "./jobs/scheduled
 import { expireStaleRiderAssignments } from "./jobs/riderAssignmentTimeout.job.js";
 import { retryPendingRiderAssignments } from "./jobs/riderAssignmentRetry.job.js";
 import cron from "node-cron";
+import { RIDER_SWEEP_CRON, VENDOR_SWEEP_CRON } from "./config/payouts.js";
 
 // Environment loaded via ./config/env.js import above
 
@@ -512,26 +513,26 @@ const startServer = async () => {
       logger.info('🔌 Socket.IO ready for connections');
     });
 
-    // ── Scheduled Payouts: riders 7:30 PM WAT, vendors 8:00 PM WAT ────────────
+    // ── Scheduled Payouts: riders 9:30 PM WAT (20:30 UTC), vendors 10:30 PM WAT (21:30 UTC) ─────
     cron.schedule(
-        "30 19 * * *",
+        RIDER_SWEEP_CRON,
         async () => {
-            console.log("🕢 [CRON] 7:30 PM WAT rider payout sweep triggered...");
+            console.log("🕢 [CRON] Rider payout sweep triggered (20:30 UTC / 9:30 PM WAT)...");
             await triggerScheduledPayouts("rider");
         },
-        { timezone: "Africa/Lagos" }
+        { scheduled: true }
     );
 
     cron.schedule(
-        "0 20 * * *",
+        VENDOR_SWEEP_CRON,
         async () => {
-            console.log("🕗 [CRON] 8:00 PM WAT vendor payout sweep triggered...");
+            console.log("🕗 [CRON] Vendor payout sweep triggered (21:30 UTC / 10:30 PM WAT)...");
             await triggerScheduledPayouts("vendor");
         },
-        { timezone: "Africa/Lagos" }
+        { scheduled: true }
     );
 
-    console.log("✅ Scheduled payout crons registered (riders 7:30 PM WAT, vendors 8:00 PM WAT daily)");
+    console.log(`✅ Scheduled payout crons registered (RIDER_SWEEP_CRON: ${RIDER_SWEEP_CRON}, VENDOR_SWEEP_CRON: ${VENDOR_SWEEP_CRON})`);
 
     cron.schedule(
         "* * * * *",

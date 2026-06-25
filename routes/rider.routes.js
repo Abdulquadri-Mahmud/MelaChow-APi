@@ -40,6 +40,10 @@ router.post("/riders/:riderId/request-delivery-otp", requireRiderAuth, riderCont
 router.post("/riders/:riderId/confirm-delivery", requireRiderAuth, riderController.confirmDelivery);
 router.get("/riders/:riderId/wallet", requireRiderAuth, riderController.getRiderWallet);
 
+// Rider delivery overhaul: termination and undeliverable reporting
+router.post("/riders/:riderId/orders/:orderId/terminate", requireRiderAuth, riderController.riderTerminateOrder);
+router.post("/riders/:riderId/orders/:orderId/undeliverable", requireRiderAuth, riderController.riderReportUndeliverable);
+
 // ── Rider payout routes ───────────────────────────────────────────────────────
 // Step 1: Resolve account name before saving (lets rider confirm before committing)
 router.get("/riders/:riderId/payout/resolve-account", requireRiderAuth, resolveAccountName);

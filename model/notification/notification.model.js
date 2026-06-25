@@ -46,19 +46,26 @@ const notificationSchema = new mongoose.Schema({
             'vendor_new_order',
             'vendor_order_cancelled',
             'vendor_rider_assigned',
-            'admin_order_ready',      // ✅ New Admin Type
-            'admin_order_delivered',  // ✅ New Admin Type
-            'rider_assignment_needed', // ✅ New Admin Type
+            'admin_order_ready',
+            'admin_order_delivered',
+            'rider_assignment_needed',
             'rider_assignment_accepted',
             'rider_assignment_timeout',
-            'vendor_review',           // ✅ New Admin Type
+            'vendor_review',
             'support_ticket',
-            'system',                  // ✅ New Admin Type
+            'system',
             'promo',
             'discount',
             'delivery_nearby',
             'account_update',
-            'general'
+            'general',
+            // ── Delivery System Overhaul types ────────────────────────────────
+            'order_remake_request',         // Vendor: remake window after disputed delivery
+            'rider_terminated_reassigning', // Customer: rider terminated, finding new one
+            'rider_timeout_reassigning',    // Customer: watchdog reset, finding new rider
+            'delivery_timed_out',           // Rider: watchdog timed out their delivery
+            'dispute_escalation_admin',     // Admin: 15-min remake window expired, needs review
+            'vendor_order_timeout',         // Vendor: auto-cancel timeout notification
         ],
         default: 'general',
     },

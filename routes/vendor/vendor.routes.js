@@ -12,7 +12,8 @@ import {
     restoreVendor,
     updateVendor,
     updateVendorTodayHours,
-    getVendorPayoutDetails
+    getVendorPayoutDetails,
+    respondToRemakeRequest,
 } from "../../controller/vendor/vendor.controller.js";
 import {
     updateVendorOrderStatus,
@@ -41,6 +42,7 @@ router.get("/orders", vendorAuth, getVendorOrders);         // Get vendor orders
 router.get("/orders/:vendorOrderId", vendorAuth, getVendorOrderById); // Get single vendor order
 router.patch("/orders/:vendorOrderId/update", vendorAuth, updateVendorOrderStatus); // Update order status
 router.patch("/orders/:vendorOrderId/complete", vendorAuth, completeVendorOrder); // Complete order status
+router.post("/orders/:vendorOrderId/remake-response", vendorAuth, respondToRemakeRequest); // Respond to disputed delivery remake window
 router.patch("/today-hours", vendorAuth, updateVendorTodayHours); // Update only today's opening hours
 router.patch("/update-vendor", vendorAuth, updateVendor);        // Update vendor
 router.delete("/delete-vendor", vendorAuth, deleteVendor);     // Soft delete

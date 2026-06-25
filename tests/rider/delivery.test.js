@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import Order from '../../model/order/Order.js';
 import Wallet from '../../model/wallet/wallet.mode.js';
+import RiderAssignment from '../../model/riderAssignment.model.js';
 import { sendDeliveryOTP, verifyDeliveryOTP } from '../../services/otp.service.js';
 import {
     createTestUser,
@@ -25,7 +26,8 @@ describe('OTP Delivery Confirmation', () => {
         await createTestWallet(admin._id, 'Admin', 10000);
         await createTestWallet(user._id, 'User', 0);
 
-        rider = await createTestRider(vendor._id);
+        // Admin-managed rider — vendor-managed flow is retired, so no vendorId here.
+        rider = await createTestRider(null);
         await createTestWallet(rider._id, 'Rider', 0);
 
         order = await createTestOrder(user._id, vendor._id, {
@@ -33,6 +35,19 @@ describe('OTP Delivery Confirmation', () => {
             orderStatus: 'out_for_delivery',
             riderId: rider._id,
         });
+
+        // Pre-warm the RiderAssignment collection so MongoDB transactions
+        // don't fail with "catalog changes" on first write inside a session.
+        // Transactions cannot implicitly create collections in MongoDB.
+        const seed = await RiderAssignment.create({
+            riderId: rider._id,
+            orderId: order._id,
+            vendorOrderId: order._id,
+            vendorId: vendor._id,
+            status: 'assigned',
+            expiresAt: new Date(Date.now() + 300_000),
+        });
+        await RiderAssignment.deleteOne({ _id: seed._id });
     });
 
     it('should send OTP and return dev method in non-production', async () => {
@@ -77,9 +92,11 @@ describe('OTP Delivery Confirmation', () => {
         await verifyDeliveryOTP(order._id.toString(), '123456');
 
         const { markDelivered } = await import('../../services/rider.service.js');
-        const deliveredOrder = await markDelivered(order._id.toString(), rider._id.toString());
+        const result = await markDelivered(order._id.toString(), rider._id.toString());
 
-        expect(deliveredOrder.orderStatus).toBe('delivered');
+        // markDelivered returns { order, payoutCredited }
+        expect(result.order.orderStatus).toBe('delivered');
+        expect(result.payoutCredited).toBe(true);
 
         // Rider freed up
         const updatedRider = await (await import('../../model/rider.model.js')).default.findById(rider._id);

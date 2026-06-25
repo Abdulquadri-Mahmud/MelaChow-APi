@@ -3,6 +3,9 @@ import { bullmqRedisConnection } from '../config/redis.js';
 import { QUEUE_NAMES } from '../config/queue.js';
 import logger from '../config/logger.js';
 import { refundOrderToWallet } from '../services/refund.service.js';
+import { broadcastTimeoutWorker } from './broadcastTimeout.worker.js';
+import './deliveryWatchdog.worker.js';
+import './disputeEscalation.worker.js';
 
 const escrowReleaseWorker = new Worker(
     QUEUE_NAMES.ESCROW_RELEASE,
@@ -123,7 +126,7 @@ const orderAutoCancelWorker = new Worker(
     }
 );
 
-[escrowReleaseWorker, emailWorker, orderAutoCancelWorker].forEach(worker => {
+[escrowReleaseWorker, emailWorker, orderAutoCancelWorker, broadcastTimeoutWorker].forEach(worker => {
     worker.on('failed', (job, err) => {
         logger.error(
             { jobId: job?.id, queue: worker.name, error: err.message, attempts: job?.attemptsMade },
@@ -138,4 +141,4 @@ const orderAutoCancelWorker = new Worker(
 
 logger.info('BullMQ workers initialized');
 
-export { escrowReleaseWorker, emailWorker, orderAutoCancelWorker };
+export { escrowReleaseWorker, emailWorker, orderAutoCancelWorker, broadcastTimeoutWorker };
