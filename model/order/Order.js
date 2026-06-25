@@ -284,6 +284,7 @@ const orderSchema = new mongoose.Schema(
         "cancelled",
         "failed",
         "refunded",
+        "disputed_delivery",
       ],
       default: "pending",
     },

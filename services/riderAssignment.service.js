@@ -5,8 +5,11 @@ import Vendor from "../model/vendor/vendor.model.js";
 import Rider from "../model/rider.model.js";
 import RiderAssignment from "../model/riderAssignment.model.js";
 import { getPlatformConfig } from "./platformConfig.service.js";
+import OrderBroadcastQueue from "../model/OrderBroadcastQueue.js";
+import { RIDER_FIXED_PAYOUT, BROADCAST_TTL_SECONDS } from "../config/payouts.js";
+import logger from "../config/logger.js";
 
-const AUTOMATIC_ASSIGNMENT_EXPIRES_AT = new Date("9999-12-31T23:59:59.999Z");
+const getBroadcastExpiresAt = () => new Date(Date.now() + BROADCAST_TTL_SECONDS * 1_000);
 
 export const expireStaleRiderAssignmentOffers = async (riderIds = []) => {
     const ids = [...new Set(riderIds.map((id) => id?.toString()).filter(Boolean))];
@@ -115,23 +118,52 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
 
     await expireStaleRiderAssignmentOffers(candidateRiders.map((rider) => rider._id));
 
-    // ✅ FIX: Exclude any rider who has EVER been offered this specific vendor order.
-    // This prevents re-broadcasting a specific vendor order to a rider who already rejected it or timed out,
-    // but still allows other vendor orders under the same master order to be broadcasted to them.
-    const pastAssignments = await RiderAssignment.find({
-        vendorOrderId: vendorOrder._id
+    // Only exclude riders who explicitly rejected this offer.
+    // Riders whose previous assignment timed out (they were busy delivering)
+    // are eligible to receive the offer again when they free up.
+    const pastRejects = await RiderAssignment.find({
+        vendorOrderId: vendorOrder._id,
+        status: "rejected",
     }).select("riderId");
-    const alreadyHandledIds = new Set(pastAssignments.map(a => a.riderId.toString()));
+    const alreadyHandledIds = new Set(pastRejects.map(a => a.riderId.toString()));
 
     const riders = candidateRiders.filter(
         (rider) => !alreadyHandledIds.has(rider._id.toString())
     );
 
     if (!riders.length) {
+        // All riders busy or none available — enqueue for FIFO dispatch when a rider frees up.
+        try {
+            await OrderBroadcastQueue.findOneAndUpdate(
+                { vendorOrderId: vendorOrder._id },
+                {
+                    $setOnInsert: {
+                        orderId:      masterOrder._id,
+                        vendorOrderId: vendorOrder._id,
+                        cityId:       cityId  || null,
+                        stateId:      stateId || null,
+                        queuedAt:     new Date(),
+                    },
+                    $set:  { status: "waiting" },
+                    $inc:  { attemptCount: 1 },
+                },
+                { upsert: true, new: true }
+            );
+            logger.info({ vendorOrderId: vendorOrder._id }, "📥 No riders available — queued in OrderBroadcastQueue");
+        } catch (qErr) {
+            logger.error({ error: qErr.message }, "❌ OrderBroadcastQueue upsert failed");
+        }
         return { success: false, reason: "no_new_riders_to_broadcast", riderCount: 0 };
     }
 
-    const assignmentExpiresAt = AUTOMATIC_ASSIGNMENT_EXPIRES_AT;
+    // Mark order as broadcasting in queue (if it was waiting)
+    await OrderBroadcastQueue.findOneAndUpdate(
+        { vendorOrderId: vendorOrder._id, status: "waiting" },
+        { $set: { status: "broadcasting", lastAttemptAt: new Date() } }
+    ).catch(() => {}); // non-fatal
+
+    // Fresh expiry calculated at broadcast time so every offer has exactly 90 s
+    const assignmentExpiresAt = getBroadcastExpiresAt();
     const riderIds = riders.map((rider) => rider._id);
     const session = await mongoose.startSession();
     session.startTransaction();
@@ -185,8 +217,12 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
         );
 
         if (orderUpdate.modifiedCount !== 1) {
-            // It's okay if riderUpdate.modifiedCount is 0 (e.g. they were already pending_assignment)
-            // But the order must be successfully transitioned or remain in assigned state
+            // Order could not be transitioned: already assigned, cancelled, or wrong status.
+            // Abort the entire broadcast — do not create ghost RiderAssignment records.
+            throw new Error(
+                `Order ${masterOrder._id} could not be transitioned to rider_assigned ` +
+                `(modifiedCount=${orderUpdate.modifiedCount}). Concurrent modification or wrong status.`
+            );
         }
 
         await RiderAssignment.create(riderIds.map((riderId) => ({
@@ -214,8 +250,28 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
         session.endSession();
     }
 
+    // ── Queue broadcast timeout job ─────────────────────────────────────
+    try {
+        const { broadcastTimeoutQueue } = await import("../config/queue.js");
+        await broadcastTimeoutQueue.add(
+            "broadcast-no-acceptance",
+            { vendorOrderId: vendorOrder._id.toString(), orderId: masterOrder._id.toString() },
+            {
+                jobId:            `broadcast-timeout:${vendorOrder._id}`,
+                delay:            (BROADCAST_TTL_SECONDS + 5) * 1_000,
+                attempts:         3,
+                backoff:          { type: "fixed", delay: BROADCAST_TTL_SECONDS * 1_000 },
+                removeOnComplete: true,
+                removeOnFail:     false,
+            }
+        );
+    } catch (queueErr) {
+        logger.error({ vendorOrderId: vendorOrder._id, error: queueErr.message },
+            "⚠️ broadcastTimeoutQueue add failed (non-fatal)");
+    }
+
     const platformConfig = await getPlatformConfig();
-    const riderPayout = platformConfig.riderFixedPayout || 600;
+    const riderPayout = platformConfig.riderFixedPayout ?? RIDER_FIXED_PAYOUT;
 
     try {
         const { emitToRider, emitToAdmin } = await import("../socket/socketServer.js");
@@ -278,11 +334,35 @@ export const catchupRiderWithPendingOrders = async (riderId) => {
             return { success: false, reason: "rider_not_eligible" };
         }
 
-        // Find all orders that are waiting for a rider
+        // 1. Dispatch queued orders for this rider's city (FIFO, one at a time)
+        const queuedOrder = await OrderBroadcastQueue.findOneAndUpdate(
+            { status: "waiting", cityId: rider.cityId },
+            { $set: { status: "broadcasting", lastAttemptAt: new Date() } },
+            { sort: { queuedAt: 1 }, new: true }
+        );
+
+        if (queuedOrder) {
+            logger.info({ vendorOrderId: queuedOrder.vendorOrderId, riderId },
+                "🔄 Dispatching queued order to newly available rider");
+            const result = await offerOrderToAvailableRiders({
+                vendorOrderId: queuedOrder.vendorOrderId,
+                assignedBy: "system:catchup_queue",
+            });
+            if (!result.success) {
+                // Re-mark as waiting if broadcast failed
+                await OrderBroadcastQueue.findByIdAndUpdate(queuedOrder._id,
+                    { $set: { status: "waiting" } });
+            }
+            return { success: true, broadcasted: result.success ? 1 : 0 };
+        }
+
+        // 2. Fallback: standard pending order scan for this city only
         const pendingOrders = await VendorOrder.find({
             orderStatus: { $in: ["ready_for_pickup", "rider_assigned"] },
-            deletedAt: null
-        }).limit(10);
+            cityId:      rider.cityId,
+            stateId:     rider.stateId,
+            deletedAt:   null,
+        }).limit(5);
 
         if (!pendingOrders.length) return { success: true, broadcasted: 0 };
 

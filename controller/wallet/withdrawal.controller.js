@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import Vendor from "../../model/vendor/vendor.model.js";
 import Wallet from "../../model/wallet/wallet.mode.js";
 import Withdrawal from "../../model/wallet/Withdrawal.model.js";
+import RiderWithdrawal from "../../model/wallet/RiderWithdrawal.model.js";
 import { usePostgresWalletReads } from "../../services/postgres/compat.js";
 import { walletRepository } from "../../services/postgres/wallet.repository.js";
 
@@ -205,10 +206,19 @@ export const getWithdrawalHistory = async (req, res) => {
   }
 };
 
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 // PATCH /api/admin/withdrawals/:withdrawalId/force-fail
 export const forceFailWithdrawal = async (req, res) => {
   try {
-    const withdrawal = await Withdrawal.findById(req.params.withdrawalId);
+    const { withdrawalId } = req.params;
+    let withdrawal = await Withdrawal.findById(withdrawalId);
+    let type = "vendor";
+    if (!withdrawal) {
+      withdrawal = await RiderWithdrawal.findById(withdrawalId);
+      type = "rider";
+    }
+
     if (!withdrawal) return res.status(404).json({ message: "Withdrawal not found" });
     if (!["pending", "processing"].includes(withdrawal.status)) {
       return res.status(400).json({ message: `Cannot force-fail a withdrawal with status: ${withdrawal.status}` });
@@ -222,7 +232,7 @@ export const forceFailWithdrawal = async (req, res) => {
         type: "credit",
         amount: withdrawal.requestedAmount,
         description: `Admin override: withdrawal ${withdrawal.paystackReference} force-failed. Funds restored.`,
-        transactionType: 'refund',
+        transactionType: "refund",
       });
       await wallet.save();
     }
@@ -236,3 +246,309 @@ export const forceFailWithdrawal = async (req, res) => {
     return res.status(500).json({ message: err.message });
   }
 };
+
+// GET /api/admin/finance/withdrawals
+export const getAdminWithdrawals = async (req, res) => {
+  try {
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.max(parseInt(req.query.limit, 10) || 50, 1);
+    const skip = (page - 1) * limit;
+    const { status, type, search, startDate, endDate } = req.query;
+
+    const baseFilter = {};
+
+    // Date range filter
+    if (startDate || endDate) {
+      baseFilter.createdAt = {};
+      if (startDate) baseFilter.createdAt.$gte = new Date(startDate);
+      if (endDate) {
+        const end = new Date(endDate);
+        if (!isNaN(end.getTime())) {
+          end.setHours(23, 59, 59, 999);
+          baseFilter.createdAt.$lte = end;
+        }
+      }
+    }
+
+    // Status filter
+    if (status && status !== "all") {
+      baseFilter.status = status;
+    }
+
+    // Search filter
+    if (search && search.trim() !== "") {
+      const regex = new RegExp(escapeRegex(search.trim()), "i");
+      baseFilter.$or = [
+        { accountName: regex },
+        { accountNumber: regex },
+        { bankName: regex },
+        { paystackReference: regex },
+        { failureReason: regex },
+      ];
+    }
+
+    let fetchVendors = true;
+    let fetchRiders = true;
+
+    if (type === "vendor") {
+      fetchRiders = false;
+    } else if (type === "rider") {
+      fetchVendors = false;
+    }
+
+    const queries = [];
+    const maxItems = page * limit;
+
+    if (fetchVendors) {
+      queries.push(
+        Withdrawal.find(baseFilter)
+          .sort({ createdAt: -1 })
+          .limit(maxItems)
+          .populate("vendorId", "storeName email phone")
+          .lean()
+          .then(rows => rows.map(r => ({
+            ...r,
+            withdrawalType: "vendor",
+            recipientName: r.vendorId?.storeName || r.accountName || "Unknown Merchant",
+            recipientPhone: r.vendorId?.phone || "",
+            recipientEmail: r.vendorId?.email || "",
+          })))
+      );
+    }
+    if (fetchRiders) {
+      queries.push(
+        RiderWithdrawal.find(baseFilter)
+          .sort({ createdAt: -1 })
+          .limit(maxItems)
+          .populate("riderId", "name email phone")
+          .lean()
+          .then(rows => rows.map(r => ({
+            ...r,
+            withdrawalType: "rider",
+            recipientName: r.riderId?.name || r.accountName || "Unknown Rider",
+            recipientPhone: r.riderId?.phone || "",
+            recipientEmail: r.riderId?.email || "",
+          })))
+      );
+    }
+
+    const results = await Promise.all(queries);
+    const combined = results.flat().sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+
+    // Get total counts
+    const countQueries = [];
+    if (fetchVendors) countQueries.push(Withdrawal.countDocuments(baseFilter));
+    if (fetchRiders) countQueries.push(RiderWithdrawal.countDocuments(baseFilter));
+    const counts = await Promise.all(countQueries);
+    const total = counts.reduce((acc, count) => acc + count, 0);
+
+    const paginated = combined.slice(skip, skip + limit);
+
+    return res.json({
+      success: true,
+      withdrawals: paginated,
+      pagination: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      }
+    });
+  } catch (err) {
+    console.error("getAdminWithdrawals error:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// PATCH /api/admin/finance/withdrawals/:id/approve
+export const approvePendingWithdrawal = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Check Withdrawal
+    let withdrawal = await Withdrawal.findById(id);
+    let type = "vendor";
+    if (!withdrawal) {
+      withdrawal = await RiderWithdrawal.findById(id);
+      type = "rider";
+    }
+
+    if (!withdrawal) {
+      return res.status(404).json({ success: false, message: "Withdrawal not found" });
+    }
+
+    if (withdrawal.status !== "pending") {
+      return res.status(400).json({
+        success: false,
+        message: `Only pending withdrawals can be approved. Current status: ${withdrawal.status}`,
+      });
+    }
+
+    // Call Paystack Transfer API
+    try {
+      const paystackResponse = await axios.post(
+        "https://api.paystack.co/transfer",
+        {
+          source: "balance",
+          amount: withdrawal.netAmount * 100, // Convert to kobo
+          recipient: withdrawal.recipientCode,
+          reference: withdrawal.paystackReference,
+          reason: `MelaChow ${type} payout approved — ${withdrawal.accountName}`,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      const transferCode = paystackResponse.data?.data?.transfer_code;
+
+      withdrawal.status = "processing";
+      withdrawal.paystackTransferCode = transferCode || null;
+      await withdrawal.save();
+
+      return res.json({
+        success: true,
+        message: "Withdrawal approved and sent to Paystack",
+        withdrawal,
+      });
+    } catch (paystackError) {
+      // ROLLBACK: reverse wallet debit
+      const wallet = await Wallet.findById(withdrawal.walletId);
+      if (wallet) {
+        wallet.balance = Number((wallet.balance + withdrawal.requestedAmount).toFixed(2));
+        wallet.totalWithdrawn = Number((wallet.totalWithdrawn - withdrawal.requestedAmount).toFixed(2));
+        wallet.transactions = wallet.transactions.filter(
+          t => !t.description?.includes(withdrawal.paystackReference)
+        );
+        await wallet.save();
+      }
+
+      // Mark withdrawal as failed
+      withdrawal.status = "failed";
+      withdrawal.failureReason = paystackError.response?.data?.message || "Paystack API error";
+      await withdrawal.save();
+
+      return res.status(502).json({
+        success: false,
+        message: `Paystack failed: ${withdrawal.failureReason}. Funds have been restored.`,
+      });
+    }
+  } catch (err) {
+    console.error("approvePendingWithdrawal error:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+// POST /api/admin/finance/withdrawals/:id/retry
+export const retryWithdrawal = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Check Withdrawal
+    let withdrawal = await Withdrawal.findById(id);
+    let type = "vendor";
+    if (!withdrawal) {
+      withdrawal = await RiderWithdrawal.findById(id);
+      type = "rider";
+    }
+
+    if (!withdrawal) {
+      return res.status(404).json({ success: false, message: "Withdrawal not found" });
+    }
+
+    if (withdrawal.status !== "failed") {
+      return res.status(400).json({
+        success: false,
+        message: `Only failed withdrawals can be retried. Current status: ${withdrawal.status}`,
+      });
+    }
+
+    // Verify wallet has enough balance to withdraw the requested amount
+    const wallet = await Wallet.findById(withdrawal.walletId);
+    if (!wallet) {
+      return res.status(404).json({ success: false, message: "Wallet not found" });
+    }
+
+    if (wallet.balance < withdrawal.requestedAmount) {
+      return res.status(400).json({
+        success: false,
+        message: `Insufficient wallet balance to retry. Available: ₦${wallet.balance.toLocaleString()}, Required: ₦${withdrawal.requestedAmount.toLocaleString()}`,
+      });
+    }
+
+    // Generate a new paystack reference to avoid duplicate reference error on Paystack
+    const newReference = `WD_RETRY_${randomUUID().replace(/-/g, "").toUpperCase()}`;
+
+    // Debit wallet balance
+    wallet.balance = Number((wallet.balance - withdrawal.requestedAmount).toFixed(2));
+    wallet.totalWithdrawn = Number((wallet.totalWithdrawn + withdrawal.requestedAmount).toFixed(2));
+    wallet.transactions.push({
+      type: "debit",
+      amount: withdrawal.requestedAmount,
+      description: `Withdrawal retry initiated — Ref: ${newReference}`,
+      transactionType: "withdrawal",
+    });
+    await wallet.save();
+
+    // Update withdrawal document before calling API
+    withdrawal.paystackReference = newReference;
+    withdrawal.status = "processing";
+    withdrawal.failureReason = null;
+    await withdrawal.save();
+
+    // Call Paystack Transfer API
+    try {
+      const paystackResponse = await axios.post(
+        "https://api.paystack.co/transfer",
+        {
+          source: "balance",
+          amount: withdrawal.netAmount * 100, // Convert to kobo
+          recipient: withdrawal.recipientCode,
+          reference: newReference,
+          reason: `MelaChow ${type} payout retry — ${withdrawal.accountName}`,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      const transferCode = paystackResponse.data?.data?.transfer_code;
+      withdrawal.paystackTransferCode = transferCode || null;
+      await withdrawal.save();
+
+      return res.json({
+        success: true,
+        message: "Withdrawal retried and sent to Paystack",
+        withdrawal,
+      });
+    } catch (paystackError) {
+      // ROLLBACK: reverse wallet debit
+      wallet.balance = Number((wallet.balance + withdrawal.requestedAmount).toFixed(2));
+      wallet.totalWithdrawn = Number((wallet.totalWithdrawn - withdrawal.requestedAmount).toFixed(2));
+      wallet.transactions = wallet.transactions.filter(
+        t => !t.description?.includes(newReference)
+      );
+      await wallet.save();
+
+      // Mark withdrawal as failed again
+      withdrawal.status = "failed";
+      withdrawal.failureReason = paystackError.response?.data?.message || "Paystack API error during retry";
+      await withdrawal.save();
+
+      return res.status(502).json({
+        success: false,
+        message: `Paystack failed: ${withdrawal.failureReason}. Funds have been restored.`,
+      });
+    }
+  } catch (err) {
+    console.error("retryWithdrawal error:", err);
+    return res.status(500).json({ success: false, message: err.message });
+  }
+};
+

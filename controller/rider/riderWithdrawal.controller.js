@@ -261,15 +261,9 @@ export const initiateRiderWithdrawal = async (req, res) => {
             }
         }
 
-        // STEP 5 — Calculate Paystack transfer fee (same tiers as vendor)
-        let transferFee = 50;
-        if (amount <= 5000) transferFee = 10;
-        else if (amount <= 50000) transferFee = 25;
-
-        const netAmount = amount - transferFee;
-        if (netAmount <= 0) {
-            return res.status(400).json({ success: false, message: "Amount too small after transfer fees" });
-        }
+        // STEP 5 — Rider manual withdrawal: platform absorbs the Paystack transfer fee; rider receives full amount.
+        const transferFee = 0;
+        const netAmount = amount;
 
         // STEP 6 — Generate idempotency reference
         const paystackReference = `RWD_${randomUUID().replace(/-/g, "").toUpperCase()}`;

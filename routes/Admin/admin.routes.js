@@ -16,7 +16,12 @@ import { getVendorMetrics } from "../../controller/Admin/vendorMetrics.controlle
 import { getUserMetrics } from "../../controller/Admin/userMetrics.controller.js";
 import { getCategoryMetrics } from "../../controller/Admin/categoryMetrics.controller.js";
 import { getLocationMetrics } from "../../controller/Admin/locationMetrics.controller.js";
-import { forceFailWithdrawal } from "../../controller/wallet/withdrawal.controller.js";
+import {
+    forceFailWithdrawal,
+    getAdminWithdrawals,
+    retryWithdrawal,
+    approvePendingWithdrawal,
+} from "../../controller/wallet/withdrawal.controller.js";
 import { getPayoutHistory, getAdminWalletBreakdown } from "../../controller/finance/adminFinanceSummary.controller.js";
 import {
     getAdminPlatformConfig,
@@ -103,7 +108,10 @@ router.get("/vendors/performance", adminAuth, getVendorPerformance);
 // GET /api/vendors/foods?vendorId=123
 router.get("/vendors/foods", adminAuth, getVendorFoods);
 
-// Force fail stuck withdrawal
+// Withdrawal/Payout Oversight Routes
+router.get("/finance/withdrawals", adminAuth, getAdminWithdrawals);
+router.post("/finance/withdrawals/:id/retry", adminAuth, retryWithdrawal);
+router.patch("/finance/withdrawals/:id/approve", adminAuth, approvePendingWithdrawal);
 router.patch("/withdrawals/:withdrawalId/force-fail", adminAuth, forceFailWithdrawal);
 
 // Finance Summary Routes

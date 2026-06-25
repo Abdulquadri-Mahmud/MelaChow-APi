@@ -29,6 +29,7 @@ const mockUser = {
     email: "test@melachow.com",
     firstname: "Test",
     lastname: "User",
+    isActive: true,
 };
 
 const makeReq = (overrides = {}) => ({

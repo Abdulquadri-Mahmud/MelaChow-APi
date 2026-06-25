@@ -98,6 +98,10 @@ const riderSchema = new mongoose.Schema(
         ratingCount: { type: Number, default: 0 },
         notes: { type: String },
         metadata: { type: Object },
+        isSuspended: { type: Boolean, default: false },
+        suspendedUntil: { type: Date, default: null },
+        terminationStrikes: { type: Number, default: 0 },
+        lastTerminationAt: { type: Date, default: null },
         role: { type: String, default: "rider" },
 
         // ── Bank account for rider payouts ────────────────────────────────────

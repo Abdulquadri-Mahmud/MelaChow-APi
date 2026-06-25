@@ -90,9 +90,15 @@ export const OrderV1Service = {
 
             // 4. Create Vendor Orders
             for (const vData of vendorOrdersData) {
+                const vendor = await Vendor.findById(vData.restaurantId).select("cityId stateId").session(session);
+                const cityId = delivery_address.cityId || vendor?.cityId || null;
+                const stateId = delivery_address.stateId || vendor?.stateId || null;
+
                 await VendorOrder.create([{
                     restaurantId: vData.restaurantId,
                     userOrderId: masterOrder[0]._id,
+                    cityId,
+                    stateId,
                     items: vData.items,
                     vendorSubtotal: vData.vendorSubtotal,
                     commission: vData.commission,

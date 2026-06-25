@@ -11,10 +11,13 @@ import City from "../model/location/City.js";
 import mongoose from "mongoose";
 import User from "../model/user.model.js"; // Ensure User model is registered for population
 import { releaseEscrowToVendor } from '../controller/order/createOrderV2.controller.js';
-import { escrowReleaseQueue } from '../config/queue.js';
+import { escrowReleaseQueue, deliveryWatchdogQueue, disputeEscalationQueue } from '../config/queue.js';
 import logger from '../config/logger.js';
 import { createTransferRecipient } from "./paystackTransfer.service.js";
 import { getPlatformConfig } from './platformConfig.service.js';
+import { RIDER_FIXED_PAYOUT } from '../config/payouts.js';
+import OrderTermination from '../model/OrderTermination.js';
+import { offerOrderToAvailableRiders } from './riderAssignment.service.js';
 
 const throwClientError = (msg) => {
     const err = new Error(msg);
@@ -243,7 +246,7 @@ export const getActiveOrder = async (riderId) => {
 
         // Dynamic platform rider fee
         const platformConfig = await getPlatformConfig();
-        orderObj.deliveryFee = platformConfig.riderFixedPayout || 600;
+        orderObj.deliveryFee = platformConfig.riderFixedPayout ?? RIDER_FIXED_PAYOUT;
 
         return orderObj;
     } catch (error) {
@@ -307,8 +310,28 @@ export const getPendingOffers = async (riderId) => {
 
             // DYNAMIC PLATFORM RIDER FEE:
             const platformConfig = await getPlatformConfig();
-            const platformRiderFee = platformConfig.riderFixedPayout || 600;
+            const platformRiderFee = platformConfig.riderFixedPayout ?? RIDER_FIXED_PAYOUT;
             orderObj.deliveryFee = platformRiderFee;
+
+            // Check for termination record on this order
+            const termination = await OrderTermination.findOne({
+                orderId:  order._id,
+                status:   "pending",
+            }).sort({ terminatedAt: -1 }).lean();
+
+            if (termination) {
+                orderObj.previousRider = {
+                    name:         termination.previousRiderName,
+                    phone:        termination.previousRiderPhone,
+                    foodPickedUp: termination.foodPickedUp,
+                    terminatedAt: termination.terminatedAt,
+                    reason:       termination.reason,
+                };
+                orderObj.hasPreviousRider = true;
+            } else {
+                orderObj.hasPreviousRider = false;
+                orderObj.previousRider    = null;
+            }
 
             offers.push(orderObj);
         }
@@ -336,8 +359,8 @@ export const getRiderOrderDetails = async (riderId, orderId) => {
         
         // Dynamic platform rider fee
         const platformConfig = await getPlatformConfig();
-        orderObj.riderEarnings = platformConfig.riderFixedPayout || 600;
-        orderObj.deliveryFee = platformConfig.riderFixedPayout || 600;
+        orderObj.riderEarnings = platformConfig.riderFixedPayout ?? RIDER_FIXED_PAYOUT;
+        orderObj.deliveryFee = platformConfig.riderFixedPayout ?? RIDER_FIXED_PAYOUT;
 
         const restaurantId = vendorOrder ? vendorOrder.restaurantId : (order.items?.[0]?.restaurantId || order.vendorId);
         if (restaurantId) {
@@ -414,10 +437,11 @@ export const assignRiderToOrder = async (orderId, riderId, vendorId) => {
         // 🔔 Send Rider Notification
         try {
             const { sendRiderNotification } = await import('../services/notification.service.js');
+            const config = await getPlatformConfig();
             await sendRiderNotification(riderId, order._id, "order_assigned", {
                 restaurantName: order.storeName || "a restaurant",
                 orderDatabaseId: order._id,
-                payout: 600
+                payout: config.riderFixedPayout ?? RIDER_FIXED_PAYOUT,
             });
         } catch (e) { console.error('⚠️ Notification error (rider):', e.message); }
 
@@ -434,53 +458,65 @@ export const assignRiderToOrder = async (orderId, riderId, vendorId) => {
  * Mark order as picked up by rider
  */
 export const markPickedUp = async (orderId, riderId) => {
-    let vendorOrder = await VendorOrder.findById(orderId).populate("userOrderId");
-    let order = null;
-    if (vendorOrder) {
-        order = vendorOrder.userOrderId;
-    } else {
-        order = await Order.findById(orderId);
-    }
-    if (!order) throw new Error("Order not found");
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    try {
+        let vendorOrder = await VendorOrder.findById(orderId).populate("userOrderId").session(session);
+        let order = null;
+        if (vendorOrder) {
+            order = vendorOrder.userOrderId;
+        } else {
+            order = await Order.findById(orderId).session(session);
+        }
+        if (!order) throw new Error("Order not found");
 
-    const isAssigned = (order.riderId?.toString() === riderId) || (vendorOrder && vendorOrder.riderId?.toString() === riderId);
-    if (!isAssigned) throw new Error("Rider not assigned to this order");
+        const isAssigned = (order.riderId?.toString() === riderId) ||
+                           (vendorOrder && vendorOrder.riderId?.toString() === riderId);
+        if (!isAssigned) throw new Error("Rider not assigned to this order");
 
-    const rider = await Rider.findById(riderId);
-    if (!rider) throw new Error("Rider not found");
+        const rider = await Rider.findById(riderId).session(session);
+        if (!rider) throw new Error("Rider not found");
 
-    order.orderStatus = "out_for_delivery";
-    order.riderAssignment = {
-        ...(order.riderAssignment || {}),
-        status: "picked_up",
-        lastReason: ""
-    };
-    order.statusLog.push({
-        status: "out_for_delivery",
-        changedBy: "rider",
-        timestamp: new Date()
-    });
-    await order.save();
+        order.orderStatus = "out_for_delivery";
+        order.riderAssignment = {
+            ...(order.riderAssignment || {}),
+            status: "picked_up",
+            lastReason: "",
+        };
+        order.statusLog.push({ status: "out_for_delivery", changedBy: "rider", timestamp: new Date() });
+        await order.save({ session });
 
-    if (vendorOrder) {
-        vendorOrder.orderStatus = "out_for_delivery";
-        await vendorOrder.save();
-    } else {
-        await VendorOrder.updateMany(
-            { userOrderId: order._id },
-            { $set: { orderStatus: "out_for_delivery" } }
+        if (vendorOrder) {
+            vendorOrder.orderStatus = "out_for_delivery";
+            await vendorOrder.save({ session });
+        } else {
+            await VendorOrder.updateMany(
+                { userOrderId: order._id },
+                { $set: { orderStatus: "out_for_delivery" } },
+                { session }
+            );
+        }
+
+        await Rider.findByIdAndUpdate(
+            riderId,
+            { status: "on_delivery" },
+            { session }
         );
+
+        await RiderAssignment.findOneAndUpdate(
+            { riderId, orderId: order._id, status: { $in: ["assigned", "accepted"] } },
+            { $set: { status: "picked_up", respondedAt: new Date() } },
+            { session, sort: { createdAt: -1 } }
+        );
+
+        await session.commitTransaction();
+        return order;
+    } catch (error) {
+        if (session.inTransaction()) await session.abortTransaction();
+        throw error;
+    } finally {
+        session.endSession();
     }
-
-    // Move rider to on_delivery
-    await Rider.findByIdAndUpdate(riderId, { status: "on_delivery" });
-    await RiderAssignment.findOneAndUpdate(
-        { riderId, orderId: order._id, status: { $in: ["assigned", "accepted"] } },
-        { $set: { status: "picked_up", respondedAt: new Date() } },
-        { sort: { createdAt: -1 } }
-    );
-
-    return order;
 };
 
 /**
@@ -491,8 +527,7 @@ export const markDelivered = async (orderId, riderId) => {
     session.startTransaction();
 
     let completedOrder = null;
-    let pendingRiderPayout = null; 
-    let payoutActuallyCredited = false; 
+    let payoutActuallyCredited = false;
 
     try {
         let vendorOrder = await VendorOrder.findById(orderId).populate("userOrderId").session(session);
@@ -534,51 +569,111 @@ export const markDelivered = async (orderId, riderId) => {
             );
         }
 
-        const riderVendorId = rider.vendorId?.toString();
         const isAdminRider = rider.managedBy === 'admin';
 
-        let deliveryFee = 0;
-        if (isAdminRider) {
-            const platformConfig = await getPlatformConfig();
-            deliveryFee = platformConfig.riderFixedPayout || 600;
-        } else {
-            const deliveryFeeEntry = order.vendorDeliveryFees?.find(
-                v => v.restaurantId?.toString() === riderVendorId
+        // Vendor-managed delivery is retired. Any non-admin rider reaching
+        // this point is a data integrity error — surface it immediately
+        // rather than silently paying ₦0.
+        if (!isAdminRider) {
+            logger.error(
+                { riderId, orderId: order._id, managedBy: rider.managedBy },
+                '❌ Non-admin rider hit delivery completion — vendor-managed flow is retired'
             );
-            deliveryFee = Number(deliveryFeeEntry?.deliveryFee || 0);
-            if (deliveryFee === 0) {
-                const vendorPromo = order.vendorDeliveryPromo;
-                if (vendorPromo?.applied && String(vendorPromo.vendorId) === riderVendorId) {
-                    deliveryFee = vendorPromo.originalDeliveryFee;
-                } else if (order.freeDeliveryPromo?.eligible) {
-                    deliveryFee = order.freeDeliveryPromo.originalDeliveryFee;
-                }
-            }
+            throw new Error('Delivery flow error: vendor-managed riders are not supported. Contact admin.');
         }
 
+        const platformConfig = await getPlatformConfig();
+        const deliveryFee = platformConfig.riderFixedPayout ?? RIDER_FIXED_PAYOUT;
+
         let riderEarningsToRecord = 0;
+        let riderPayout = 0;
+        let platformSpread = 0;
 
         if (deliveryFee > 0) {
-            const platformConfig = await getPlatformConfig();
-            const RIDER_FIXED_PAYOUT = platformConfig.riderFixedPayout || 600;
-
-            const riderPayout = Math.min(RIDER_FIXED_PAYOUT, deliveryFee);
-            const platformSpread = Number((deliveryFee - riderPayout).toFixed(2));
-
-            pendingRiderPayout = {
-                riderId,
-                riderPayout,
-                platformSpread,
-                orderId: order.orderId,
-                orderDbId: order._id,
-                RIDER_FIXED_PAYOUT,
-            };
-
+            const riderPayoutLimit = platformConfig.riderFixedPayout ?? RIDER_FIXED_PAYOUT;
+            riderPayout = Math.min(riderPayoutLimit, deliveryFee);
+            platformSpread = Number((deliveryFee - riderPayout).toFixed(2));
             riderEarningsToRecord = riderPayout;
         }
 
         order.riderEarnings = riderEarningsToRecord;
         await order.save({ session });
+
+        // ── LOOPHOLE 3 FIX: Wallet writes inside the session ─────────────────────
+        // Previously these were OUTSIDE the session (post-commit), meaning a server
+        // crash could mark the order as delivered but never credit the rider wallet.
+        // Now the wallet debits/credits are atomic with the order status update.
+        if (riderPayout > 0) {
+            const adminWallet = await Wallet.findOne({ ownerModel: "Admin" }).session(session);
+
+            if (!adminWallet) {
+                // Critical: log but do NOT abort the delivery confirmation.
+                // The delivery is real; flag for manual reconciliation.
+                logger.error(
+                    { orderId: order.orderId, riderPayout },
+                    '⚠️ Admin wallet not found — rider payout skipped, manual reconciliation required'
+                );
+            } else if (adminWallet.balance < riderPayout) {
+                logger.error(
+                    { orderId: order.orderId, riderPayout, adminBalance: adminWallet.balance },
+                    '⚠️ Admin wallet insufficient for rider payout — delivery confirmed, payout deferred'
+                );
+                try {
+                    const { sendNotification } = await import('./notification.service.js');
+                    await sendNotification(null, 'admin_insufficient_funds', {
+                        adminBalance: adminWallet.balance,
+                        riderPayout,
+                        orderId: order.orderId,
+                        orderDatabaseId: order._id
+                    }, 'admin');
+                } catch (notifErr) {
+                    logger.error({ error: notifErr.message }, '❌ Admin insufficient-funds notification failed');
+                }
+            } else {
+                // Debit admin wallet
+                adminWallet.balance = Number((adminWallet.balance - riderPayout).toFixed(2));
+                adminWallet.transactions.push({
+                    type: "debit",
+                    amount: riderPayout,
+                    description: `Rider payout for Order ${order.orderId}`,
+                    transactionType: 'rider_payout',
+                    orderId: order._id,
+                });
+                if (platformSpread > 0) {
+                    adminWallet.transactions.push({
+                        type: "debit",
+                        amount: 0,
+                        reportingAmount: platformSpread,
+                        description: `Delivery spread for Order ${order.orderId}`,
+                        transactionType: 'delivery_spread',
+                        orderId: order._id,
+                    });
+                }
+                await adminWallet.save({ session });
+
+                // Credit rider wallet (upsert — creates wallet on first delivery)
+                await Wallet.findOneAndUpdate(
+                    { ownerId: riderId, ownerModel: "Rider" },
+                    {
+                        $inc: { balance: riderPayout, totalEarned: riderPayout },
+                        $push: {
+                            transactions: {
+                                type: "credit",
+                                amount: riderPayout,
+                                description: `Delivery payout for Order ${order.orderId}`,
+                                transactionType: 'rider_payout',
+                                orderId: order._id,
+                                date: new Date(),
+                            }
+                        }
+                    },
+                    { new: true, upsert: true, session, setDefaultsOnInsert: true }
+                );
+
+                payoutActuallyCredited = true;
+                logger.info({ orderId: order.orderId, riderPayout }, '✅ Rider payout credited inside session');
+            }
+        }
 
         // Find if this rider has any other active/accepted orders
         const activeOrdersCount = await mongoose.model("VendorOrder").countDocuments({
@@ -640,85 +735,33 @@ export const markDelivered = async (orderId, riderId) => {
         session.endSession();
     }
 
-    if (pendingRiderPayout && completedOrder) {
-        try {
-            const {
-                riderId: payoutRiderId,
-                riderPayout,
-                platformSpread,
-                orderId: readableOrderId,
-                orderDbId,
-                RIDER_FIXED_PAYOUT,
-            } = pendingRiderPayout;
-
-            const adminWallet = await Wallet.findOne({ ownerModel: "Admin" });
-            if (!adminWallet) throw new Error("Admin wallet not found for rider payout");
-
-            if (adminWallet.balance < riderPayout) {
-                logger.error(
-                    { orderId: readableOrderId, riderPayout, adminBalance: adminWallet.balance },
-                    '⚠️ Admin wallet insufficient for rider payout'
-                );
-                try {
-                    const { sendNotification } = await import('../services/notification.service.js');
-                    await sendNotification(null, 'admin_insufficient_funds', {
-                        adminBalance: adminWallet.balance,
-                        riderPayout,
-                        orderId: readableOrderId,
-                        orderDatabaseId: orderDbId
-                    }, 'admin');
-                } catch (notifErr) { logger.error('❌ Admin notification failed', notifErr.message); }
-            } else {
-                adminWallet.balance = Number((adminWallet.balance - riderPayout).toFixed(2));
-                adminWallet.transactions.push({
-                    type: "debit",
-                    amount: riderPayout,
-                    description: `Rider payout for Order ${readableOrderId}`,
-                    transactionType: 'rider_payout',
-                });
-                adminWallet.transactions.push({
-                    type: "debit",
-                    amount: 0,
-                    reportingAmount: platformSpread,
-                    description: `Delivery spread for Order ${readableOrderId}`,
-                    transactionType: 'delivery_spread',
-                });
-                await adminWallet.save();
-
-                let riderWallet = await Wallet.findOne({ ownerId: payoutRiderId, ownerModel: "Rider" });
-                if (!riderWallet) {
-                    riderWallet = await Wallet.create({
-                        ownerId: payoutRiderId,
-                        ownerModel: "Rider",
-                        balance: 0,
-                        transactions: [],
-                    });
-                }
-
-                riderWallet.balance = Number((riderWallet.balance + riderPayout).toFixed(2));
-                riderWallet.totalEarned = Number(((riderWallet.totalEarned || 0) + riderPayout).toFixed(2));
-                riderWallet.transactions.push({
-                    type: "credit",
-                    amount: riderPayout,
-                    description: `Delivery payout for Order ${readableOrderId}`,
-                    transactionType: 'rider_payout',
-                });
-                await riderWallet.save();
-
-                payoutActuallyCredited = true;
-            }
-        } catch (payoutErr) {
-            logger.error({ orderId: completedOrder.orderId, error: payoutErr.message }, '❌ Post-transaction rider payout failed');
-        }
-    }
-
+    // ── LOOPHOLE 3 FIX: Escrow release via BullMQ queue (retry-safe) ─────────────
+    // Previously: bare `await releaseEscrowToVendor(vo._id)` calls outside session —
+    // a server crash here would leave vendor escrow unreleased forever.
+    // Now: enqueued to escrowReleaseQueue (attempts: 5, exponential backoff)
+    // so the worker retries automatically if the process dies mid-release.
     if (completedOrder) {
-        const allVendorOrders = await VendorOrder.find({ userOrderId: completedOrder._id });
+        const allVendorOrders = await VendorOrder.find({ userOrderId: completedOrder._id }).select("_id");
         for (const vo of allVendorOrders) {
             try {
-                await releaseEscrowToVendor(vo._id);
-            } catch (escrowErr) {
-                logger.error({ orderId: completedOrder._id, vendorOrderId: vo._id, error: escrowErr.message }, '❌ Escrow release failed');
+                await escrowReleaseQueue.add(
+                    "release-escrow",
+                    { vendorOrderId: vo._id.toString() },
+                    {
+                        jobId: `escrow-${vo._id}`, // idempotent: duplicate adds are no-ops
+                    }
+                );
+            } catch (queueErr) {
+                // Redis down — fall back to direct release as last resort
+                logger.error({ vendorOrderId: vo._id, error: queueErr.message }, '❌ Escrow queue add failed — attempting direct release');
+                try {
+                    await releaseEscrowToVendor(vo._id);
+                } catch (escrowErr) {
+                    logger.error(
+                        { orderId: completedOrder._id, vendorOrderId: vo._id, error: escrowErr.message },
+                        '❌ Escrow direct release also failed — manual reconciliation required'
+                    );
+                }
             }
         }
     }
@@ -1043,7 +1086,9 @@ export const getRiderHistorySummary = async (riderId, filters = {}) => {
     if (!rider) throw new Error('Rider not found');
 
     const config = await getPlatformConfig();
-    const payoutHour = Number(filters.payoutHour ?? config.riderPayoutHour ?? 10);
+    // payoutHour must always come from platform config — never from caller input.
+    // A rider passing ?payoutHour=0 must not be able to shift financial window calculations.
+    const payoutHour = Number(config.riderPayoutHour ?? 10);
     const now = new Date();
     const todayStart = new Date(now);
     todayStart.setHours(0, 0, 0, 0);
@@ -1090,4 +1135,211 @@ export const getRiderHistorySummary = async (riderId, filters = {}) => {
         },
         transactions: payoutsToday.sort((a, b) => new Date(b.date) - new Date(a.date)),
     };
+};
+
+/**
+ * Rider-initiated order termination.
+ * Resets the order, logs the termination, applies strike if food was already picked up,
+ * and re-broadcasts to available riders.
+ *
+ * @param {string} orderId    - VendorOrder _id (what the rider holds) or Order _id
+ * @param {string} riderId    - Rider _id
+ * @param {string} [note]     - Optional rider-provided note
+ */
+export const terminateOrder = async (orderId, riderId, note = "") => {
+    const { TERMINATION_STRIKE_LIMIT, SUSPENSION_DURATION_MS } = await import("../config/payouts.js");
+
+    let vendorOrder = await VendorOrder.findById(orderId).populate("userOrderId");
+    let order = vendorOrder?.userOrderId;
+    if (!order) order = await Order.findById(orderId).populate("userOrderId");
+    if (!order) throw new Error("Order not found");
+
+    const isAssigned =
+        order.riderId?.toString() === riderId ||
+        vendorOrder?.riderId?.toString() === riderId;
+    if (!isAssigned) throw new Error("You are not assigned to this order");
+
+    if (["delivered","cancelled"].includes(order.orderStatus)) {
+        throw new Error("Cannot terminate a completed or cancelled order");
+    }
+
+    const foodPickedUp = ["out_for_delivery","picked_up"].includes(order.orderStatus);
+    const rider = await Rider.findById(riderId).select("name phone terminationStrikes");
+
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    try {
+        // 1. Reset order
+        await Order.findByIdAndUpdate(order._id, {
+            $set: {
+                orderStatus: "ready_for_pickup",
+                riderId: null,
+                "riderAssignment.status": "unassigned",
+                "riderAssignment.lastReason": "rider_terminated",
+            },
+            $push: { statusLog: { status:"ready_for_pickup", changedBy:`rider:${riderId}:terminated`, timestamp:new Date() } },
+        }, { session });
+
+        // 2. Reset vendor order
+        if (vendorOrder) {
+            await VendorOrder.findByIdAndUpdate(vendorOrder._id,
+                { $set: { orderStatus:"ready_for_pickup", riderId:null } },
+                { session }
+            );
+        }
+
+        // 3. Free rider
+        await Rider.findByIdAndUpdate(riderId, {
+            $set: { status:"available", currentOrderId:null, assignmentExpiresAt:null },
+        }, { session });
+
+        // 4. Mark old assignment terminated
+        await RiderAssignment.findOneAndUpdate(
+            { riderId, orderId: order._id, status: { $in: ["assigned","accepted","picked_up"] } },
+            { $set: { status:"terminated_by_rider", respondedAt:new Date(), reason:"rider_terminated" } },
+            { session, sort: { createdAt: -1 } }
+        );
+
+        // 5. Create termination record
+        await OrderTermination.create([{
+            orderId:            order._id,
+            vendorOrderId:      vendorOrder?._id || order._id,
+            previousRiderId:    riderId,
+            previousRiderName:  rider?.name  || "Unknown",
+            previousRiderPhone: rider?.phone || "Unknown",
+            foodPickedUp,
+            reason:  "rider_initiated",
+            riderNote: note,
+            status:  "pending",
+        }], { session });
+
+        // 6. Apply strike only if food was already picked up
+        if (foodPickedUp) {
+            const updatedRider = await Rider.findByIdAndUpdate(riderId, {
+                $inc: { terminationStrikes: 1 },
+                $set: { lastTerminationAt: new Date() },
+            }, { session, new: true });
+
+            if (updatedRider.terminationStrikes >= TERMINATION_STRIKE_LIMIT) {
+                await Rider.findByIdAndUpdate(riderId, {
+                    $set: {
+                        isSuspended:    true,
+                        suspendedUntil: new Date(Date.now() + SUSPENSION_DURATION_MS),
+                        status:         "offline",
+                    },
+                }, { session });
+                logger.warn({ riderId }, "🚫 Rider suspended after post-pickup termination strike");
+            }
+        }
+
+        // 7. Cancel the watchdog job (non-fatal — it will self-resolve if it fires)
+        try {
+            const job = await deliveryWatchdogQueue.getJob(`watchdog:${vendorOrder?._id || orderId}`);
+            if (job) await job.remove();
+        } catch (e) { logger.warn({ error: e.message }, "Could not cancel watchdog job (non-fatal)"); }
+
+        await session.commitTransaction();
+    } catch (err) {
+        if (session.inTransaction()) await session.abortTransaction();
+        throw err;
+    } finally {
+        session.endSession();
+    }
+
+    // 8. Notify customer (non-fatal)
+    try {
+        const { sendNotification } = await import("./notification.service.js");
+        await sendNotification(order.userId, "rider_terminated_reassigning", {
+            orderId: order.orderId,
+            message: "Your rider had an issue. We are finding a replacement.",
+        }, "user");
+    } catch (e) { logger.warn({ error: e.message }, "Termination customer notify failed (non-fatal)"); }
+
+    // 9. Re-broadcast (non-fatal)
+    try {
+        const vendorOrderId = vendorOrder?._id || orderId;
+        await offerOrderToAvailableRiders({ vendorOrderId, assignedBy: "system:rider_termination" });
+    } catch (e) {
+        logger.error({ orderId: order._id, error: e.message }, "❌ Re-broadcast after termination failed");
+    }
+
+    return {
+        success: true,
+        foodPickedUp,
+        message: foodPickedUp
+            ? "Order terminated. A strike has been logged. New rider will contact you to collect the food."
+            : "Order terminated. A new rider will be assigned shortly.",
+    };
+};
+
+/**
+ * Flag an order as undeliverable, trigger vendor remake window, or schedule admin escalation.
+ *
+ * @param {string} orderId    - VendorOrder _id or Order _id
+ * @param {string} riderId    - Rider _id
+ * @param {string} [reason]   - Optional reason details
+ */
+export const reportUndeliverable = async (orderId, riderId, reason = "") => {
+    const { VENDOR_REMAKE_WINDOW_MS } = await import("../config/payouts.js");
+
+    let vendorOrder = await VendorOrder.findById(orderId).populate("userOrderId");
+    const order = vendorOrder?.userOrderId;
+    if (!order) throw new Error("Order not found");
+
+    const isAssigned =
+        order.riderId?.toString() === riderId ||
+        vendorOrder?.riderId?.toString() === riderId;
+    if (!isAssigned) throw new Error("You are not assigned to this order");
+
+    // Update order to disputed state
+    await Order.findByIdAndUpdate(order._id, {
+        $set: { orderStatus: "disputed_delivery" },
+        $push: { statusLog: {
+            status: "disputed_delivery",
+            changedBy: `rider:${riderId}`,
+            timestamp: new Date(),
+        }},
+    });
+
+    // Update termination record to disputed
+    await OrderTermination.findOneAndUpdate(
+        { orderId: order._id, status: "pending" },
+        { $set: { status: "disputed" } },
+        { sort: { terminatedAt: -1 } }
+    );
+
+    // Notify vendor — can they remake?
+    // Vendor has 15 minutes to respond via their app.
+    // If no response, escalate to admin automatically.
+    try {
+        const { sendNotification } = await import("./notification.service.js");
+        await sendNotification(vendorOrder.restaurantId, "order_remake_request", {
+            orderId:      order.orderId,
+            orderDbId:    order._id,
+            reason:       reason || "Previous rider could not deliver",
+            message:      "Can you remake this order? Respond YES within 15 minutes.",
+            remakeWindow: VENDOR_REMAKE_WINDOW_MS,
+        }, "vendor");
+    } catch (e) {
+        logger.warn({ error: e.message }, "Vendor remake notify failed");
+    }
+
+    // Schedule admin escalation if vendor does not respond
+    try {
+        await disputeEscalationQueue.add(
+            "escalate-dispute",
+            { orderId: order._id.toString(), vendorOrderId: vendorOrder._id.toString() },
+            {
+                jobId:            `dispute-escalation:${order._id}`,
+                delay:            VENDOR_REMAKE_WINDOW_MS,
+                attempts:         2,
+                removeOnComplete: true,
+                removeOnFail:     false,
+            }
+        );
+    } catch (e) {
+        logger.error({ error: e.message }, "❌ Dispute escalation queue failed");
+    }
+
+    return { success: true, message: "Order flagged as disputed. Vendor has been notified." };
 };

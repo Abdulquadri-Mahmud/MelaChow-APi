@@ -109,6 +109,16 @@ const vendorOrderSchema = new mongoose.Schema(
       ref: "Rider",
       default: null,
     },
+    cityId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "City",
+      default: null,
+    },
+    stateId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "State",
+      default: null,
+    },
   },
   { timestamps: true }
 );
@@ -129,6 +139,9 @@ vendorOrderSchema.index({ restaurantId: 1, riderId: 1 });
 
 // Platform-wide rider order tracking
 vendorOrderSchema.index({ riderId: 1, orderStatus: 1 });
+
+// Filter for rider assignment catchup
+vendorOrderSchema.index({ cityId: 1, stateId: 1, orderStatus: 1 });
 
 const VendorOrder = mongoose.model("VendorOrder", vendorOrderSchema);
 

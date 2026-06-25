@@ -455,6 +455,36 @@ export const riderSelfRepository = {
         : []),
     ]);
 
+    // ── Queue 1-hour delivery watchdog (Postgres Path) ─────────────────
+    try {
+        const { deliveryWatchdogQueue } = await import("../../config/queue.js");
+        const { DELIVERY_TIMEOUT_MS } = await import("../../config/payouts.js");
+        const legacyRiderId = rider.legacyMongoId || rider.id.toString();
+        const legacyOrderId = found.order.legacyMongoId || found.order.id.toString();
+        const legacyVendorOrderId = found.vendorOrder
+          ? (found.vendorOrder.legacyMongoId || found.vendorOrder.id.toString())
+          : legacyOrderId;
+
+        await deliveryWatchdogQueue.add(
+            "delivery-timeout",
+            {
+                orderId:       legacyOrderId,
+                vendorOrderId: legacyVendorOrderId,
+                riderId:       legacyRiderId,
+            },
+            {
+                jobId:            `watchdog:${legacyVendorOrderId}`,
+                delay:            DELIVERY_TIMEOUT_MS,
+                attempts:         2,
+                backoff:          { type: "fixed", delay: 30_000 },
+                removeOnComplete: true,
+                removeOnFail:     false,
+            }
+        );
+    } catch (wErr) {
+        console.error("⚠️ Watchdog queue failed in Postgres path (non-fatal):", wErr.message);
+    }
+
     return {
       success: true,
       data: riderPublicShape(updatedRider),

@@ -54,13 +54,15 @@ describe('Refund System', () => {
         expect(refundTx.amount).toBe(3000);
     });
 
-    it('should retain 10% commission when order was accepted at cancellation', async () => {
+    it('should give full refund even when order was accepted at cancellation (commission rate is 0)', async () => {
         await Order.findByIdAndUpdate(order._id, { orderStatus: 'accepted' });
 
         const refund = await refundOrderToWallet(order._id, 'vendor_cancel');
 
-        const expectedCommission = 2500 * 0.10; // 250
-        const expectedRefund = 3000 - expectedCommission; // 2750
+        // PLATFORM_COMMISSION_RATE = 0: platform earns nothing on commission yet.
+        // Full refund is issued regardless of order status at cancellation.
+        const expectedCommission = 0; // 2500 * 0 = 0
+        const expectedRefund = 3000; // order.total - 0 commission
 
         expect(refund.commissionRetained).toBe(expectedCommission);
         expect(refund.amount).toBe(expectedRefund);

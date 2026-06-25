@@ -25,6 +25,7 @@ const mockRider = {
     name: "Test Rider",
     phone: "08012345678",
     isActive: true,
+    isVerified: true,
     deletedAt: null,
 };
 

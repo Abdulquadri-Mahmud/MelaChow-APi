@@ -1,4 +1,4 @@
-﻿import mongoose from 'mongoose';
+import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
 import User from '../../model/user.model.js';
 import Vendor from '../../model/vendor/vendor.model.js';
@@ -102,15 +102,18 @@ export const createTestVendorOrder = async (vendorId, orderId, overrides = {}) =
     });
 };
 
-export const createTestRider = async (vendorId, overrides = {}) => {
+export const createTestRider = async (vendorId = null, overrides = {}) => {
     return Rider.create({
         name: 'Test Rider',
         phone: `080${Date.now().toString().slice(-8)}`,
         password: await bcrypt.hash('password123', 10),
-        vendorId,
-        managedBy: 'vendor',
+        vendorId: vendorId || null,
+        // Default to admin-managed — vendor-managed delivery flow is retired.
+        // Override with { managedBy: 'vendor' } in tests that explicitly exercise that path.
+        managedBy: vendorId ? 'vendor' : 'admin',
         status: 'available',
         isActive: true,
+        isVerified: true,
         ...overrides,
     });
 };

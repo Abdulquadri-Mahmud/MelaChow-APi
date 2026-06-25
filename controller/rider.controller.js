@@ -583,6 +583,32 @@ export const updateRiderStatus = async (req, res, next) => {
                     { sort: { createdAt: -1 } }
                 );
 
+                // ── Queue 1-hour delivery watchdog (MongoDB Path) ─────────────────
+                try {
+                    const { deliveryWatchdogQueue } = await import("../config/queue.js");
+                    const { DELIVERY_TIMEOUT_MS } = await import("../config/payouts.js");
+                    const logger = (await import("../config/logger.js")).default;
+                    await deliveryWatchdogQueue.add(
+                        "delivery-timeout",
+                        {
+                            orderId:       actualOrderId.toString(),
+                            vendorOrderId: (vendorOrder?._id || orderId).toString(),
+                            riderId:       riderId.toString(),
+                        },
+                        {
+                            jobId:            `watchdog:${vendorOrder?._id || orderId}`,
+                            delay:            DELIVERY_TIMEOUT_MS,
+                            attempts:         2,
+                            backoff:          { type: "fixed", delay: 30_000 },
+                            removeOnComplete: true,
+                            removeOnFail:     false,
+                        }
+                    );
+                    logger.info({ orderId: actualOrderId, riderId }, "⏱️ Delivery watchdog queued (1 hour)");
+                } catch (wErr) {
+                    console.error("⚠️ Watchdog queue failed (non-fatal):", wErr.message);
+                }
+
                 const losingAssignmentsQuery = vendorOrder
                     ? { vendorOrderId: vendorOrder._id, riderId: { $ne: riderId }, status: "assigned" }
                     : { orderId: actualOrderId, riderId: { $ne: riderId }, status: "assigned" };
@@ -1637,13 +1663,46 @@ export const getRiderOrders = async (req, res, next) => {
             if (order.orderStatus === "out_for_delivery") status = "picked_up";
             if (order.orderStatus === "rider_assigned") status = "assigned";
 
-            return {
+        return {
                 ...order,
                 status // Frontend expects 'status' field for the tabs
             };
         });
 
         res.status(200).json({ success: true, orders: enrichedOrders });
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
+ * POST /api/riders/:riderId/orders/:orderId/terminate
+ * Rider-initiated order termination. Resets order, logs termination, applies strike if food was picked up.
+ */
+export const riderTerminateOrder = async (req, res, next) => {
+    try {
+        const { orderId, riderId } = req.params;
+        const { note } = req.body;
+
+        const result = await riderService.terminateOrder(orderId, riderId, note);
+        res.status(200).json(result);
+    } catch (error) {
+        next(error);
+    }
+};
+
+/**
+ * POST /api/riders/:riderId/orders/:orderId/undeliverable
+ * Rider reports an order as undeliverable (disputed delivery).
+ * Triggers vendor remake window and schedules admin escalation.
+ */
+export const riderReportUndeliverable = async (req, res, next) => {
+    try {
+        const { orderId, riderId } = req.params;
+        const { reason } = req.body;
+
+        const result = await riderService.reportUndeliverable(orderId, riderId, reason);
+        res.status(200).json(result);
     } catch (error) {
         next(error);
     }
