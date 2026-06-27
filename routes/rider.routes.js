@@ -5,6 +5,7 @@ import {
     saveBankAccount,
     getRiderBankAccount,
     getRiderWithdrawalHistory,
+    initiateRiderWithdrawal,
 } from "../controller/rider/riderWithdrawal.controller.js";
 import { getBankList } from "../controller/wallet/bankAccount.controller.js";
 import authVendor from "../middleware/vendor.middleware.js";
@@ -51,7 +52,8 @@ router.get("/riders/:riderId/payout/resolve-account", requireRiderAuth, resolveA
 router.post("/riders/:riderId/payout/bank-account", requireRiderAuth, saveBankAccount);
 // Step 2b: Fetch saved bank account details
 router.get("/riders/:riderId/payout/bank-account", requireRiderAuth, getRiderBankAccount);
-// Step 3: Initiate withdrawal to bank account
+// Step 3: Initiate manual withdrawal to bank account
+router.post("/riders/:riderId/payout/withdraw", requireRiderAuth, initiateRiderWithdrawal);
 // History: Fetch past withdrawals
 router.get("/riders/:riderId/payout/history", requireRiderAuth, getRiderWithdrawalHistory);
 // Bank list: rider-scoped, uses same stateless Paystack controller as vendor
