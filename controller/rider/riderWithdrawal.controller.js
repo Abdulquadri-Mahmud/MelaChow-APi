@@ -220,9 +220,14 @@ export const initiateRiderWithdrawal = async (req, res) => {
         }
 
         // STEP 3 — Fetch rider wallet
-        const wallet = await Wallet.findOne({ ownerId: riderId, ownerModel: "Rider" });
+        let wallet = await Wallet.findOne({ ownerId: riderId, ownerModel: "Rider" });
         if (!wallet) {
-            return res.status(404).json({ success: false, message: "Wallet not found" });
+            wallet = await Wallet.create({
+                ownerId: riderId,
+                ownerModel: "Rider",
+                balance: 0,
+                transactions: []
+            });
         }
         if (wallet.balance < amount) {
             return res.status(400).json({
