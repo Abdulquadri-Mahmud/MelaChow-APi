@@ -15,7 +15,8 @@ import {
 } from "../../controller/wallet/bankAccount.controller.js";
 import {
     getWithdrawalHistory,
-    forceFailWithdrawal
+    forceFailWithdrawal,
+    initiateWithdrawal
 } from "../../controller/wallet/withdrawal.controller.js";
 import vendorAuth from "../../middleware/vendor.middleware.js";
 
@@ -40,6 +41,7 @@ router.post("/bank-account", vendorAuth, saveBankAccount);
 router.delete("/bank-account", vendorAuth, removeBankAccount);
 
 // Vendor Withdrawal Routes
+router.post("/withdraw", vendorAuth, initiateWithdrawal);
 router.get("/withdrawals", vendorAuth, getWithdrawalHistory);
 router.patch("/admin/withdrawals/:withdrawalId/force-fail", adminAuth, forceFailWithdrawal);
 
