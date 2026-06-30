@@ -1,4 +1,4 @@
-﻿import nodemailer from "nodemailer";
+import nodemailer from "nodemailer";
 
 export const sendUserReactivationEmail = async (user) => {
   const transporter = nodemailer.createTransport({
@@ -26,7 +26,7 @@ export const sendUserReactivationEmail = async (user) => {
         </div>
         <hr style="border: none; border-top: 1px solid #eee; margin: 30px 0;" />
         <div style="font-size: 13px; color: #777;">
-          <p>Need help? Contact us at <a href="mailto:support@melachow.com" style="color: #2E86C1;">support@melachow.com</a></p>
+          <p>Need help? Contact us at <a href="mailto:support@melachow.com" style="color: #2E86C1;">support@melachow.com</a> or <a href="mailto:help@melachow.com" style="color: #2E86C1;">help@melachow.com</a></p>
           <p>Â© ${new Date().getFullYear()} MelaChow. All rights reserved.</p>
         </div>
       </div>

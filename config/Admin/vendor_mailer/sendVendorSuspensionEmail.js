@@ -14,7 +14,8 @@ export const sendVendorSuspensionEmail = async (vendor, reason) => {
     </div>
     <p class="p">While suspended, your storefront will be invisible to customers and you will be unable to process orders. This action is taken to protect the integrity of our marketplace.</p>
     <div style="text-align: center; margin: 32px 0;">
-      <a href="mailto:support@melachow.com" class="button" style="background-color: #111827;">Contact Support</a>
+      <a href="mailto:support@melachow.com" class="button" style="background-color: #111827; margin-right: 8px;">Email Support</a>
+      <a href="mailto:help@melachow.com" class="button" style="background-color: #4B5563;">Email Help Desk</a>
     </div>
     <p class="p" style="font-size: 14px; color: #6B7280;">Please reference your merchant ID when contacting support for faster resolution.</p>
     `,
