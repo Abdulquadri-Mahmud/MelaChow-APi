@@ -18,7 +18,8 @@ export const sendUserSuspensionEmail = async (user, reason) => {
     <p class="p"><strong>Reason:</strong> ${reason || 'System policy violation'}</p>
     <p class="p">While suspended, you will be unable to place orders or interact with the platform. We take these matters seriously to maintain a safe environment for all our members.</p>
     <div style="text-align: center; margin: 32px 0;">
-      <a href="mailto:support@melachow.com" class="button" style="background-color: #EF4444;">Contact Support Team</a>
+      <a href="mailto:support@melachow.com" class="button" style="background-color: #EF4444; margin-right: 8px;">Email Support</a>
+      <a href="mailto:help@melachow.com" class="button" style="background-color: #4B5563;">Email Help Desk</a>
     </div>
     <p class="p" style="font-size: 14px; color: #6B7280;">If you believe this was an error, please reach out to our appeals team using the button above.</p>
     `,
