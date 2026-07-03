@@ -26,8 +26,9 @@ export const DELIVERY_TIMEOUT_MS = 60 * 60 * 1_000;
 /** Termination strike threshold before suspension. */
 export const TERMINATION_STRIKE_LIMIT   = 2;
 
-/** Suspension duration in milliseconds after hitting strike limit. 48 hours. */
-export const SUSPENSION_DURATION_MS = 48 * 60 * 60 * 1_000;
+/** Default suspension duration after hitting the strike limit. */
+// Fallback only. Runtime suspension duration is read from PlatformConfig.
+export const SUSPENSION_DURATION_MS = 24 * 60 * 60 * 1_000;
 
 /** Vendor remake response window in milliseconds. 15 minutes. */
 export const VENDOR_REMAKE_WINDOW_MS = 15 * 60 * 1_000;

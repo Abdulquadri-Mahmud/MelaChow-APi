@@ -16,6 +16,7 @@ export const getPlatformConfig = async () => {
     return {
       riderFixedPayout: 600,
       riderAssignmentMode: "manual",
+      riderTerminationPenaltyHours: 24,
       riderPayoutHour: 10,
       commissionEnabled: false,
       commissionRate: 0,

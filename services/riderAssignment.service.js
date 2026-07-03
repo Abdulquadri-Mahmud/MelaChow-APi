@@ -4,6 +4,7 @@ import VendorOrder from "../model/vendor/VendorOrder.js";
 import Vendor from "../model/vendor/vendor.model.js";
 import Rider from "../model/rider.model.js";
 import RiderAssignment from "../model/riderAssignment.model.js";
+import OrderTermination from "../model/OrderTermination.js";
 import { getPlatformConfig } from "./platformConfig.service.js";
 import OrderBroadcastQueue from "../model/OrderBroadcastQueue.js";
 import { RIDER_FIXED_PAYOUT, BROADCAST_TTL_SECONDS } from "../config/payouts.js";
@@ -75,6 +76,7 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
         status: { $in: ["available", "pending_assignment", "on_delivery"] },
         isActive: true,
         isVerified: true,
+        isSuspended: { $ne: true },
         deletedAt: null,
     };
 
@@ -118,14 +120,22 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
 
     await expireStaleRiderAssignmentOffers(candidateRiders.map((rider) => rider._id));
 
-    // Only exclude riders who explicitly rejected this offer.
-    // Riders whose previous assignment timed out (they were busy delivering)
-    // are eligible to receive the offer again when they free up.
-    const pastRejects = await RiderAssignment.find({
-        vendorOrderId: vendorOrder._id,
-        status: "rejected",
-    }).select("riderId");
-    const alreadyHandledIds = new Set(pastRejects.map(a => a.riderId.toString()));
+    // A rider who rejected or terminated this order must not receive it again.
+    // Timeouts remain eligible because they may simply have been busy.
+    const [pastRejects, pastTerminations] = await Promise.all([
+        RiderAssignment.find({
+            vendorOrderId: vendorOrder._id,
+            status: "rejected",
+        }).select("riderId"),
+        OrderTermination.find({
+            orderId: masterOrder._id,
+            status: { $in: ["pending", "reassigned", "disputed", "resolved"] },
+        }).select("previousRiderId"),
+    ]);
+    const alreadyHandledIds = new Set([
+        ...pastRejects.map((assignment) => assignment.riderId.toString()),
+        ...pastTerminations.map((termination) => termination.previousRiderId.toString()),
+    ]);
 
     const riders = candidateRiders.filter(
         (rider) => !alreadyHandledIds.has(rider._id.toString())

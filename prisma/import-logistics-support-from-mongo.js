@@ -72,6 +72,7 @@ const mapAssignmentStatus = (value) => {
 const platformConfigValue = (config) => ({
   riderFixedPayout: config.riderFixedPayout ?? 600,
   riderAssignmentMode: config.riderAssignmentMode || "manual",
+  riderTerminationPenaltyHours: config.riderTerminationPenaltyHours ?? 24,
   riderPayoutHour: config.riderPayoutHour ?? 10,
   commissionEnabled: config.commissionEnabled || false,
   commissionRate: config.commissionRate || 0,

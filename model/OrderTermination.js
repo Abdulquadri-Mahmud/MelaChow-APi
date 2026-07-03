@@ -34,7 +34,7 @@ const OrderTerminationSchema = new mongoose.Schema({
      */
     reason: {
         type: String,
-        enum: ["rider_initiated", "system_timeout"],
+        enum: ["rider_initiated", "system_timeout", "admin_unassigned"],
         required: true,
     },
 

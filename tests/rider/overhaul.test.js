@@ -81,8 +81,8 @@ describe('Payout Config Constants', () => {
         expect(TERMINATION_STRIKE_LIMIT).toBe(2);
     });
 
-    it('SUSPENSION_DURATION_MS must be 48 hours', () => {
-        expect(SUSPENSION_DURATION_MS).toBe(48 * 60 * 60 * 1000);
+    it('SUSPENSION_DURATION_MS must default to 24 hours', () => {
+        expect(SUSPENSION_DURATION_MS).toBe(24 * 60 * 60 * 1000);
     });
 });
 
@@ -288,7 +288,7 @@ describe('terminateOrder — food WAS picked up (strike logic)', () => {
         expect(updated.isSuspended).toBeFalsy();
     });
 
-    it('suspends rider for 48h when strikes reach TERMINATION_STRIKE_LIMIT', async () => {
+    it('suspends rider for the configured period when strikes reach TERMINATION_STRIKE_LIMIT', async () => {
         // Start at TERMINATION_STRIKE_LIMIT - 1 so this termination tips it over
         await setupWithPickup(TERMINATION_STRIKE_LIMIT - 1);
         await terminateOrder(vendorOrder._id.toString(), rider._id.toString());
@@ -299,7 +299,7 @@ describe('terminateOrder — food WAS picked up (strike logic)', () => {
         expect(updated.suspendedUntil).toBeDefined();
 
         const remainingMs = new Date(updated.suspendedUntil).getTime() - Date.now();
-        // Allow 5s tolerance — should be close to 48h from now
+        // Allow 5s tolerance — should be close to the configured period from now
         expect(remainingMs).toBeGreaterThan(SUSPENSION_DURATION_MS - 5_000);
         expect(remainingMs).toBeLessThanOrEqual(SUSPENSION_DURATION_MS);
     });

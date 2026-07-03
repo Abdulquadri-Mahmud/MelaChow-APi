@@ -44,6 +44,13 @@ const platformConfigSchema = new mongoose.Schema(
       enum: ["manual", "automatic"],
       default: "manual",
     },
+    // Admin-configurable suspension for post-pickup termination strikes.
+    riderTerminationPenaltyHours: {
+      type: Number,
+      default: 24,
+      min: [1, "Termination penalty must be at least 1 hour"],
+      max: [720, "Termination penalty cannot exceed 720 hours"],
+    },
 
     // ── Commission ────────────────────────────────────────────────────────
     // Percentage of vendor food subtotal taken by platform.
