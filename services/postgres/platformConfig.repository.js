@@ -3,6 +3,7 @@ import prisma from "../../config/prisma.js";
 const defaultPlatformConfig = {
   riderFixedPayout: 600,
   riderAssignmentMode: "manual",
+  riderTerminationPenaltyHours: 24,
   commissionEnabled: false,
   commissionRate: 0,
   serviceFeeEnabled: false,

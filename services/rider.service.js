@@ -263,6 +263,7 @@ export const getPendingOffers = async (riderId) => {
 
         const rider = await Rider.findById(riderId);
         if (!rider) return [];
+        if (rider.isSuspended && rider.suspendedUntil && rider.suspendedUntil.getTime() > Date.now()) return [];
 
         const pendingAssignments = await RiderAssignment.find({
             riderId: rider._id,
@@ -280,6 +281,13 @@ export const getPendingOffers = async (riderId) => {
             const order = vendorOrder.userOrderId;
             // DONT return if order is already assigned to a rider
             if (order.riderId || vendorOrder.riderId) continue;
+
+            // Never render a previously terminated order back to the same rider.
+            const terminatedByThisRider = await OrderTermination.exists({
+                orderId: order._id,
+                previousRiderId: rider._id,
+            });
+            if (terminatedByThisRider) continue;
 
             const orderObj = order.toObject();
             // Set offer _id to vendorOrder._id! So the rider accepts the specific vendor order.
@@ -787,6 +795,17 @@ export const updateRiderStatus = async (riderId, status, reason = null) => {
         throw new Error("Your rider account is pending admin approval");
     }
 
+    if (["available", "on_delivery"].includes(status) && rider.isSuspended) {
+        const suspensionIsActive = rider.suspendedUntil && rider.suspendedUntil.getTime() > Date.now();
+        if (suspensionIsActive) {
+            const error = new Error(`Your account is suspended until ${rider.suspendedUntil.toISOString()}. You cannot go online or accept orders during this penalty.`);
+            error.statusCode = 403;
+            error.code = "RIDER_SUSPENDED";
+            throw error;
+        }
+        rider.isSuspended = false;
+        rider.suspendedUntil = null;
+    }
     // Allow going offline from 'pending_assignment' if no confirmed order is being delivered.
     // 'currentOrderId' is set once the rider actually accepts the order.
     if (status === "offline" && (rider.status === "on_delivery" || rider.currentOrderId)) {
@@ -1147,7 +1166,7 @@ export const getRiderHistorySummary = async (riderId, filters = {}) => {
  * @param {string} [note]     - Optional rider-provided note
  */
 export const terminateOrder = async (orderId, riderId, note = "") => {
-    const { TERMINATION_STRIKE_LIMIT, SUSPENSION_DURATION_MS } = await import("../config/payouts.js");
+    const { TERMINATION_STRIKE_LIMIT } = await import("../config/payouts.js");
 
     let vendorOrder = await VendorOrder.findById(orderId).populate("userOrderId");
     let order = vendorOrder?.userOrderId;
@@ -1164,6 +1183,8 @@ export const terminateOrder = async (orderId, riderId, note = "") => {
     }
 
     const foodPickedUp = ["out_for_delivery","picked_up"].includes(order.orderStatus);
+    const platformConfig = await getPlatformConfig();
+    const penaltyHours = platformConfig.riderTerminationPenaltyHours ?? 24;
     const rider = await Rider.findById(riderId).select("name phone terminationStrikes");
 
     const session = await mongoose.startSession();
@@ -1224,7 +1245,7 @@ export const terminateOrder = async (orderId, riderId, note = "") => {
                 await Rider.findByIdAndUpdate(riderId, {
                     $set: {
                         isSuspended:    true,
-                        suspendedUntil: new Date(Date.now() + SUSPENSION_DURATION_MS),
+                        suspendedUntil: new Date(Date.now() + penaltyHours * 60 * 60 * 1_000),
                         status:         "offline",
                     },
                 }, { session });
@@ -1266,6 +1287,7 @@ export const terminateOrder = async (orderId, riderId, note = "") => {
     return {
         success: true,
         foodPickedUp,
+        penaltyHours,
         message: foodPickedUp
             ? "Order terminated. A strike has been logged. New rider will contact you to collect the food."
             : "Order terminated. A new rider will be assigned shortly.",

@@ -5,6 +5,7 @@ import Notification from "../model/notification/notification.model.js";
 import Order from "../model/order/Order.js";
 import Rider from "../model/rider.model.js";
 import RiderAssignment from "../model/riderAssignment.model.js";
+import OrderTermination from "../model/OrderTermination.js";
 import PlatformVehicle from "../model/platformVehicle.model.js";
 import { sendDeliveryOTP, verifyDeliveryOTP, getActiveDeliveryOTP } from '../services/otp.service.js';
 import { validateVendorLocation } from "../services/locationService.js";
@@ -333,6 +334,33 @@ export const updateRiderStatus = async (req, res, next) => {
             return res.status(403).json({ success: false, message: "Unauthorized to update this rider status" });
         }
 
+        // Suspension is enforced before every path, including optional Postgres writes.
+        if (["available", "on_delivery"].includes(status)) {
+            const suspension = await Rider.findById(riderId).select("isSuspended suspendedUntil");
+            if (!suspension) {
+                return res.status(404).json({ success: false, message: "Rider not found" });
+            }
+
+            const suspensionIsActive = suspension.isSuspended &&
+                suspension.suspendedUntil &&
+                suspension.suspendedUntil.getTime() > Date.now();
+
+            if (suspensionIsActive) {
+                return res.status(403).json({
+                    success: false,
+                    code: "RIDER_SUSPENDED",
+                    suspendedUntil: suspension.suspendedUntil,
+                    message: `Your account is suspended until ${suspension.suspendedUntil.toISOString()}. You cannot go online or accept orders during this penalty.`,
+                });
+            }
+
+            if (suspension.isSuspended) {
+                await Rider.updateOne(
+                    { _id: riderId },
+                    { $set: { isSuspended: false, suspendedUntil: null } }
+                );
+            }
+        }
         if (usePostgresRiderAssignmentWrites() && (status === "on_delivery" || ((reason || reqOrderId) && status === "available"))) {
             const response = status === "on_delivery"
                 ? await riderSelfRepository.acceptAssignment(riderId, reqOrderId)
@@ -465,6 +493,20 @@ export const updateRiderStatus = async (req, res, next) => {
             return res.status(400).json({ success: false, message: "No active assignment found to accept." });
         }
 
+        if (status === "on_delivery") {
+            const offeredVendorOrder = await (await import("../model/vendor/VendorOrder.js")).default.findById(orderId).select("userOrderId");
+            const priorTermination = await OrderTermination.exists({
+                orderId: offeredVendorOrder?.userOrderId || orderId,
+                previousRiderId: riderId,
+            });
+            if (priorTermination) {
+                return res.status(409).json({
+                    success: false,
+                    code: "RIDER_PREVIOUSLY_TERMINATED_ORDER",
+                    message: "You previously terminated this order and cannot accept it again.",
+                });
+            }
+        }
         const rider = await riderService.updateRiderStatus(riderId, status, reason);
         
         // 🚀 NEW: Instant catch-up for newly available riders
@@ -1416,6 +1458,100 @@ export const adminDeactivateRider = async (req, res, next) => {
     }
 };
 
+export const adminUnassignRiderFromOrder = async (req, res, next) => {
+    try {
+        const { riderId } = req.params;
+        const { reason = "Unassigned by administrator" } = req.body;
+        const rider = await Rider.findById(riderId);
+        if (!rider) return res.status(404).json({ success: false, message: "Rider not found" });
+
+        const assignment = await RiderAssignment.findOne({
+            riderId,
+            status: { $in: ["assigned", "accepted", "picked_up"] },
+        }).sort({ createdAt: -1 });
+        const requestedOrderId = req.body.orderId || assignment?.vendorOrderId || rider.currentOrderId;
+        if (!requestedOrderId) {
+            return res.status(400).json({ success: false, message: "Rider has no active order to unassign" });
+        }
+
+        const VendorOrderModel = (await import("../model/vendor/VendorOrder.js")).default;
+        let vendorOrder = await VendorOrderModel.findById(requestedOrderId).populate("userOrderId");
+        let order = vendorOrder?.userOrderId || await Order.findById(requestedOrderId);
+        if (!order && assignment?.orderId) order = await Order.findById(assignment.orderId);
+        if (!vendorOrder && assignment?.vendorOrderId) {
+            vendorOrder = await VendorOrderModel.findById(assignment.vendorOrderId).populate("userOrderId");
+            order = vendorOrder?.userOrderId || order;
+        }
+        if (!order) return res.status(404).json({ success: false, message: "Active order not found" });
+
+        const ownsOrder = order.riderId?.toString() === riderId ||
+            vendorOrder?.riderId?.toString() === riderId ||
+            assignment?.riderId?.toString() === riderId;
+        if (!ownsOrder) {
+            return res.status(409).json({ success: false, message: "Rider is no longer assigned to this order" });
+        }
+
+        const foodPickedUp = ["out_for_delivery", "picked_up"].includes(order.orderStatus) || assignment?.status === "picked_up";
+        const session = await mongoose.startSession();
+        session.startTransaction();
+        try {
+            await Order.updateOne({ _id: order._id }, {
+                $set: {
+                    orderStatus: "ready_for_pickup",
+                    riderId: null,
+                    "riderAssignment.status": "unassigned",
+                    "riderAssignment.lastReason": "admin_unassigned",
+                },
+                $push: { statusLog: { status: "ready_for_pickup", changedBy: `admin:${req.admin?._id || "unknown"}:unassigned`, timestamp: new Date() } },
+            }, { session });
+            await VendorOrderModel.updateMany({ userOrderId: order._id }, { $set: { orderStatus: "ready_for_pickup", riderId: null } }, { session });
+            await Rider.updateOne({ _id: riderId }, { $set: { status: "available", currentOrderId: null, assignmentExpiresAt: null } }, { session });
+            await RiderAssignment.updateMany(
+                { riderId, orderId: order._id, status: { $in: ["assigned", "accepted", "picked_up"] } },
+                { $set: { status: "cancelled", respondedAt: new Date(), reason: "admin_unassigned" } },
+                { session }
+            );
+            await OrderTermination.create([{
+                orderId: order._id,
+                vendorOrderId: vendorOrder?._id || assignment?.vendorOrderId,
+                previousRiderId: rider._id,
+                previousRiderName: rider.name || "Unknown",
+                previousRiderPhone: rider.phone || "Unknown",
+                foodPickedUp,
+                reason: "admin_unassigned",
+                riderNote: reason,
+                status: "pending",
+            }], { session });
+            await session.commitTransaction();
+        } catch (error) {
+            if (session.inTransaction()) await session.abortTransaction();
+            throw error;
+        } finally {
+            session.endSession();
+        }
+
+        try {
+            const { offerOrderToAvailableRiders } = await import("../services/riderAssignment.service.js");
+            await offerOrderToAvailableRiders({ vendorOrderId: vendorOrder?._id || assignment?.vendorOrderId, assignedBy: `admin:${req.admin?._id || "unknown"}:unassigned` });
+        } catch (error) {
+            console.error("Admin unassign rebroadcast failed:", error.message);
+        }
+
+        let io;
+        try { io = getIO(); } catch (error) {}
+        if (io) {
+            io.to(SOCKET_ROOMS.rider(riderId)).emit(SOCKET_EVENTS.ASSIGNMENT_CANCELLED, buildPayload.assignmentCancelled({
+                orderId: order._id,
+                reason: "admin_unassigned",
+                message: "An administrator unassigned you from this order.",
+            }));
+        }
+
+        return res.status(200).json({ success: true, message: "Rider unassigned and order returned for reassignment" });
+    } catch (error) {
+        next(error);
+    }
+};
 export const adminRejectRiderAssignment = async (req, res, next) => {
     try {
         const { riderId } = req.params;

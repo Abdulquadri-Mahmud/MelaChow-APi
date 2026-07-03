@@ -9,6 +9,7 @@ import RiderAssignment from "../model/riderAssignment.model.js";
 import OrderTermination from "../model/OrderTermination.js";
 import { offerOrderToAvailableRiders } from "../services/riderAssignment.service.js";
 import logger from "../config/logger.js";
+import { getPlatformConfig } from "../services/platformConfig.service.js";
 
 new Worker("delivery-watchdog", async (job) => {
     const { orderId, vendorOrderId, riderId } = job.data;
@@ -79,7 +80,9 @@ new Worker("delivery-watchdog", async (job) => {
 
         // 6. Log strike ONLY if food was already picked up
         if (foodPickedUp) {
-            const { TERMINATION_STRIKE_LIMIT, SUSPENSION_DURATION_MS } = await import("../config/payouts.js");
+            const { TERMINATION_STRIKE_LIMIT } = await import("../config/payouts.js");
+            const platformConfig = await getPlatformConfig();
+            const penaltyHours = platformConfig.riderTerminationPenaltyHours ?? 24;
             const updatedRider = await Rider.findByIdAndUpdate(riderId, {
                 $inc: { terminationStrikes: 1 },
                 $set: { lastTerminationAt: new Date() },
@@ -89,7 +92,7 @@ new Worker("delivery-watchdog", async (job) => {
                 await Rider.findByIdAndUpdate(riderId, {
                     $set: {
                         isSuspended: true,
-                        suspendedUntil: new Date(Date.now() + SUSPENSION_DURATION_MS),
+                        suspendedUntil: new Date(Date.now() + penaltyHours * 60 * 60 * 1_000),
                         status: "offline",
                     },
                 }, { session });

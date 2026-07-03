@@ -28,6 +28,7 @@ export const getAdminPlatformConfig = async (req, res) => {
           riderFixedPayout: 600,
           riderMinPayoutBalance: 500,
           riderAssignmentMode: "manual",
+          riderTerminationPenaltyHours: 24,
           commissionEnabled: false,
           commissionRate: 0,
           serviceFeeEnabled: false,
@@ -67,6 +68,7 @@ export const updateAdminPlatformConfig = async (req, res) => {
       riderFixedPayout,
       riderMinPayoutBalance,
       riderAssignmentMode,
+      riderTerminationPenaltyHours,
       commissionEnabled,
       commissionRate,
       serviceFeeEnabled,
@@ -92,6 +94,10 @@ export const updateAdminPlatformConfig = async (req, res) => {
 
     if (riderAssignmentMode !== undefined && !["manual", "automatic"].includes(riderAssignmentMode)) {
       errors.push("riderAssignmentMode must be 'manual' or 'automatic'");
+    }
+    if (riderTerminationPenaltyHours !== undefined &&
+        (!Number.isInteger(riderTerminationPenaltyHours) || riderTerminationPenaltyHours < 1 || riderTerminationPenaltyHours > 720)) {
+      errors.push("riderTerminationPenaltyHours must be a whole number between 1 and 720");
     }
 
     if (commissionRate !== undefined) {
@@ -127,6 +133,7 @@ export const updateAdminPlatformConfig = async (req, res) => {
     if (riderFixedPayout !== undefined) update.riderFixedPayout = riderFixedPayout;
     if (riderMinPayoutBalance !== undefined) update.riderMinPayoutBalance = riderMinPayoutBalance;
     if (riderAssignmentMode !== undefined) update.riderAssignmentMode = riderAssignmentMode;
+    if (riderTerminationPenaltyHours !== undefined) update.riderTerminationPenaltyHours = riderTerminationPenaltyHours;
     if (commissionEnabled !== undefined) update.commissionEnabled = commissionEnabled;
     if (commissionRate !== undefined) update.commissionRate = commissionRate;
     if (serviceFeeEnabled !== undefined) update.serviceFeeEnabled = serviceFeeEnabled;
@@ -150,6 +157,7 @@ export const updateAdminPlatformConfig = async (req, res) => {
       message: "Platform configuration updated. Changes take effect on the next order.",
       data: config,
     });
+
   } catch (error) {
     logger.error({ error: error.message }, "❌ Failed to update platform config");
     return res.status(500).json({ success: false, message: error.message });
