@@ -18,10 +18,10 @@ const { default: authVendor } = await import("../../middleware/vendor.middleware
 const JWT_SECRET = "test_secret_key_32_chars_minimum_x";
 
 const makeToken = (payload = {}) =>
-    jwt.sign({ id: "vendor123", role: "vendor", ...payload }, JWT_SECRET, { expiresIn: "1h" });
+    jwt.sign({ id: 'vendor123', role: 'vendor', type: 'access', ...payload }, JWT_SECRET, { expiresIn: '1h' });
 
 const makeExpiredToken = () =>
-    jwt.sign({ id: "vendor123" }, JWT_SECRET, { expiresIn: -1 });
+    jwt.sign({ id: 'vendor123', type: 'access' }, JWT_SECRET, { expiresIn: -1 });
 
 const mockVendor = {
     _id: "vendor123",

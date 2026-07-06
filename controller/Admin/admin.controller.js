@@ -5,7 +5,7 @@ import jwt from "jsonwebtoken";
 import { sendAdminEmail } from "../../config/Admin/admin.mailer.js";
 import Admin from "../../model/Admin/admin.model.js";
 import Wallet from "../../model/wallet/wallet.mode.js";
-import { sendTokenCookie } from "../../utils/sendTokenCookie.js";
+import { sendAuthCookies } from '../../utils/sendTokenCookie.js';
 
 import { generateAccessToken, generateRefreshToken } from "../../utils/generateTokens.js";
 import ActivityLog from "../../model/ActivityLog.js";
@@ -69,10 +69,7 @@ export const registerAdmin = async (req, res) => {
     res.status(201).json({
       success: true,
       message: "Admin registered successfully",
-      admin: {
-        ...admin.toObject(),
-        wallet,
-      },
+      admin: { ...admin.getPublicProfile(), wallet },
     });
   } catch (err) {
     res.status(500).json({
@@ -98,7 +95,7 @@ export const loginAdmin = async (req, res) => {
     const accessToken = generateAccessToken({ id: admin._id, role: admin.role });
     const refreshToken = generateRefreshToken({ id: admin._id, role: admin.role });
 
-    sendTokenCookie(res, refreshToken, "adminToken");
+    sendAuthCookies(res, accessToken, refreshToken, 'admin');
 
     // Log login
     await ActivityLog.create({

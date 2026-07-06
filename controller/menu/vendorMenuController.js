@@ -751,6 +751,14 @@ export const addMenuItemChoiceOption = async (req, res) => {
         const { groupId } = req.params;
         const { label, price_modifier_naira, image_url, is_available, sort_order } = req.body;
 
+        const group = await MenuItemChoiceGroup.findById(groupId).lean();
+        if (!group) return res.status(404).json({ success: false, message: 'Choice group not found' });
+        const ownedItem = await MenuItem.findOne({
+            _id: group.menu_item_id,
+            vendor_id: req.vendor._id,
+        }).select('_id').lean();
+        if (!ownedItem) return res.status(403).json({ success: false, message: 'Access denied' });
+
         if (!label || !label.trim()) {
             return res.status(400).json({ success: false, message: 'label is required' });
         }
@@ -792,6 +800,16 @@ export const updateMenuItemChoiceOption = async (req, res) => {
     try {
         const { optionId } = req.params;
         const { label, price_modifier_naira, image_url, is_available, sort_order } = req.body;
+
+        const existingOption = await MenuItemChoiceOption.findById(optionId).lean();
+        if (!existingOption) return res.status(404).json({ success: false, message: 'Option not found' });
+        const group = await MenuItemChoiceGroup.findById(existingOption.group_id).lean();
+        if (!group) return res.status(404).json({ success: false, message: 'Parent group not found' });
+        const ownedItem = await MenuItem.findOne({
+            _id: group.menu_item_id,
+            vendor_id: req.vendor._id,
+        }).select('_id').lean();
+        if (!ownedItem) return res.status(403).json({ success: false, message: 'Access denied' });
 
         const updateFields = {};
 

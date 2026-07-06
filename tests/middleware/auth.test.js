@@ -19,10 +19,10 @@ const { default: auth } = await import("../../middleware/auth.middleware.js");
 const JWT_SECRET = "test_secret_key_32_chars_minimum_x";
 
 const makeToken = (payload = {}, secret = JWT_SECRET) =>
-    jwt.sign({ id: "user123", ...payload }, secret, { expiresIn: "1h" });
+    jwt.sign({ id: 'user123', type: 'access', ...payload }, secret, { expiresIn: '1h' });
 
 const makeExpiredToken = () =>
-    jwt.sign({ id: "user123" }, JWT_SECRET, { expiresIn: -1 });
+    jwt.sign({ id: 'user123', type: 'access' }, JWT_SECRET, { expiresIn: -1 });
 
 const mockUser = {
     _id: "user123",

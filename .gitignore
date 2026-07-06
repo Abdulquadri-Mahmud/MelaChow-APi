@@ -6,6 +6,10 @@ node_modules/
 dist/
 .DS_Store
 *.log
+vapid-keys.env
+vapid-keys.txt
+coverage/
+test_output.txt
 .vercel
 generated/prisma/
 scratch/

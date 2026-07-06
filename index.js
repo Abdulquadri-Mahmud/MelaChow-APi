@@ -122,6 +122,16 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
+// Reject cross-site browser writes even when cookies are attached. Native/mobile
+// clients do not send Sec-Fetch-Site and continue to authenticate with Bearer tokens.
+app.use((req, res, next) => {
+  const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
+  if (unsafe && req.get('Sec-Fetch-Site') === 'cross-site') {
+    return res.status(403).json({ success: false, message: 'Cross-site request blocked' });
+  }
+  return next();
+});
+
 // -----------------------------
 // Security & System Middlewares
 // -----------------------------
@@ -263,6 +273,14 @@ const authLimiter = rateLimit({
   }
 });
 
+const otpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many verification attempts. Try again later.' },
+});
+
 const walletLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
@@ -328,6 +346,14 @@ app.use('/api/user/auth', authLimiter);
 app.use('/api/vendor/auth', authLimiter);
 app.use('/api/admin/auth', authLimiter);
 app.use('/api/auth/rider', authLimiter);
+app.use([
+  '/api/user/auth/verify-registration',
+  '/api/user/auth/verify-reset-code',
+  '/api/vendor/auth/verify-registration',
+  '/api/vendor/auth/verify-otp',
+  '/api/vendor/auth/verify-reset-code',
+  '/api/admin/auth/verify-reset-code',
+], otpLimiter);
 app.use('/api/wallet', walletLimiter);
 app.use('/api/order', orderLimiter);
 app.use('/api/orders', orderLimiter);

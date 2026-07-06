@@ -91,6 +91,10 @@ export async function initializeSocket(server) {
                 return next(new Error('Authentication failed'));
             }
 
+            if (decoded.type !== 'access') {
+                return next(new Error('Access token required'));
+            }
+
             const role = decoded.role || 'user';
             
             // Resolve identity based on role and available IDs
@@ -111,6 +115,10 @@ export async function initializeSocket(server) {
                 console.error(`❌ Socket Auth Failed: ${role} with ID ${targetId} not found`);
                 return next(new Error(`${role} not found`));
             }
+
+            const inactive = identity.deletedAt || identity.suspended || identity.banned ||
+                identity.isActive === false || (role === 'vendor' && identity.active === false);
+            if (inactive) return next(new Error('Account is inactive'));
 
             socket.userId   = identity._id.toString();
             socket.userEmail = identity.email || identity.name || identity.phone;
@@ -141,7 +149,7 @@ export async function initializeSocket(server) {
         // Puts the rider into room "rider:{riderId}" so that
         // io.to(SOCKET_ROOMS.rider(riderId)).emit(...) reaches them.
         socket.on('rider_connect', ({ riderId } = {}) => {
-            if (!riderId) return;
+            if (!riderId || socket.userRole !== 'rider' || riderId !== socket.userId) return;
             const room = `rider:${riderId}`;
             socket.join(room);
             console.log(`🛵 Rider ${riderId} joined room: ${room}`);
@@ -149,7 +157,7 @@ export async function initializeSocket(server) {
 
         // Called by socketService.subscribeToRider(riderId)
         socket.on('subscribe_rider', (riderId) => {
-            if (!riderId) return;
+            if (!riderId || socket.userRole !== 'rider' || riderId !== socket.userId) return;
             const room = `rider:${riderId}`;
             socket.join(room);
             console.log(`🛵 Rider subscribed to room: ${room}`);
@@ -166,7 +174,7 @@ export async function initializeSocket(server) {
         // ── Vendor room handlers ───────────────────────────────────────────
         // Called by vendor frontend: socket.emit('vendor_connect', { vendorId })
         socket.on('vendor_connect', async ({ vendorId } = {}) => {
-            if (!vendorId) return;
+            if (!vendorId || socket.userRole !== 'vendor' || vendorId !== socket.userId) return;
             // ✅ FIX: Use "vendor:{id}" colon format to match SOCKET_ROOMS.vendor()
             // The old subscribe_restaurant handler used "restaurant_{id}" (underscore)
             // which doesn't match what rider.controller.js emits to.
@@ -198,7 +206,7 @@ export async function initializeSocket(server) {
 
         // Called by socketService.subscribeToRestaurant(restaurantId)
         socket.on('subscribe_restaurant', (restaurantId) => {
-            if (!restaurantId) return;
+            if (!restaurantId || socket.userRole !== 'vendor' || restaurantId !== socket.userId) return;
             // ✅ FIX: Same room format fix — was "restaurant_{id}", must be "vendor:{id}"
             socket.join(`vendor:${restaurantId}`);
             console.log(`🏪 Subscribed to vendor room: vendor:${restaurantId}`);
@@ -207,7 +215,7 @@ export async function initializeSocket(server) {
         // ── Customer / Order room handlers ────────────────────────────────
         // Customer joins their personal delivery-tracking room
         socket.on('customer_connect', async ({ userId } = {}) => {
-            if (!userId) return;
+            if (!userId || socket.userRole !== 'user' || userId !== socket.userId) return;
             socket.join(`customer:${userId}`);
             console.log(`👤 Customer ${userId} joined room: customer:${userId}`);
 
@@ -235,8 +243,14 @@ export async function initializeSocket(server) {
         });
 
         // Subscribe to order-specific updates
-        socket.on('subscribe_order', (orderId) => {
+        socket.on('subscribe_order', async (orderId) => {
             if (!orderId) return;
+            const order = await (await import('../model/order/Order.js')).default.findById(orderId)
+                .select('userId riderId vendorId').lean();
+            if (!order) return;
+            const allowedIds = [order.userId, order.riderId, order.vendorId]
+                .filter(Boolean).map((id) => id.toString());
+            if (!allowedIds.includes(socket.userId) && !['admin', 'super-admin'].includes(socket.userRole)) return;
             // ✅ FIX: Use "order:{id}" colon format to match SOCKET_ROOMS.order()
             socket.join(`order:${orderId}`);
             console.log(`📦 Subscribed to order room: order:${orderId}`);

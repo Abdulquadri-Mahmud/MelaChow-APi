@@ -9,7 +9,8 @@ export const registerRiderSocketHandlers = (io, socket) => {
 
     socket.on(SOCKET_EVENTS.RIDER_CONNECT, ({ riderId } = {}) => {
         try {
-            if (!riderId) throw new Error("riderId is required");
+            if (!riderId) throw new Error('riderId is required');
+            if (socket.userRole !== 'rider' || riderId !== socket.userId) throw new Error('Access denied');
             socket.join(SOCKET_ROOMS.rider(riderId));
             socket.data.riderId = riderId;
             console.log(`🛵 Rider connected: ${riderId}`);
@@ -20,7 +21,8 @@ export const registerRiderSocketHandlers = (io, socket) => {
 
     socket.on(SOCKET_EVENTS.VENDOR_CONNECT, ({ vendorId } = {}) => {
         try {
-            if (!vendorId) throw new Error("vendorId is required");
+            if (!vendorId) throw new Error('vendorId is required');
+            if (socket.userRole !== 'vendor' || vendorId !== socket.userId) throw new Error('Access denied');
             socket.join(SOCKET_ROOMS.vendor(vendorId));
             socket.data.vendorId = vendorId;
             console.log(`🏪 Vendor connected: ${vendorId}`);
@@ -31,7 +33,8 @@ export const registerRiderSocketHandlers = (io, socket) => {
 
     socket.on(SOCKET_EVENTS.CUSTOMER_CONNECT, ({ customerId } = {}) => {
         try {
-            if (!customerId) throw new Error("customerId is required");
+            if (!customerId) throw new Error('customerId is required');
+            if (socket.userRole !== 'user' || customerId !== socket.userId) throw new Error('Access denied');
             socket.join(SOCKET_ROOMS.customer(customerId));
             socket.data.customerId = customerId;
             console.log(`👤 Customer connected: ${customerId}`);
@@ -44,7 +47,8 @@ export const registerRiderSocketHandlers = (io, socket) => {
 
     socket.on(SOCKET_EVENTS.RIDER_TOGGLE_AVAILABILITY, async ({ riderId, status } = {}) => {
         try {
-            if (!riderId || !status) throw new Error("riderId and status are required");
+            if (!riderId || !status) throw new Error('riderId and status are required');
+            if (socket.userRole !== 'rider' || riderId !== socket.userId) throw new Error('Access denied');
 
             const rider = await Rider.findById(riderId);
             if (!rider) throw new Error("Rider not found");
@@ -83,7 +87,8 @@ export const registerRiderSocketHandlers = (io, socket) => {
 
     socket.on(SOCKET_EVENTS.RIDER_PICKED_UP, async ({ riderId, orderId } = {}) => {
         try {
-            if (!riderId || !orderId) throw new Error("riderId and orderId are required");
+            if (!riderId || !orderId) throw new Error('riderId and orderId are required');
+            if (socket.userRole !== 'rider' || riderId !== socket.userId) throw new Error('Access denied');
 
             const order = await Order.findById(orderId);
             if (!order) throw new Error("Order not found");

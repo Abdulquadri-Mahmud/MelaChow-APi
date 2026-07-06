@@ -2,7 +2,7 @@ import jwt from "jsonwebtoken";
 import { blockToken } from "../middleware/tokenBlocklist.js";
 import Rider from "../model/rider.model.js";
 import { generateAccessToken, generateRefreshToken } from "../utils/generateTokens.js";
-import { sendTokenCookie } from "../utils/sendTokenCookie.js";
+import { sendAuthCookies } from '../utils/sendTokenCookie.js';
 
 export const loginRider = async (req, res, next) => {
     try {
@@ -54,7 +54,7 @@ export const loginRider = async (req, res, next) => {
         const accessToken = generateAccessToken(payload);
         const refreshToken = generateRefreshToken(payload);
 
-        sendTokenCookie(res, refreshToken, "riderToken");
+        sendAuthCookies(res, accessToken, refreshToken, 'rider');
 
         res.status(200).json({
             success: true,
@@ -91,6 +91,12 @@ export const logoutRider = async (req, res) => {
             secure: process.env.NODE_ENV === "production",
             sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
             path: "/",
+        });
+        res.clearCookie('riderRefreshToken', {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+            path: '/',
         });
 
         res.status(200).json({ success: true, message: "Logged out successfully" });

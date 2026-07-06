@@ -1,6 +1,6 @@
 import jwt from 'jsonwebtoken';
 import User from '../model/user.model.js';
-import { sendTokenCookie } from '../utils/sendTokenCookie.js';
+import { sendAuthCookies } from '../utils/sendTokenCookie.js';
 import { generateAccessToken, generateRefreshToken } from '../utils/generateTokens.js';
 
 export const verifyOTP = async (req, res) => {
@@ -35,7 +35,7 @@ export const verifyOTP = async (req, res) => {
     const refreshToken = generateRefreshToken({ id: user._id, role: user.role || 'user' });
 
     // Set HTTP-only Cookie (Refresh Token - Primary Authority)
-    sendTokenCookie(res, refreshToken, "token");
+    sendAuthCookies(res, accessToken, refreshToken, 'user');
 
     // Convert to plain JS object and remove sensitive data
     const userObj = user.toObject();

@@ -43,6 +43,7 @@ const multiAuth = async (req, res, next) => {
             if (!blocked) {
                 try {
                     const decoded = jwt.verify(userToken, process.env.JWT_SECRET);
+                    if (decoded.type !== 'access') throw new Error('Access token required');
                     const user = await User.findById(decoded.id).select("-password");
                     if (user && (!decoded.role || decoded.role === "user") && user.isActive && !user.suspended && !user.banned) {
                         req.user = user;
@@ -68,6 +69,7 @@ const multiAuth = async (req, res, next) => {
             if (!blocked) {
                 try {
                     const decoded = jwt.verify(vendorToken, process.env.JWT_SECRET);
+                    if (decoded.type !== 'access') throw new Error('Access token required');
                     const vendor = await Vendor.findById(decoded.id);
                     if (vendor && decoded.role === 'vendor' && vendor.active && !vendor.suspended && !vendor.deletedAt) {
                         req.vendor = vendor;
@@ -92,6 +94,7 @@ const multiAuth = async (req, res, next) => {
             if (!blocked) {
                 try {
                     const decoded = jwt.verify(adminToken, process.env.JWT_SECRET);
+                    if (decoded.type !== 'access') throw new Error('Access token required');
                     const admin = await Admin.findById(decoded.id);
                     if (admin && ADMIN_ROLES.includes(decoded.role) && admin.isActive) {
                         req.admin = admin;

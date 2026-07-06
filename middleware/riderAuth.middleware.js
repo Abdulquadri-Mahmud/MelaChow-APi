@@ -66,6 +66,10 @@ export const requireRiderAuth = async (req, res, next) => {
             });
         }
 
+        if (decoded.type !== 'access') {
+            return res.status(401).json({ success: false, message: 'Access token required' });
+        }
+
         if (!rider.isVerified) {
             return res.status(403).json({
                 success: false,
