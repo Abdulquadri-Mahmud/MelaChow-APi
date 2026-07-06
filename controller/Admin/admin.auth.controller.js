@@ -1,7 +1,7 @@
 import Admin from '../../model/Admin/admin.model.js';
 import { generateAccessToken, generateRefreshToken, generateOTP, generateResetToken, verifyToken } from '../../utils/jwt.js';
 import { sendMail } from '../../config/mailer.js';
-import { sendTokenCookie } from '../../utils/sendTokenCookie.js';
+import { sendAuthCookies } from '../../utils/sendTokenCookie.js';
 import jwt from "jsonwebtoken";
 import { blockToken } from "../../middleware/tokenBlocklist.js";
 
@@ -63,14 +63,13 @@ export const loginAdmin = async (req, res) => {
         const refreshToken = generateRefreshToken(admin._id, admin.role || 'admin');
 
         // Set HttpOnly cookie
-        sendTokenCookie(res, refreshToken, 'adminToken');
+        sendAuthCookies(res, accessToken, refreshToken, 'admin');
 
         res.status(200).json({
             success: true,
             message: 'Login successful',
             admin: admin.getPublicProfile(),
-            accessToken,
-            refreshToken
+            accessToken
         });
 
     } catch (error) {
@@ -229,14 +228,13 @@ export const resetAdminPassword = async (req, res) => {
         const refreshToken = generateRefreshToken(admin._id, admin.role || 'admin');
 
         // Set HttpOnly cookie
-        sendTokenCookie(res, refreshToken, 'adminToken');
+        sendAuthCookies(res, accessToken, refreshToken, 'admin');
 
         res.status(200).json({
             success: true,
             message: 'Password reset successful',
             admin: admin.getPublicProfile(),
-            accessToken,
-            refreshToken
+            accessToken
         });
 
     } catch (error) {
@@ -251,7 +249,7 @@ export const resetAdminPassword = async (req, res) => {
 
 export const refreshAdminToken = async (req, res) => {
     try {
-        const token = req.cookies.adminToken;
+        const token = req.cookies.adminRefreshToken || req.cookies.adminToken;
 
         if (!token) {
             return res.status(401).json({ message: 'No refresh token provided' });
@@ -278,6 +276,7 @@ export const refreshAdminToken = async (req, res) => {
 
         // Generate new access token
         const accessToken = generateAccessToken(admin._id, admin.role);
+        sendAuthCookies(res, accessToken, token, 'admin');
 
         res.status(200).json({
             success: true,
@@ -312,6 +311,12 @@ export const logoutAdmin = async (req, res) => {
             secure: isProduction,
             sameSite: "lax",
             path: "/",
+        });
+        res.clearCookie('adminRefreshToken', {
+            httpOnly: true,
+            secure: isProduction,
+            sameSite: isProduction ? 'none' : 'lax',
+            path: '/',
         });
 
         res.status(200).json({

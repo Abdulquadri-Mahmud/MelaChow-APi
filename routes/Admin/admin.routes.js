@@ -10,7 +10,7 @@ import {
     getRecentActivities,
     getMe
 } from "../../controller/Admin/admin.controller.js";
-import { adminAuth } from "../../middleware/adminAuth.js";
+import { adminAuth, superAdminOnly } from '../../middleware/adminAuth.js';
 import { getOperationalVelocity } from "../../controller/Admin/dashboard.controller.js";
 import { getVendorMetrics } from "../../controller/Admin/vendorMetrics.controller.js";
 import { getUserMetrics } from "../../controller/Admin/userMetrics.controller.js";
@@ -56,7 +56,7 @@ router.get("/categories/metrics", adminAuth, getCategoryMetrics);
 router.get("/locations/metrics", adminAuth, getLocationMetrics);
 
 // Auth routes
-router.post("/register", registerAdmin);
+router.post('/register', superAdminOnly, registerAdmin);
 router.post("/login", loginAdmin);
 router.post("/forgot-password", forgotPassword);
 router.post("/reset-password", resetPassword);
@@ -65,7 +65,7 @@ router.post("/logout", logoutAdmin);
 // Admin management
 router.get("/me", adminAuth, getMe);
 router.get("/get-all", adminAuth, getAllAdmins);
-router.delete("/delete/:id", adminAuth, deleteAdmin);
+router.delete('/delete/:id', superAdminOnly, deleteAdmin);
 router.get("/activities", adminAuth, getRecentActivities);
 
 // Admin Dashboard Analytics
@@ -95,10 +95,10 @@ router.patch("/vendors/status", adminAuth, toggleVendorStatus);
 
 // Update vendor commission
 // PATCH /api/admin/vendors/commission
-router.patch("/vendors/commission", adminAuth, updateCommission);
+router.patch('/vendors/commission', superAdminOnly, updateCommission);
 
 // Switch vendor delivery management mode
-router.patch("/vendors/:vendorId/delivery-mode", adminAuth, updateVendorDeliveryMode);
+router.patch('/vendors/:vendorId/delivery-mode', superAdminOnly, updateVendorDeliveryMode);
 
 // Vendor performance metrics
 // GET /api/vendors/performance?vendorId=123
@@ -112,7 +112,7 @@ router.get("/vendors/foods", adminAuth, getVendorFoods);
 router.get("/finance/withdrawals", adminAuth, getAdminWithdrawals);
 router.post("/finance/withdrawals/:id/retry", adminAuth, retryWithdrawal);
 router.patch("/finance/withdrawals/:id/approve", adminAuth, approvePendingWithdrawal);
-router.patch("/withdrawals/:withdrawalId/force-fail", adminAuth, forceFailWithdrawal);
+router.patch('/withdrawals/:withdrawalId/force-fail', superAdminOnly, forceFailWithdrawal);
 
 // Finance Summary Routes
 router.get("/finance/wallet-breakdown", adminAuth, getAdminWalletBreakdown);
@@ -120,7 +120,7 @@ router.get("/finance/payout-history", adminAuth, getPayoutHistory);
 
 // Platform Configuration
 router.get("/platform-config", adminAuth, getAdminPlatformConfig);
-router.put("/platform-config", adminAuth, updateAdminPlatformConfig);
+router.put('/platform-config', superAdminOnly, updateAdminPlatformConfig);
 
 // Manual payout trigger — admin only, fires the same sweep as the nightly cron
 // POST /api/admin/payouts/trigger?type=rider|vendor|all

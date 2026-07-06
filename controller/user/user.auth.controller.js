@@ -1,7 +1,7 @@
 import User from '../../model/user.model.js';
 import { generateAccessToken, generateRefreshToken, generateOTP, generateResetToken, verifyToken } from '../../utils/jwt.js';
 import { sendMail } from '../../config/mailer.js';
-import { sendTokenCookie } from '../../utils/sendTokenCookie.js';
+import { sendAuthCookies } from '../../utils/sendTokenCookie.js';
 import { wrapLayout } from '../../services/emailTemplate.service.js';
 
 // ============================================
@@ -163,7 +163,7 @@ export const setPassword = async (req, res) => {
         const refreshToken = generateRefreshToken(user._id, 'user');
 
         // Set HttpOnly cookie
-        sendTokenCookie(res, refreshToken, 'token');
+        sendAuthCookies(res, accessToken, refreshToken, 'user');
 
         // Return user data (exclude password)
         const userResponse = user.toObject();
@@ -172,8 +172,7 @@ export const setPassword = async (req, res) => {
         res.status(200).json({
             message: 'Password set successfully',
             user: userResponse,
-            accessToken,
-            refreshToken
+            accessToken
         });
 
     } catch (error) {
@@ -256,7 +255,7 @@ export const loginWithPassword = async (req, res) => {
         const refreshToken = generateRefreshToken(user._id, 'user');
 
         // Set HttpOnly cookie
-        sendTokenCookie(res, refreshToken, 'token');
+        sendAuthCookies(res, accessToken, refreshToken, 'user');
 
         // Return user data
         const userResponse = user.toObject();
@@ -268,8 +267,7 @@ export const loginWithPassword = async (req, res) => {
             success: true,
             message: 'Login successful',
             user: userResponse,
-            accessToken,
-            refreshToken
+            accessToken
         });
 
     } catch (error) {
@@ -425,7 +423,7 @@ export const resetPasswordNew = async (req, res) => {
         const refreshToken = generateRefreshToken(user._id, 'user');
 
         // Set HttpOnly cookie
-        sendTokenCookie(res, refreshToken, 'token');
+        sendAuthCookies(res, accessToken, refreshToken, 'user');
 
         const userResponse = user.toObject();
         delete userResponse.password;
@@ -434,8 +432,7 @@ export const resetPasswordNew = async (req, res) => {
             success: true,
             message: 'Password reset successful',
             user: userResponse,
-            accessToken,
-            refreshToken
+            accessToken
         });
 
     } catch (error) {
@@ -450,7 +447,7 @@ export const resetPasswordNew = async (req, res) => {
 
 export const refreshToken = async (req, res) => {
     try {
-        const token = req.cookies.token;
+        const token = req.cookies.refreshToken || req.cookies.token;
 
         if (!token) {
             return res.status(401).json({ message: 'No refresh token provided' });
@@ -472,6 +469,7 @@ export const refreshToken = async (req, res) => {
 
         // Generate new access token
         const accessToken = generateAccessToken(user._id, user.role);
+        sendAuthCookies(res, accessToken, token, 'user');
 
         res.status(200).json({
             success: true,

@@ -15,14 +15,14 @@
  * 
  * ========================================
  */
-export const sendTokenCookie = (res, token, cookieName = "token") => {
+export const sendTokenCookie = (res, token, cookieName = 'token', maxAge = 15 * 60 * 1000) => {
   const isProduction = process.env.NODE_ENV === "production";
 
   const cookieOptions = {
     httpOnly: true,              // ✅ Prevents XSS attacks
     secure: isProduction,         // ✅ HTTPS only in production (required for SameSite=None)
     sameSite: isProduction ? "none" : "lax", // ✅ Required for cross-domain cookies in prod
-    maxAge: 7 * 24 * 60 * 60 * 1000, // ✅ 7 days
+    maxAge,
     path: "/",                   // ✅ Available across all routes
     // ❌ NO domain attribute - let the browser set it automatically
     // Setting domain to ".vercel.app" is rejected by browsers for security
@@ -39,4 +39,16 @@ export const sendTokenCookie = (res, token, cookieName = "token") => {
       willExpireAt: new Date(Date.now() + cookieOptions.maxAge).toISOString(),
     });
   }
+};
+
+export const sendAuthCookies = (res, accessToken, refreshToken, role = 'user') => {
+  const names = {
+    user: ['token', 'refreshToken'],
+    vendor: ['vendorToken', 'vendorRefreshToken'],
+    admin: ['adminToken', 'adminRefreshToken'],
+    rider: ['riderToken', 'riderRefreshToken'],
+  };
+  const [accessName, refreshName] = names[role] || names.user;
+  sendTokenCookie(res, accessToken, accessName, 15 * 60 * 1000);
+  sendTokenCookie(res, refreshToken, refreshName, 30 * 24 * 60 * 60 * 1000);
 };

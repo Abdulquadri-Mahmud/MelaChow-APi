@@ -28,6 +28,12 @@ export const logout = async (req, res) => {
             path: "/",
             // ❌ NO domain attribute (same as when it was set)
         });
+        res.clearCookie('refreshToken', {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+            path: '/',
+        });
 
         // ✅ Debug logging
         if (process.env.NODE_ENV !== 'production') {

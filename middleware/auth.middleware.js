@@ -32,6 +32,10 @@ const auth = async (req, res, next) => {
       return res.status(403).json({ message: "Invalid or expired token" });
     }
 
+    if (decoded.type !== 'access') {
+      return res.status(401).json({ message: 'Access token required' });
+    }
+
     if (decoded.role && decoded.role !== "user") {
       return res.status(403).json({ message: "Access denied. User role required." });
     }

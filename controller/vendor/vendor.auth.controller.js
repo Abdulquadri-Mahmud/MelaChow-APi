@@ -1,7 +1,7 @@
 import Vendor from '../../model/vendor/vendor.model.js';
 import { generateAccessToken, generateRefreshToken, generateOTP, generateResetToken, verifyToken } from '../../utils/jwt.js';
 import { sendMail } from '../../config/mailer.js';
-import { sendTokenCookie } from '../../utils/sendTokenCookie.js';
+import { sendAuthCookies } from '../../utils/sendTokenCookie.js';
 import jwt from "jsonwebtoken";
 import { blockToken } from "../../middleware/tokenBlocklist.js";
 import { createTransferRecipient, resolveBankAccount } from '../../services/bank.service.js';
@@ -368,10 +368,11 @@ export const setVendorPassword = async (req, res) => {
 
     // Generate tokens (only if already approved - rare case but possible for re-registrations)
     const accessToken = generateAccessToken(vendor._id, 'vendor');
+    sendAuthCookies(res, accessToken, token, 'vendor');
     const refreshToken = generateRefreshToken(vendor._id, 'vendor');
 
     // Set HttpOnly cookie
-    sendTokenCookie(res, refreshToken, 'vendorToken');
+    sendAuthCookies(res, accessToken, refreshToken, 'vendor');
 
     // Return vendor data (exclude password)
     const vendorResponse = vendor.getPublicProfile();
@@ -379,8 +380,7 @@ export const setVendorPassword = async (req, res) => {
     res.status(200).json({
       message: 'Password set successfully',
       vendor: vendorResponse,
-      accessToken,
-      refreshToken
+      accessToken
     });
 
   } catch (error) {
@@ -471,7 +471,7 @@ export const loginVendorWithPassword = async (req, res) => {
     const refreshToken = generateRefreshToken(vendor._id, 'vendor');
 
     // Set HttpOnly cookie
-    sendTokenCookie(res, refreshToken, 'vendorToken');
+    sendAuthCookies(res, accessToken, refreshToken, 'vendor');
 
     // Return vendor data
     const vendorResponse = vendor.getPublicProfile();
@@ -480,8 +480,7 @@ export const loginVendorWithPassword = async (req, res) => {
       success: true,
       message: 'Login successful',
       vendor: vendorResponse,
-      accessToken,
-      refreshToken
+      accessToken
     });
 
   } catch (error) {
@@ -637,14 +636,13 @@ export const resetVendorPasswordNew = async (req, res) => {
     const refreshToken = generateRefreshToken(vendor._id, 'vendor');
 
     // Set HttpOnly cookie
-    sendTokenCookie(res, refreshToken, 'vendorToken');
+    sendAuthCookies(res, accessToken, refreshToken, 'vendor');
 
     res.status(200).json({
       success: true,
       message: 'Password reset successful',
       vendor: vendor.getPublicProfile(),
-      accessToken,
-      refreshToken
+      accessToken
     });
 
   } catch (error) {
@@ -658,7 +656,7 @@ export const resetVendorPasswordNew = async (req, res) => {
 
 export const refreshVendorToken = async (req, res) => {
   try {
-    const token = req.cookies.vendorToken;
+    const token = req.cookies.vendorRefreshToken || req.cookies.vendorToken;
 
     if (!token) {
       return res.status(401).json({ message: 'No refresh token provided' });
@@ -712,6 +710,12 @@ export const vendorLogout = async (req, res) => {
       secure: isProduction,
       sameSite: "lax",
       path: "/",
+    });
+    res.clearCookie('vendorRefreshToken', {
+      httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? 'none' : 'lax',
+      path: '/',
     });
 
     res.status(200).json({

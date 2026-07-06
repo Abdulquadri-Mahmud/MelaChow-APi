@@ -18,7 +18,7 @@ const { requireRiderAuth } = await import("../../middleware/riderAuth.middleware
 const JWT_SECRET = "test_secret_key_32_chars_minimum_x";
 
 const makeToken = (payload = {}) =>
-    jwt.sign({ id: "rider123", role: "rider", ...payload }, JWT_SECRET, { expiresIn: "1h" });
+    jwt.sign({ id: 'rider123', role: 'rider', type: 'access', ...payload }, JWT_SECRET, { expiresIn: '1h' });
 
 const mockRider = {
     _id: "rider123",

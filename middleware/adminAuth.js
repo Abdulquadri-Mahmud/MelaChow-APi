@@ -19,6 +19,9 @@ export const adminAuth = async (req, res, next) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (decoded.type !== 'access') {
+      return res.status(401).json({ success: false, message: 'Access token required' });
+    }
     if (!["admin", "super-admin", "finance-admin"].includes(decoded.role)) {
       return res.status(403).json({ success: false, message: "Access denied. Admin role required." });
     }
