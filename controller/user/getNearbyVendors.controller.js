@@ -40,13 +40,13 @@ const shapeActiveDeliveryPromo = (promo) => {
 };
 
 /**
- * @desc    Get all vendors near the logged-in user
+ * @desc    Get all vendors near a city/state, with optional authenticated address fallback
  * @route   GET /api/user/vendors/nearby
- * @access  Private (User)
+ * @access  Public
  */
 export const getNearbyVendorsForUser = async (req, res) => {
     try {
-        const userId = req.userId; // From auth middleware
+        const userId = req.userId; // Optional, from optionalAuth middleware
 
         // 1. Resolve Target Location
         // Priority: Query Params -> Default Address -> First Address
@@ -54,6 +54,13 @@ export const getNearbyVendorsForUser = async (req, res) => {
         let state = req.query.state;
 
         if (!city || !state) {
+            if (!userId) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Please provide city/state query params."
+                });
+            }
+
             // 2. Fall back to User Profile if query params are missing
             const user = await User.findById(userId);
             if (!user) {
@@ -73,7 +80,7 @@ export const getNearbyVendorsForUser = async (req, res) => {
             state = defaultAddress.state;
         }
 
-        console.log(`📍 Fetching vendors for User ${userId} in ${city}, ${state}`);
+        console.log(`Fetching vendors in ${city}, ${state}`);
 
         // 3. Normalize for Search (Relaxed regex to handle whitespace in DB)
         const cityRegex = new RegExp(`^\\s*${city.trim()}\\s*$`, "i");
