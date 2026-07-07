@@ -29,7 +29,7 @@ const getMinPayoutBalance = async () => {
     }
 };
 
-// NOTE: Paystack deducts its own transfer fee (₦10/₦25/₦50) directly from the
+// NOTE: Paystack deducts its own transfer fee (NGN 100/NGN 200/NGN 300) directly from the
 // MelaChow Paystack balance — NOT from the transfer amount the recipient receives.
 // We therefore send the rider's FULL wallet balance and record transferFee: 0 on
 // our side. The rider receives the exact amount we debit from their wallet.
