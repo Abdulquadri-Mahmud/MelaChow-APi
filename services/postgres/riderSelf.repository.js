@@ -90,8 +90,12 @@ const vendorDeliveryFeeShape = (fee) => ({
   deliveryFee: fee.deliveryFee,
 });
 
-const riderPublicShape = (rider) =>
-  compactObject({
+const riderPublicShape = (rider) => {
+  const safePayoutDetails = rider.payoutDetails && typeof rider.payoutDetails === "object"
+    ? Object.fromEntries(Object.entries(rider.payoutDetails).filter(([key]) => key !== "recipientCode"))
+    : rider.payoutDetails;
+
+  return compactObject({
     _id: legacyId(rider),
     name: rider.name,
     phone: rider.phone,
@@ -125,7 +129,7 @@ const riderPublicShape = (rider) =>
     ratingCount: rider.ratingCount,
     notes: rider.notes,
     metadata: rider.metadata,
-    payoutDetails: rider.payoutDetails,
+    payoutDetails: safePayoutDetails,
     role: rider.role,
     createdAt: rider.createdAt,
     updatedAt: rider.updatedAt,
@@ -133,6 +137,7 @@ const riderPublicShape = (rider) =>
     id: legacyId(rider),
     __v: 0,
   });
+};
 
 const restaurantShape = (vendor) =>
   vendor

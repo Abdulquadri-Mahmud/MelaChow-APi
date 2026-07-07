@@ -211,3 +211,40 @@ export const validateSuccessfulPaymentForOrder = async (order, payData, { sessio
     paidAmount: paidKobo / 100,
   };
 };
+export const hasProcessedPaymentWebhookEvent = async (reference, webhookEventKey) => {
+  if (!reference || !webhookEventKey) return false;
+
+  const existing = await PaymentAttempt.findOne({
+    reference,
+    "events.metadata.webhookEventKey": webhookEventKey,
+    "events.metadata.webhookProcessed": true,
+  }).lean();
+
+  return Boolean(existing);
+};
+
+export const markPaymentWebhookEventProcessed = async ({
+  reference,
+  order = null,
+  payData = null,
+  eventType,
+  webhookEventKey,
+  providerEventId = null,
+  message = "Paystack webhook processed",
+  session = null,
+}) => recordPaymentAttemptEvent({
+  reference,
+  order,
+  payData,
+  status: "success",
+  recoveryState: "recovered",
+  type: "paystack_webhook_processed",
+  message,
+  metadata: {
+    eventType,
+    providerEventId,
+    webhookEventKey,
+    webhookProcessed: true,
+  },
+  session,
+});

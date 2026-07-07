@@ -28,6 +28,8 @@ import { assertVendorIsOpen } from "../../utils/vendorOpenStatus.js";
 import {
   recordPaymentAttemptEvent,
   validateSuccessfulPaymentForOrder,
+  hasProcessedPaymentWebhookEvent,
+  markPaymentWebhookEventProcessed,
 } from "../../services/paymentHardening.service.js";
 import { usePostgresOrderStatusWrites, usePostgresPaymentWrites, usePostgresRiderAssignmentWrites } from "../../services/postgres/compat.js";
 import { adminOrdersRepository } from "../../services/postgres/adminOrders.repository.js";
@@ -2142,12 +2144,24 @@ export const paystackWebhook = async (req, res) => {
     return res.status(200).send("Event ignored");
   }
 
-  const reference = event.data.reference;
+  const reference = event.data?.reference;
+  const providerEventId = event.data?.id || event.id || null;
+  const webhookEventKey = `${eventType}:${providerEventId || reference}`;
+
+  if (!reference) {
+    console.warn("Paystack charge.success webhook missing reference");
+    return res.status(200).send("Webhook missing reference");
+  }
 
   try {
     if (usePostgresPaymentWrites()) {
       const postgresOrder = await postgresPaymentRepository.findOrderByPaymentReference(reference);
       if (postgresOrder) {
+        if (await postgresPaymentRepository.hasProcessedWebhookEvent(reference, webhookEventKey)) {
+          console.log("Paystack Postgres webhook event already processed:", webhookEventKey);
+          return res.status(200).send("Postgres webhook event already processed");
+        }
+
         if (postgresOrder.paymentStatus === "paid") {
           console.log("⚡ Postgres order already paid, ignoring webhook:", reference);
           return res.status(200).send("Postgres order already processed");
@@ -2156,6 +2170,15 @@ export const paystackWebhook = async (req, res) => {
         try {
           await postgresPaymentRepository.validateSuccessfulPaymentForOrder(postgresOrder, event.data);
           await postgresPaymentRepository.fulfillPaidOrder(reference);
+          await postgresPaymentRepository.markWebhookEventProcessed({
+            reference,
+            order: postgresOrder,
+            payData: event.data,
+            eventType,
+            webhookEventKey,
+            providerEventId,
+            message: "Paystack charge.success webhook fulfilled Postgres order",
+          });
         } catch (validationErr) {
           console.error("Postgres webhook payment validation failed:", validationErr.message);
           return res.status(200).send("Postgres webhook payment validation recorded for manual review");
@@ -2171,6 +2194,11 @@ export const paystackWebhook = async (req, res) => {
     const existingOrder = await Order.findOne({ paymentReference: reference });
 
     if (existingOrder) {
+      if (await hasProcessedPaymentWebhookEvent(reference, webhookEventKey)) {
+        console.log("Paystack webhook event already processed:", webhookEventKey);
+        return res.status(200).send("Webhook event already processed");
+      }
+
       if (existingOrder.paymentStatus === "paid") {
         console.log("⚡ Order already paid, ignoring webhook:", reference);
         return res.status(200).send("Order already processed");
@@ -2184,6 +2212,15 @@ export const paystackWebhook = async (req, res) => {
         return res.status(200).send("Webhook payment validation recorded for manual review");
       }
       await updateOrderAfterPayment(existingOrder._id, reference);
+      await markPaymentWebhookEventProcessed({
+        reference,
+        order: existingOrder,
+        payData: event.data,
+        eventType,
+        webhookEventKey,
+        providerEventId,
+        message: "Paystack charge.success webhook fulfilled Mongo order",
+      });
       return res.status(200).send("Webhook processed successfully");
     }
 
@@ -2197,6 +2234,30 @@ export const paystackWebhook = async (req, res) => {
       console.log("⚠️ Webhook: Found Legacy PendingOrder, processing...", reference);
 
       const orderData = pendingOrder.payload;
+      const expectedTotal = Number(orderData?.total || 0);
+      if (!expectedTotal) {
+        await recordPaymentAttemptEvent({
+          reference,
+          payData: event.data,
+          status: "review",
+          recoveryState: "amount_validation_missing",
+          type: "legacy_pending_order_missing_total",
+          message: "Legacy PendingOrder payload has no total; payment not fulfilled automatically",
+          metadata: { webhookEventKey, providerEventId },
+        });
+        return res.status(200).send("Legacy pending order missing total; manual review required");
+      }
+
+      try {
+        await validateSuccessfulPaymentForOrder(
+          { ...orderData, total: expectedTotal, paymentReference: reference },
+          event.data
+        );
+      } catch (validationErr) {
+        console.error("Legacy pending order webhook validation failed:", validationErr.message);
+        return res.status(200).send("Legacy webhook payment validation recorded for manual review");
+      }
+
       await createOrder({
         userId: orderData.userId,
         items: orderData.items,
@@ -2206,6 +2267,16 @@ export const paystackWebhook = async (req, res) => {
         paymentReference: reference,
         paymentStatus: "paid",
         orderId: null
+      });
+
+      await markPaymentWebhookEventProcessed({
+        reference,
+        order: { ...orderData, total: expectedTotal, paymentReference: reference },
+        payData: event.data,
+        eventType,
+        webhookEventKey,
+        providerEventId,
+        message: "Paystack charge.success webhook fulfilled legacy PendingOrder",
       });
 
       try {

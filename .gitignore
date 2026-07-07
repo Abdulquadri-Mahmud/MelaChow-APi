@@ -13,3 +13,8 @@ test_output.txt
 .vercel
 generated/prisma/
 scratch/
+# Ignore Markdown documentation files
+*.md
+*.MD
+*.markdown
+*.MARKDOWN
