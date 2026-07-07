@@ -53,7 +53,7 @@ router.get("/platform-config", async (req, res) => {
 router.get("/locations", getVendorLocations);
 router.get("/locations/legacy", getLegacyVendorLocations);
 
-router.get("/foods", auth, getFoodsByLocation);
+router.get("/foods", getFoodsByLocation);
 
 /**
  * @description Get all active vendors
@@ -63,11 +63,11 @@ router.get("/foods", auth, getFoodsByLocation);
 router.get("/vendors", getAllVendors);
 
 /**
- * @description Get nearby vendors based on user's default address
+ * @description Get nearby vendors by city/state query; authenticated profile fallback is optional
  * @route GET /api/user/vendors/nearby
- * @access Private
+ * @access Public
  */
-router.get("/vendors/nearby", auth, getNearbyVendorsForUser);
+router.get("/vendors/nearby", optionalAuth, getNearbyVendorsForUser);
 
 /**
  * @description Get vendor by ID or Slug
