@@ -396,6 +396,46 @@ export const postgresPaymentRepository = {
     return paymentAttemptShape(attempt);
   },
 
+  async hasProcessedWebhookEvent(reference, webhookEventKey) {
+    if (!reference || !webhookEventKey) return false;
+
+    const attempt = await prisma.paymentAttempt.findUnique({
+      where: { reference },
+      select: { events: true },
+    });
+
+    return Array.isArray(attempt?.events) && attempt.events.some((event) =>
+      event?.metadata?.webhookEventKey === webhookEventKey &&
+      event?.metadata?.webhookProcessed === true
+    );
+  },
+
+  async markWebhookEventProcessed({
+    reference,
+    order = null,
+    payData = null,
+    eventType,
+    webhookEventKey,
+    providerEventId = null,
+    message = "Paystack webhook processed",
+  }) {
+    return this.recordPaymentAttemptEvent({
+      reference,
+      order,
+      payData,
+      status: "success",
+      recoveryState: "recovered",
+      type: "paystack_webhook_processed",
+      message,
+      metadata: {
+        eventType,
+        providerEventId,
+        webhookEventKey,
+        webhookProcessed: true,
+      },
+    });
+  },
+
   async validateSuccessfulPaymentForOrder(order, payData) {
     const reference = order?.paymentReference;
     if (!reference) throw new Error("Payment reference is required");

@@ -11,6 +11,18 @@ import { resolveVendorLocation } from "../../../services/locationService.js";
 import ActivityLog from "../../../model/ActivityLog.js";
 import { getVendorOpenStatus } from "../../../utils/vendorOpenStatus.js";
 
+const stripRecipientCode = (value) => {
+  if (!value || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(stripRecipientCode);
+
+  const plain = typeof value.toObject === "function" ? value.toObject() : { ...value };
+  if (plain.payoutDetails && typeof plain.payoutDetails === "object") {
+    const { recipientCode, ...safePayoutDetails } = plain.payoutDetails;
+    plain.payoutDetails = safePayoutDetails;
+  }
+  return plain;
+};
+
 
 /**
  * APPROVE A VENDOR
@@ -102,7 +114,7 @@ export const approveVendor = async (req, res) => {
     res.status(200).json({
       success: true,
       message: "Vendor approved successfully and notified via email",
-      vendor,
+      vendor: stripRecipientCode(vendor),
     });
   } catch (error) {
     res.status(500).json({
@@ -171,7 +183,7 @@ export const updatePendingVendor = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: "Pending vendor details updated",
-      vendor,
+      vendor: stripRecipientCode(vendor),
     });
   } catch (error) {
     return res.status(500).json({
@@ -215,7 +227,7 @@ export const rejectVendor = async (req, res) => {
     res.status(200).json({
       success: true,
       message: "Vendor rejected successfully and notified via email",
-      vendor,
+      vendor: stripRecipientCode(vendor),
     });
   } catch (error) {
     res.status(500).json({
@@ -269,7 +281,7 @@ export const suspendVendor = async (req, res) => {
     res.status(200).json({
       success: true,
       message: "Vendor suspended successfully and notified via email",
-      vendor,
+      vendor: stripRecipientCode(vendor),
     });
   } catch (error) {
     res.status(500).json({
@@ -313,7 +325,7 @@ export const reactivateVendor = async (req, res) => {
     res.status(200).json({
       success: true,
       message: "Vendor reactivated successfully",
-      vendor,
+      vendor: stripRecipientCode(vendor),
     });
   } catch (error) {
     res.status(500).json({
@@ -355,7 +367,7 @@ export const getAllVendors = async (req, res) => {
       .lean();
 
     const vendorsWithOperations = vendors.map((vendor) => ({
-      ...vendor,
+      ...stripRecipientCode(vendor),
       openStatus: getVendorOpenStatus(vendor.openingHours),
     }));
 
@@ -391,7 +403,7 @@ export const getVendor = async (req, res) => {
     const comboItems = await ComboItem.find({ vendor_id: vendorId }).lean();
     
     // We convert to plain object to attach new arrays
-    const vendorObj = vendor.toObject();
+    const vendorObj = stripRecipientCode(vendor);
     vendorObj.menuItems = menuItems;
     vendorObj.comboItems = comboItems;
 
@@ -432,7 +444,7 @@ export const toggleVendorStatus = async (req, res) => {
     res.status(200).json({
       success: true,
       message: `Vendor has been ${isSuspended ? "suspended" : "reactivated"} successfully`,
-      vendor,
+      vendor: stripRecipientCode(vendor),
     });
   } catch (err) {
     res.status(500).json({

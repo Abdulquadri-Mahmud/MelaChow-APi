@@ -17,6 +17,18 @@ import { vendorOrdersRepository } from "../../services/postgres/vendorOrders.rep
 import { usePostgresWalletReads } from "../../services/postgres/compat.js";
 import { walletRepository } from "../../services/postgres/wallet.repository.js";
 
+const stripRecipientCode = (value) => {
+  if (!value || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(stripRecipientCode);
+
+  const plain = typeof value.toObject === "function" ? value.toObject() : { ...value };
+  if (plain.payoutDetails && typeof plain.payoutDetails === "object") {
+    const { recipientCode, ...safePayoutDetails } = plain.payoutDetails;
+    plain.payoutDetails = safePayoutDetails;
+  }
+  return plain;
+};
+
 const getActiveVendorDeliveryPromoContext = async (vendorId, promoIdentity = {}) => {
   const now = new Date();
   const promo = await VendorDeliveryPromo.findOne({
@@ -231,7 +243,7 @@ export const getVendorById = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: vendor,
+      data: stripRecipientCode(vendor),
     });
   } catch (error) {
     console.error("💥 SYSTEM CRASH in getVendorById:");
