@@ -19,7 +19,7 @@ const withdrawalSchema = new mongoose.Schema(
     },
     transferFee: {
       type: Number,
-      default: 0,               // Paystack transfer fee (₦10 / ₦25 / ₦50)
+      default: 0,               // Paystack transfer fee (NGN 100 / NGN 200 / NGN 300)
     },
     netAmount: {
       type: Number,

@@ -6,6 +6,7 @@ import Withdrawal from "../../model/wallet/Withdrawal.model.js";
 import RiderWithdrawal from "../../model/wallet/RiderWithdrawal.model.js";
 import { usePostgresWalletReads } from "../../services/postgres/compat.js";
 import { walletRepository } from "../../services/postgres/wallet.repository.js";
+import { calculatePaystackTransferFee } from "../../utils/paystackFees.js";
 
 /**
  * ─── FUNCTION 1: initiateWithdrawal ───
@@ -77,9 +78,7 @@ export const initiateWithdrawal = async (req, res) => {
     }
 
     // STEP 5 — Calculate Paystack transfer fee
-    let transferFee = 50;
-    if (amount <= 5000) transferFee = 10;
-    else if (amount <= 50000) transferFee = 25;
+    const transferFee = calculatePaystackTransferFee(amount);
 
     const netAmount = amount - transferFee;
     if (netAmount <= 0) {
