@@ -32,6 +32,13 @@ export const registerAdmin = async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
 
+    if (!role || !["admin", "super-admin", "finance-admin"].includes(role)) {
+      return res.status(400).json({
+        success: false,
+        message: "A valid role is required. Allowed roles: admin, super-admin, finance-admin.",
+      });
+    }
+
     // Check if admin already exists
     const existing = await Admin.findOne({ email });
     if (existing)
@@ -43,19 +50,20 @@ export const registerAdmin = async (req, res) => {
     // Create the admin first
     const admin = await Admin.create({ name, email, password, role });
 
-    // Create a wallet for the admin immediately
-    const wallet = await Wallet.create({
-      ownerId: admin._id,
-      ownerModel: "Admin",
-      balance: 0,
-      transactions: [],
-    });
+    let wallet = null;
+    if (admin.role === "super-admin") {
+      // Create a wallet for the super-admin immediately
+      wallet = await Wallet.create({
+        ownerId: admin._id,
+        ownerModel: "Admin",
+        balance: 0,
+        transactions: [],
+      });
 
-    // Link wallet to admin
-    admin.wallet = wallet._id;
-    await admin.save();
-
-    // Create a wallet...
+      // Link wallet to admin
+      admin.wallet = wallet._id;
+      await admin.save();
+    }
     // Log registration
     await ActivityLog.create({
       adminId: admin._id,

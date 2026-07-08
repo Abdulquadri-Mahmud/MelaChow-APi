@@ -42,7 +42,23 @@ export const adminAuth = async (req, res, next) => {
 export const superAdminOnly = async (req, res, next) => {
   await adminAuth(req, res, async () => {
     if (req.admin.role !== "super-admin")
-      return res.status(403).json({ success: false, message: "Access denied" });
+      return res.status(403).json({ success: false, message: "Access denied. Super-Admin role required." });
+    next();
+  });
+};
+
+export const financeAdminOnly = async (req, res, next) => {
+  await adminAuth(req, res, async () => {
+    if (!["super-admin", "finance-admin"].includes(req.admin.role))
+      return res.status(403).json({ success: false, message: "Access denied. Finance-Admin or Super-Admin role required." });
+    next();
+  });
+};
+
+export const standardAdminOnly = async (req, res, next) => {
+  await adminAuth(req, res, async () => {
+    if (!["super-admin", "admin"].includes(req.admin.role))
+      return res.status(403).json({ success: false, message: "Access denied. Standard Admin or Super-Admin role required." });
     next();
   });
 };
