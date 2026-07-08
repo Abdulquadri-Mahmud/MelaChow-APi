@@ -14,7 +14,7 @@ const adminSchema = new mongoose.Schema(
       select: false
     },
 
-    role: { type: String, enum: ["admin", "super-admin", "finance-admin"], default: "admin" },
+    role: { type: String, enum: ["admin", "super-admin", "finance-admin"], required: true },
 
     // ✅ NEW: Password reset fields
     resetPasswordToken: { type: String, select: false },

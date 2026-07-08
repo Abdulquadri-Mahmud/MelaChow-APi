@@ -142,3 +142,32 @@ export const resolveReport = async (req, res) => {
     });
   }
 };
+
+
+/**
+ * @desc Delete a report (super admin only)
+ * @route DELETE /api/reports/:reportId
+ * @access Super Admin
+ */
+export const deleteReport = async (req, res) => {
+  try {
+    const { reportId } = req.params;
+
+    const report = await Reports.findById(reportId);
+    if (!report)
+      return res.status(404).json({ success: false, message: "Report not found" });
+
+    await Reports.findByIdAndDelete(reportId);
+
+    res.status(200).json({
+      success: true,
+      message: "Report deleted successfully",
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Error deleting report",
+      error: error.message,
+    });
+  }
+};
