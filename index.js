@@ -97,6 +97,7 @@ const allowedOrigins = [
   'https://admin.melachow.com',
   'https://vendor.melachow.com',
   'https://rider.melachow.com',
+  'http://localhost:8081',
   process.env.CLIENT_URL, // Dynamic from env
 ].filter(Boolean);
 
