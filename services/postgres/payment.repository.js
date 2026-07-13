@@ -619,10 +619,10 @@ export const postgresPaymentRepository = {
         },
         data: {
           paymentStatus: "paid",
-          orderStatus: "accepted",
+          orderStatus: "pending",
           statusLog: appendEvent(order.statusLog, {
             type: "paid",
-            message: "Payment verified and order accepted",
+            message: "Payment verified; awaiting restaurant acceptance",
             metadata: { source: "postgres_payment_fulfillment" },
           }),
         },

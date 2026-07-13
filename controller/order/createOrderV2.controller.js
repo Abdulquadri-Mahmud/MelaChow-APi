@@ -1597,8 +1597,7 @@ export const createOrderV2 = async ({
             const vendors = await Vendor.find({ _id: { $in: restaurantIds } }).select('storeName');
             const restaurantNames = vendors.map(v => v.storeName).join(', ');
 
-            const customerStatus = order.paymentStatus === 'paid' ? 'accepted' : 'pending';
-            await sendOrderNotification(userId, finalOrderId, customerStatus, {
+            await sendOrderNotification(userId, finalOrderId, 'pending', {
                 orderDatabaseId: order._id,
                 restaurantName: restaurantNames,
                 totalAmount: total,
@@ -1981,7 +1980,9 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
             {
                 $set: {
                     paymentStatus: "paid",
-                    orderStatus:   "accepted",
+                    // Payment confirmation is not restaurant acceptance.
+                    // The order remains pending until the vendor explicitly accepts it.
+                    orderStatus:   "pending",
                 },
             },
             {
@@ -2077,7 +2078,7 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
             const restaurantNames = vendorsForNotif.map(v => v.storeName).join(', ');
 
             // 1. Notify Customer
-            await sendOrderNotification(order.userId, order.orderId, 'accepted', {
+            await sendOrderNotification(order.userId, order.orderId, 'pending', {
                 orderDatabaseId: order._id,
                 restaurantName: restaurantNames,
                 totalAmount: order.total
