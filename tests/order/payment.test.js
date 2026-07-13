@@ -32,13 +32,14 @@ describe('Payment Verification & Escrow', () => {
     it('should create VendorOrder and credit admin escrow on payment verification', async () => {
         const updatedOrder = await updateOrderAfterPayment(order._id, order.paymentReference);
 
-        // Order marked as paid
+        // Payment is complete, but the restaurant has not accepted yet.
         expect(updatedOrder.paymentStatus).toBe('paid');
-        expect(updatedOrder.orderStatus).toBe('accepted');
+        expect(updatedOrder.orderStatus).toBe('pending');
 
         // VendorOrder created
         const vendorOrder = await VendorOrder.findOne({ userOrderId: order._id });
         expect(vendorOrder).not.toBeNull();
+        expect(vendorOrder.orderStatus).toBe('pending');
         expect(vendorOrder.escrowAmount).toBeGreaterThan(0);
         expect(vendorOrder.escrowReleased).toBe(false);
 
