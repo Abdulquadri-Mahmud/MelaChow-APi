@@ -681,7 +681,7 @@ export const createVariantChoiceOption = async (req, res) => {
 export const addMenuItemChoiceGroup = async (req, res) => {
     try {
         const { itemId } = req.params;
-        const { name, min_selections, max_selections, is_required, sort_order, source_template_id } = req.body;
+        const { name, image_url, min_selections, max_selections, is_required, sort_order, source_template_id } = req.body;
         const vendor_id = req.vendor._id;
 
         const item = await MenuItem.findOne({ _id: itemId, vendor_id });
@@ -702,7 +702,7 @@ export const addMenuItemChoiceGroup = async (req, res) => {
         }
 
         const group = await MenuItemChoiceGroup.create({
-            menu_item_id: itemId, name, min_selections, max_selections, is_required, sort_order,
+            menu_item_id: itemId, name, image_url: image_url?.trim() || null, min_selections, max_selections, is_required, sort_order,
             source_template_id: source_template_id || null,
         });
 
@@ -716,7 +716,7 @@ export const updateMenuItemChoiceGroup = async (req, res) => {
     try {
         const { itemId, groupId } = req.params;
         const vendor_id = req.vendor._id;
-        const { name, min_selections, max_selections, is_required, sort_order } = req.body;
+        const { name, image_url, min_selections, max_selections, is_required, sort_order } = req.body;
 
         // Verify item ownership
         const item = await MenuItem.findOne({ _id: itemId, vendor_id });
@@ -730,6 +730,7 @@ export const updateMenuItemChoiceGroup = async (req, res) => {
         // Build update fields — only update what was sent
         const updateFields = {};
         if (name !== undefined) updateFields.name = name.trim();
+        if (image_url !== undefined) updateFields.image_url = image_url?.trim() || null;
         if (min_selections !== undefined) updateFields.min_selections = min_selections;
         if (max_selections !== undefined) updateFields.max_selections = max_selections;
         if (is_required !== undefined) updateFields.is_required = is_required;

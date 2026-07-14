@@ -352,6 +352,7 @@ export const getFullVendorMenu = async (req, res) => {
             choice_groups: (combo.choice_groups || []).map(group => ({
                 _id:            group._id,
                 name:           group.name,
+                image_url:      group.image_url || null,
                 is_required:    group.is_required,
                 min_selections: group.min_selections,
                 max_selections: group.max_selections,
@@ -607,6 +608,7 @@ export const getComboDetails = async (req, res) => {
                 choice_groups: combo.choice_groups.map(group => ({
                     _id:            group._id,
                     name:           group.name,
+                    image_url:      group.image_url || null,
                     is_required:    group.is_required,
                     min_selections: group.min_selections,
                     max_selections: group.max_selections,

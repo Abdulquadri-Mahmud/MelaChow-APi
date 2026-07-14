@@ -127,6 +127,7 @@ export const duplicateChoiceGroupTemplate = async (req, res) => {
         const duplicate = await ChoiceGroupTemplate.create({
             vendor_id: req.vendor._id,
             name: `${source.name} (Copy)`,
+            image_url: source.image_url || null,
             is_required: source.is_required,
             min_selections: source.min_selections,
             max_selections: source.max_selections,
