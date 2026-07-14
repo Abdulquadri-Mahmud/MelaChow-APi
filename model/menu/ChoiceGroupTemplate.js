@@ -30,7 +30,6 @@ const choiceGroupTemplateSchema = new mongoose.Schema(
             trim: true,
             maxlength: 80,
         },
-        image_url: { type: String, default: null, trim: true },
         is_required: {
             type: Boolean,
             default: false,

@@ -686,7 +686,6 @@ model MenuItemChoiceGroup {
   legacyMongoId String?  @unique @map("legacy_mongo_id")
   menuItemId    String   @map("menu_item_id") @db.Uuid
   name          String
-  imageUrl      String?  @map("image_url")
   minSelections Int      @default(0) @map("min_selections")
   maxSelections Int      @default(1) @map("max_selections")
   isRequired    Boolean  @default(false) @map("is_required")
