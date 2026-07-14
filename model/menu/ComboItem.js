@@ -15,6 +15,7 @@ const comboChoiceOptionSchema = new mongoose.Schema({
 const comboChoiceGroupSchema = new mongoose.Schema({
     source_template_id: { type: ObjectId, ref: "ChoiceGroupTemplate", default: null },
     name:           { type: String, required: true, trim: true },
+    image_url:      { type: String, default: null, trim: true },
     is_required:    { type: Boolean, default: false },
     min_selections: { type: Number, default: 0 },
     max_selections: { type: Number, default: 1 },
