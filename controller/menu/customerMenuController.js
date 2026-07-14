@@ -102,7 +102,10 @@ async function buildFullItem(item, { vendorView = false } = {}) {
                 image_url: opt.image_url || null,
                 price_modifier: opt.price_modifier,
                 price_modifier_naira: opt.price_modifier / 100,
-                is_available: opt.is_available,
+                is_available: opt.is_available !== false && (!opt.track_stock || opt.stock_quantity > 0),
+                track_stock: opt.track_stock === true,
+                stock_quantity: opt.track_stock ? Math.max(0, opt.stock_quantity || 0) : null,
+                low_stock_threshold: opt.low_stock_threshold ?? 5,
                 sort_order: opt.sort_order,
             });
         });
@@ -358,7 +361,10 @@ export const getFullVendorMenu = async (req, res) => {
                     label:                opt.label,
                     image_url:            opt.image_url || null,
                     price_modifier_naira: Math.round((opt.price_modifier || 0) / 100),
-                    is_available:         opt.is_available !== false,
+                    is_available:         opt.is_available !== false && (!opt.track_stock || opt.stock_quantity > 0),
+                    track_stock:          opt.track_stock === true,
+                    stock_quantity:       opt.track_stock ? Math.max(0, opt.stock_quantity || 0) : null,
+                    low_stock_threshold:   opt.low_stock_threshold ?? 5,
                 })),
             })),
         }));
@@ -609,7 +615,10 @@ export const getComboDetails = async (req, res) => {
                         label:                opt.label,
                         image_url:            opt.image_url || null,
                         price_modifier_naira: Math.round((opt.price_modifier || 0) / 100),
-                        is_available:         opt.is_available !== false,
+                        is_available:         opt.is_available !== false && (!opt.track_stock || opt.stock_quantity > 0),
+                        track_stock:          opt.track_stock === true,
+                        stock_quantity:       opt.track_stock ? Math.max(0, opt.stock_quantity || 0) : null,
+                        low_stock_threshold:   opt.low_stock_threshold ?? 5,
                     })),
                 })),
             }

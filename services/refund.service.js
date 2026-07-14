@@ -4,6 +4,7 @@ import VendorOrder from '../model/vendor/VendorOrder.js';
 import Wallet from '../model/wallet/wallet.mode.js';
 import Refund from '../model/refund.model.js';
 import logger from '../config/logger.js';
+import { restoreOptionStockForOrder } from './optionStock.service.js';
 
 const COMMISSION_RETENTION_STATUSES = [
     'accepted', 'preparing', 'ready_for_pickup',
@@ -116,6 +117,7 @@ export const refundOrderToWallet = async (orderId, reason) => {
             changedBy: 'system',
             timestamp: new Date(),
         });
+        await restoreOptionStockForOrder(order, session);
         await order.save({ session });
 
         // Cancel all VendorOrders

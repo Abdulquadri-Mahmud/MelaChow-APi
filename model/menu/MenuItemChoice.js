@@ -8,6 +8,12 @@ const menuItemChoiceGroupSchema = new mongoose.Schema(
             required: true,
             index: true,
         },
+        source_template_id: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "ChoiceGroupTemplate",
+            default: null,
+            index: true,
+        },
         name: {
             type: String, // e.g. "Choose Swallow", "Extra Toppings"
             required: true,
@@ -58,6 +64,20 @@ const menuItemChoiceOptionSchema = new mongoose.Schema(
         is_available: {
             type: Boolean,
             default: true,
+        },
+        track_stock: {
+            type: Boolean,
+            default: false,
+        },
+        stock_quantity: {
+            type: Number,
+            default: 0,
+            min: 0,
+        },
+        low_stock_threshold: {
+            type: Number,
+            default: 5,
+            min: 0,
         },
         sort_order: {
             type: Number,

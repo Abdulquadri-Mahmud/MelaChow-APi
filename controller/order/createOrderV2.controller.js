@@ -30,6 +30,7 @@ import { generateOrderInvoice } from "../../services/invoice.service.js";
 import { usePostgresOrderWrites, usePostgresPaymentWrites } from "../../services/postgres/compat.js";
 import { postgresOrderCreationRepository } from "../../services/postgres/orderCreation.repository.js";
 import { postgresPaymentRepository } from "../../services/postgres/payment.repository.js";
+import { reserveOptionStockForOrder, restoreOptionStockForOrder } from "../../services/optionStock.service.js";
 
 // Max number of claims allowed from the same IP address.
 // Set to 3 to allow legitimate students sharing campus/hostel WiFi
@@ -146,13 +147,13 @@ const validateMenuItemAvailability = (item) => {
  * HELPER: Validate Portion and Choices
  * ========================================
  */
-const validatePortionAndChoices = async (menuItem, cartItem) => {
+const validatePortionAndChoices = async (menuItem, cartItem, session) => {
   // 1. Validate portion exists and belongs to this item
   const portion = await MenuItemPortion.findOne({
     _id:          cartItem.portionId,
     menu_item_id: menuItem._id,
     is_available: true,
-  }).lean();
+  }).session(session).lean();
 
   if (!portion) {
     throw new Error(
@@ -164,16 +165,16 @@ const validatePortionAndChoices = async (menuItem, cartItem) => {
   const normalizedChoices = [];
   const selectedOptions = cartItem.selected_options || [];
 
-  if (selectedOptions.length > 0) {
-    const groups = await MenuItemChoiceGroup.find({
-      menu_item_id: menuItem._id,
-    }).lean();
+  const groups = await MenuItemChoiceGroup.find({
+    menu_item_id: menuItem._id,
+  }).session(session).lean();
 
+  if (selectedOptions.length > 0) {
     const groupIds = groups.map(g => g._id);
     const allOptions = await MenuItemChoiceOption.find({
       group_id:     { $in: groupIds },
       is_available: { $ne: false },
-    }).lean();
+    }).session(session).lean();
 
     const optionMap = {};
     allOptions.forEach(o => {
@@ -196,6 +197,14 @@ const validatePortionAndChoices = async (menuItem, cartItem) => {
       if (!group) {
         throw new Error(`${menuItem.name}: Invalid choice group`);
       }
+      if (option.group_id.toString() !== group._id.toString()) {
+        throw new Error(`${menuItem.name}: Option does not belong to "${group.name}"`);
+      }
+      const selectedQuantity = Math.max(1, Number(sel.quantity) || 1);
+      const requestedStock = selectedQuantity * Math.max(1, Number(cartItem.quantity) || 1);
+      if (option.track_stock && option.stock_quantity < requestedStock) {
+        throw new Error(`${menuItem.name}: Only ${option.stock_quantity} ${option.label} left`);
+      }
       normalizedChoices.push({
         group_id:             group._id,
         group_name:           group.name,
@@ -204,21 +213,22 @@ const validatePortionAndChoices = async (menuItem, cartItem) => {
         price_modifier_naira: Math.round(
           (option.price_modifier || 0) / 100
         ),
-        quantity:             Number(sel.quantity) || 1,
+        quantity:             selectedQuantity,
+        stock_tracked:        option.track_stock === true,
       });
     }
 
-    // Check required groups have selections
-    for (const group of groups) {
-      if (!group.is_required) continue;
-      const hasSelection = normalizedChoices.some(
-        c => c.group_id.toString() === group._id.toString()
-      );
-      if (!hasSelection) {
-        throw new Error(
-          `${menuItem.name}: "${group.name}" is required`
-        );
-      }
+  }
+
+  for (const group of groups) {
+    const count = normalizedChoices
+      .filter(c => c.group_id.toString() === group._id.toString())
+      .reduce((sum, choice) => sum + choice.quantity, 0);
+    if ((group.is_required || group.min_selections > 0) && count < group.min_selections) {
+      throw new Error(`${menuItem.name}: Select at least ${group.min_selections} for "${group.name}"`);
+    }
+    if (count > group.max_selections) {
+      throw new Error(`${menuItem.name}: Select no more than ${group.max_selections} for "${group.name}"`);
     }
   }
 
@@ -241,7 +251,7 @@ const validatePortionAndChoices = async (menuItem, cartItem) => {
  * HELPER: Validate Combo (ComboItem)
  * ========================================
  */
-const validateCombo = async (cartItem) => {
+const validateCombo = async (cartItem, session) => {
   // Support both comboId (new) and variantId (legacy) field names
   const comboLookupId = cartItem.comboId || cartItem.variantId;
 
@@ -253,7 +263,7 @@ const validateCombo = async (cartItem) => {
     _id:          comboLookupId,
     is_available: true,
     is_archived:  { $ne: true },
-  }).lean();
+  }).session(session).lean();
 
   if (!combo) {
     throw new Error("Combo not found or unavailable");
@@ -281,6 +291,11 @@ const validateCombo = async (cartItem) => {
       if (option.is_available === false) {
         throw new Error(`Combo option "${option.label}" is unavailable`);
       }
+      const selectedQuantity = Math.max(1, Number(sel.quantity) || 1);
+      const requestedStock = selectedQuantity * Math.max(1, Number(cartItem.quantity) || 1);
+      if (option.track_stock && option.stock_quantity < requestedStock) {
+        throw new Error(`Combo: Only ${option.stock_quantity} ${option.label} left`);
+      }
 
       normalizedChoices.push({
         group_id:             group._id,
@@ -288,20 +303,21 @@ const validateCombo = async (cartItem) => {
         option_id:            option._id,
         label:                option.label,
         price_modifier_naira: Math.round((option.price_modifier || 0) / 100),
-        quantity:             Number(sel.quantity) || 1,
+        quantity:             selectedQuantity,
+        stock_tracked:        option.track_stock === true,
       });
     }
   }
 
-  // Enforce required groups
+  // Enforce group selection rules
   for (const group of combo.choice_groups) {
-    if (!group.is_required) continue;
-    const hasSelection = normalizedChoices.some(
-      c => c.group_id.toString() === group._id.toString()
-    );
-    if (!hasSelection) {
-      throw new Error(`Combo: "${group.name}" is required`);
+    const count = normalizedChoices
+      .filter(c => c.group_id.toString() === group._id.toString())
+      .reduce((sum, choice) => sum + choice.quantity, 0);
+    if ((group.is_required || group.min_selections > 0) && count < group.min_selections) {
+      throw new Error(`Combo: Select at least ${group.min_selections} for "${group.name}"`);
     }
+    if (count > group.max_selections) throw new Error(`Combo: Select no more than ${group.max_selections} for "${group.name}"`);
   }
 
   // Price: ComboItem.price is in KOBO — convert to naira
@@ -923,6 +939,7 @@ export const releasePromoReservationsForOrder = async (orderIdOrDoc) => {
       order.vendorDeliveryPromo.claimed = false;
     }
 
+    await restoreOptionStockForOrder(order, session);
     await order.save({ session });
     await session.commitTransaction();
     session.endSession();
@@ -1073,7 +1090,7 @@ export const createOrderV2 = async ({
               combo,
               unitPrice,
               normalizedChoices,
-            } = await validateCombo(cartItem);
+            } = await validateCombo(cartItem, session);
 
             normalizedItem = {
               type:         "combo",
@@ -1095,6 +1112,7 @@ export const createOrderV2 = async ({
                 label:                c.label,
                 price_modifier_naira: c.price_modifier_naira || 0,
                 quantity:             c.quantity || 1,
+                stock_tracked:        c.stock_tracked === true,
               })),
 
               restaurantId: cartItem.restaurantId,
@@ -1150,7 +1168,7 @@ export const createOrderV2 = async ({
 
             // Validate portion + choice options, derive server-side price
             const { unitPrice, normalizedChoices, portion } =
-              await validatePortionAndChoices(menuItem, cartItem);
+              await validatePortionAndChoices(menuItem, cartItem, session);
 
             normalizedItem = {
               type:         "item",
@@ -1174,6 +1192,7 @@ export const createOrderV2 = async ({
                 label:                c.label,
                 price_modifier_naira: c.price_modifier_naira || 0,
                 quantity:             c.quantity || 1,
+                stock_tracked:        c.stock_tracked === true,
               })),
 
               restaurantId: cartItem.restaurantId,
@@ -1541,6 +1560,7 @@ export const createOrderV2 = async ({
                 { session }
             );
             order = created;
+            await reserveOptionStockForOrder(order, session);
         } catch (createErr) {
             if (
                 createErr.code === 11000 &&
@@ -2008,6 +2028,8 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
             });
             return current;
         }
+
+        await reserveOptionStockForOrder(order, session);
 
         // 4. Create VendorOrders and update wallets
         const vendorOrderMapping = await createVendorOrdersAndUpdateWallets(order, session);
