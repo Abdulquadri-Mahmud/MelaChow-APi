@@ -65,7 +65,6 @@ const menuItemChoiceOptionSchema = new mongoose.Schema(
             type: Boolean,
             default: true,
         },
-        image_url: { type: String, trim: true, default: null },
         track_stock: {
             type: Boolean,
             default: false,

@@ -78,7 +78,6 @@ export const normalizeChoiceGroupTemplateInput = (payload = {}) => {
 
     return {
         name,
-        image_url: validateImageUrl(payload.image_url),
         is_required: isRequired,
         min_selections: minSelections,
         max_selections: maxSelections,

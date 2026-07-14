@@ -91,7 +91,6 @@ const choiceGroupShape = (group) => ({
   _id: legacyId(group),
   menu_item_id: group.menuItem?.legacyMongoId || group.menuItemId,
   name: group.name,
-  image_url: group.imageUrl || null,
   min_selections: group.minSelections,
   max_selections: group.maxSelections,
   is_required: group.isRequired,
@@ -137,7 +136,6 @@ const fullMenuItemShape = (item) => ({
 const comboChoiceGroupShape = (group) => ({
   _id: group._id,
   name: group.name,
-  image_url: group.image_url || null,
   is_required: group.is_required,
   min_selections: group.min_selections,
   max_selections: group.max_selections,
