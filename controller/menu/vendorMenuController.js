@@ -3,6 +3,7 @@ import VendorMenuSection from '../../model/menu/VendorMenuSection.js';
 import MenuItem from '../../model/menu/MenuItem.js';
 import MenuItemPortion from '../../model/menu/MenuItemPortion.js';
 import { MenuItemChoiceGroup, MenuItemChoiceOption } from '../../model/menu/MenuItemChoice.js';
+import ChoiceGroupTemplate from '../../model/menu/ChoiceGroupTemplate.js';
 // TODO: ComboItem replaces MenuVariant — update variant-related functions to use ComboItem
 // import { MenuVariant, MenuVariantComponent, VariantChoiceGroup, VariantChoiceOption } from '../../model/menu/MenuVariant.js';
 import { MenuService } from '../../services/menu.service.js';
@@ -680,14 +681,29 @@ export const createVariantChoiceOption = async (req, res) => {
 export const addMenuItemChoiceGroup = async (req, res) => {
     try {
         const { itemId } = req.params;
-        const { name, min_selections, max_selections, is_required, sort_order } = req.body;
+        const { name, min_selections, max_selections, is_required, sort_order, source_template_id } = req.body;
         const vendor_id = req.vendor._id;
 
         const item = await MenuItem.findOne({ _id: itemId, vendor_id });
         if (!item) return res.status(404).json({ success: false, message: 'Item not found' });
 
+        if (source_template_id) {
+            if (!mongoose.Types.ObjectId.isValid(source_template_id)) {
+                return res.status(400).json({ success: false, message: 'Invalid source template ID' });
+            }
+            const ownedTemplate = await ChoiceGroupTemplate.exists({
+                _id: source_template_id,
+                vendor_id,
+                is_archived: false,
+            });
+            if (!ownedTemplate) {
+                return res.status(400).json({ success: false, message: 'Source template is unavailable' });
+            }
+        }
+
         const group = await MenuItemChoiceGroup.create({
             menu_item_id: itemId, name, min_selections, max_selections, is_required, sort_order,
+            source_template_id: source_template_id || null,
         });
 
         res.status(201).json({ success: true, group });
@@ -749,7 +765,7 @@ export const updateMenuItemChoiceGroup = async (req, res) => {
 export const addMenuItemChoiceOption = async (req, res) => {
     try {
         const { groupId } = req.params;
-        const { label, price_modifier_naira, image_url, is_available, sort_order } = req.body;
+        const { label, price_modifier_naira, image_url, is_available, sort_order, track_stock, stock_quantity, low_stock_threshold } = req.body;
 
         const group = await MenuItemChoiceGroup.findById(groupId).lean();
         if (!group) return res.status(404).json({ success: false, message: 'Choice group not found' });
@@ -761,6 +777,11 @@ export const addMenuItemChoiceOption = async (req, res) => {
 
         if (!label || !label.trim()) {
             return res.status(400).json({ success: false, message: 'label is required' });
+        }
+        const normalizedStock = Number(stock_quantity ?? 0);
+        const normalizedThreshold = Number(low_stock_threshold ?? 5);
+        if (!Number.isInteger(normalizedStock) || normalizedStock < 0 || !Number.isInteger(normalizedThreshold) || normalizedThreshold < 0) {
+            return res.status(400).json({ success: false, message: 'Stock quantities must be non-negative whole numbers' });
         }
 
         // Validate image_url format if provided
@@ -781,6 +802,9 @@ export const addMenuItemChoiceOption = async (req, res) => {
             price_modifier: Math.round(Number(price_modifier_naira || 0) * 100), // Naira → kobo
             image_url: image_url?.trim() || null,
             is_available: is_available !== false,
+            track_stock: track_stock === true,
+            stock_quantity: track_stock === true ? normalizedStock : 0,
+            low_stock_threshold: normalizedThreshold,
             sort_order: sort_order || 0,
         });
 
@@ -799,7 +823,7 @@ export const addMenuItemChoiceOption = async (req, res) => {
 export const updateMenuItemChoiceOption = async (req, res) => {
     try {
         const { optionId } = req.params;
-        const { label, price_modifier_naira, image_url, is_available, sort_order } = req.body;
+        const { label, price_modifier_naira, image_url, is_available, sort_order, track_stock, stock_quantity, low_stock_threshold } = req.body;
 
         const existingOption = await MenuItemChoiceOption.findById(optionId).lean();
         if (!existingOption) return res.status(404).json({ success: false, message: 'Option not found' });
@@ -819,6 +843,17 @@ export const updateMenuItemChoiceOption = async (req, res) => {
         }
         if (is_available !== undefined) updateFields.is_available = is_available;
         if (sort_order !== undefined) updateFields.sort_order = sort_order;
+        if (track_stock !== undefined) updateFields.track_stock = track_stock === true;
+        if (stock_quantity !== undefined) {
+            const value = Number(stock_quantity);
+            if (!Number.isInteger(value) || value < 0) return res.status(400).json({ success: false, message: 'Stock quantity must be a non-negative whole number' });
+            updateFields.stock_quantity = value;
+        }
+        if (low_stock_threshold !== undefined) {
+            const value = Number(low_stock_threshold);
+            if (!Number.isInteger(value) || value < 0) return res.status(400).json({ success: false, message: 'Low-stock threshold must be a non-negative whole number' });
+            updateFields.low_stock_threshold = value;
+        }
 
         if (image_url !== undefined) {
             if (image_url && image_url.trim()) {

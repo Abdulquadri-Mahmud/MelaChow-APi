@@ -59,6 +59,7 @@ import { expireStaleRiderAssignments } from "./jobs/riderAssignmentTimeout.job.j
 import { retryPendingRiderAssignments } from "./jobs/riderAssignmentRetry.job.js";
 import cron from "node-cron";
 import { RIDER_SWEEP_CRON, VENDOR_SWEEP_CRON } from "./config/payouts.js";
+import { releaseExpiredOptionStockReservations } from "./services/optionStock.service.js";
 
 // Environment loaded via ./config/env.js import above
 
@@ -574,6 +575,19 @@ const startServer = async () => {
     );
 
     console.log("Rider assignment timeout sweep registered (every minute)");
+
+    cron.schedule(
+        "*/5 * * * *",
+        async () => {
+            try {
+                const released = await releaseExpiredOptionStockReservations();
+                if (released > 0) logger.info({ released }, "Expired option-stock reservations released");
+            } catch (err) {
+                logger.warn({ err: err.message }, "Option-stock reservation sweep failed");
+            }
+        },
+        { timezone: "Africa/Lagos" }
+    );
 
     // 🚀 NEW: Continuous Assignment Retry Loop (Every 30 seconds)
     cron.schedule(

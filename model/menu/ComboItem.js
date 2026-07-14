@@ -6,10 +6,14 @@ const comboChoiceOptionSchema = new mongoose.Schema({
     price_modifier: { type: Number, default: 0 },
     image_url:      { type: String, default: null },
     is_available:   { type: Boolean, default: true },
+    track_stock:    { type: Boolean, default: false },
+    stock_quantity: { type: Number, default: 0, min: 0 },
+    low_stock_threshold: { type: Number, default: 5, min: 0 },
     sort_order:     { type: Number, default: 0 },
 }, { _id: true });
 
 const comboChoiceGroupSchema = new mongoose.Schema({
+    source_template_id: { type: ObjectId, ref: "ChoiceGroupTemplate", default: null },
     name:           { type: String, required: true, trim: true },
     is_required:    { type: Boolean, default: false },
     min_selections: { type: Number, default: 0 },

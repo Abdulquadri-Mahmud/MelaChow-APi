@@ -16,6 +16,7 @@ const selectedOptionSchema = new mongoose.Schema(
     label:                { type: String, default: "" },
     price_modifier_naira: { type: Number, default: 0 },
     quantity:             { type: Number, default: 1 },
+    stock_tracked:        { type: Boolean, default: false },
   },
   { _id: false }
 );
@@ -288,6 +289,8 @@ const orderSchema = new mongoose.Schema(
       ],
       default: "pending",
     },
+    optionStockReservedAt: { type: Date, default: null },
+    optionStockRestoredAt: { type: Date, default: null },
     riderId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Rider",

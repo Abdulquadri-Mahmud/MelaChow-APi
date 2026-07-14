@@ -1,10 +1,45 @@
 import mongoose from "mongoose";
 import ComboItem from "../../model/menu/ComboItem.js";
+import ChoiceGroupTemplate from "../../model/menu/ChoiceGroupTemplate.js";
 import { usePostgresMenuReads } from "../../services/postgres/compat.js";
 
 const getPostgresMenuRepository = async () => {
     const { menuCatalogRepository } = await import("../../services/postgres/menuCatalog.repository.js");
     return menuCatalogRepository;
+};
+
+const validateChoiceGroupTemplateSources = async (choiceGroups, vendorId, { requireActive = true } = {}) => {
+    const sourceIds = [...new Set(
+        (choiceGroups || [])
+            .map((group) => group.source_template_id)
+            .filter(Boolean)
+            .map(String)
+    )];
+    if (sourceIds.length === 0) return true;
+    if (sourceIds.some((id) => !mongoose.Types.ObjectId.isValid(id))) return false;
+
+    const query = {
+        _id: { $in: sourceIds },
+        vendor_id: vendorId,
+    };
+    if (requireActive) query.is_archived = false;
+    const ownedCount = await ChoiceGroupTemplate.countDocuments(query);
+    return ownedCount === sourceIds.length;
+};
+
+const normalizeComboOption = (opt) => {
+    const stockQuantity = Number(opt.stock_quantity ?? 0);
+    const lowStockThreshold = Number(opt.low_stock_threshold ?? 5);
+    if (!Number.isInteger(stockQuantity) || stockQuantity < 0 || !Number.isInteger(lowStockThreshold) || lowStockThreshold < 0) {
+        throw new Error(`Option "${opt.label || "Unnamed"}" stock values must be non-negative whole numbers`);
+    }
+    return {
+        ...opt,
+        price_modifier: Math.round(Number(opt.price_modifier_naira || 0) * 100),
+        track_stock: opt.track_stock === true,
+        stock_quantity: opt.track_stock === true ? stockQuantity : 0,
+        low_stock_threshold: lowStockThreshold,
+    };
 };
 
 /**
@@ -50,6 +85,12 @@ export const createComboItem = async (req, res) => {
 
         // Validate choice groups
         if (choice_groups && Array.isArray(choice_groups)) {
+            if (!(await validateChoiceGroupTemplateSources(choice_groups, vendor_id))) {
+                return res.status(400).json({
+                    success: false,
+                    message: "One or more source templates are unavailable",
+                });
+            }
             for (const group of choice_groups) {
                 if (group.is_required && group.min_selections < 1) {
                     return res.status(400).json({
@@ -73,10 +114,7 @@ export const createComboItem = async (req, res) => {
                 }
 
                 // Convert option price modifiers from naira to kobo
-                group.options = group.options.map((opt) => ({
-                    ...opt,
-                    price_modifier: (opt.price_modifier_naira || 0) * 100,
-                }));
+                group.options = group.options.map(normalizeComboOption);
             }
         }
 
@@ -280,6 +318,16 @@ export const updateComboItem = async (req, res) => {
 
         // Convert choice group option modifiers if provided
         if (updateData.choice_groups && Array.isArray(updateData.choice_groups)) {
+            if (!(await validateChoiceGroupTemplateSources(
+                updateData.choice_groups,
+                req.vendor._id,
+                { requireActive: false }
+            ))) {
+                return res.status(400).json({
+                    success: false,
+                    message: "One or more source templates are unavailable",
+                });
+            }
             // Validate choice groups
             for (const group of updateData.choice_groups) {
                 if (group.is_required && group.min_selections < 1) {
@@ -304,10 +352,7 @@ export const updateComboItem = async (req, res) => {
                 }
 
                 // Convert option modifiers from naira to kobo
-                group.options = group.options.map((opt) => ({
-                    ...opt,
-                    price_modifier: (opt.price_modifier_naira || 0) * 100,
-                }));
+                group.options = group.options.map(normalizeComboOption);
             }
         }
 

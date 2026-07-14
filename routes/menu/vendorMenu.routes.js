@@ -38,6 +38,13 @@ import {
     // Platform categories reference
     getPlatformCategories,
 } from '../../controller/menu/vendorMenuController.js';
+import {
+    createChoiceGroupTemplate,
+    duplicateChoiceGroupTemplate,
+    listChoiceGroupTemplates,
+    setChoiceGroupTemplateArchiveStatus,
+    updateChoiceGroupTemplate,
+} from '../../controller/menu/choiceGroupTemplateController.js';
 
 const router = express.Router();
 
@@ -59,6 +66,13 @@ router.get('/:vendorId/sections', vendorAuth, requireSameVendor, getVendorMenuSe
 router.post('/:vendorId/sections', vendorAuth, requireSameVendor, createVendorMenuSection);
 router.put('/:vendorId/sections/:sectionId', vendorAuth, requireSameVendor, updateVendorMenuSection);
 router.delete('/:vendorId/sections/:sectionId', vendorAuth, requireSameVendor, deleteVendorMenuSection);
+
+// Reusable choice-group templates. Selecting one copies it into an item.
+router.get('/:vendorId/choice-group-templates', vendorAuth, requireSameVendor, listChoiceGroupTemplates);
+router.post('/:vendorId/choice-group-templates', vendorAuth, requireSameVendor, createChoiceGroupTemplate);
+router.put('/:vendorId/choice-group-templates/:templateId', vendorAuth, requireSameVendor, updateChoiceGroupTemplate);
+router.post('/:vendorId/choice-group-templates/:templateId/duplicate', vendorAuth, requireSameVendor, duplicateChoiceGroupTemplate);
+router.patch('/:vendorId/choice-group-templates/:templateId/archive', vendorAuth, requireSameVendor, setChoiceGroupTemplateArchiveStatus);
 
 // ─── Menu Items ────────────────────────────────────────────────────────────
 router.post('/:vendorId/items', vendorAuth, requireSameVendor, createMenuItem);
