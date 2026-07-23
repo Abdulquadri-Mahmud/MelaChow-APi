@@ -8,6 +8,7 @@ import vendorModel from "../../../model/vendor/vendor.model.js";
 import MenuItem from "../../../model/menu/MenuItem.js";
 import ComboItem from "../../../model/menu/ComboItem.js";
 import { resolveVendorLocation } from "../../../services/locationService.js";
+import { resolveBankAccount, createTransferRecipient } from "../../../services/bank.service.js";
 import ActivityLog from "../../../model/ActivityLog.js";
 import { getVendorOpenStatus } from "../../../utils/vendorOpenStatus.js";
 
@@ -190,6 +191,78 @@ export const updatePendingVendor = async (req, res) => {
       success: false,
       message: "Error updating pending vendor",
       error: error.message,
+    });
+  }
+};
+
+export const updateVendorPayoutDetails = async (req, res) => {
+  try {
+    const { vendorId } = req.query;
+    const { bankName, bankCode, accountNumber } = req.body;
+
+    if (!vendorId) {
+      return res.status(400).json({ success: false, message: "vendorId is required" });
+    }
+
+    if (!bankName || !bankCode || !accountNumber) {
+      return res.status(400).json({
+        success: false,
+        message: "bankName, bankCode and accountNumber are required",
+      });
+    }
+
+    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails");
+    if (!vendor) {
+      return res.status(404).json({ success: false, message: "Vendor not found" });
+    }
+
+    const normalizedAccountNumber = String(accountNumber).replace(/\D/g, "");
+    const normalizedBankCode = String(bankCode).trim();
+
+    const resolvedName = await resolveBankAccount(normalizedAccountNumber, normalizedBankCode);
+    if (!resolvedName) {
+      return res.status(502).json({
+        success: false,
+        message: "Paystack could not resolve the target bank account",
+      });
+    }
+
+    const recipientCode = await createTransferRecipient({
+      name: resolvedName,
+      account_number: normalizedAccountNumber,
+      bank_code: normalizedBankCode,
+    });
+
+    vendor.payoutDetails = {
+      bankName,
+      bankCode: normalizedBankCode,
+      accountName: resolvedName,
+      accountNumber: normalizedAccountNumber,
+      recipientCode,
+      payoutMethod: "paystack",
+      payoutEnabled: true,
+    };
+
+    await vendor.save();
+
+    await ActivityLog.create({
+      adminId: req.admin._id,
+      action: "UPDATE_VENDOR_PAYOUT_DETAILS",
+      targetType: "Vendor",
+      targetId: vendor._id,
+      details: `Updated payout details for vendor: ${vendor.storeName}`,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Vendor payout details updated successfully",
+      vendor: stripRecipientCode(vendor),
+    });
+  } catch (error) {
+    console.error("Update vendor payout details error:", error);
+    return res.status(500).json({
+      success: false,
+      message: error.response?.data?.message || error.message || "Error updating vendor payout details",
     });
   }
 };

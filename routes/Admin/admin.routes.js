@@ -39,6 +39,7 @@ import {
     toggleVendorStatus,
     updateCommission,
     updatePendingVendor,
+    updateVendorPayoutDetails,
     updateVendorDeliveryMode,
 } from "../../controller/Admin/vendors_management/vendor.controller.js";
 import vendorPromoRoutes from "./vendorPromo.routes.js";
@@ -81,6 +82,7 @@ router.patch("/vendors/pending/update", adminAuth, updatePendingVendor);
 router.patch("/vendors/reject", adminAuth, rejectVendor);
 router.patch("/vendors/suspend", adminAuth, suspendVendor);
 router.patch("/vendors/reactivate", adminAuth, reactivateVendor);
+router.patch("/vendors/payout-details", superAdminOnly, updateVendorPayoutDetails);
 
 // GET /api/admin/vendors/get-all?verified=true&suspended=false
 router.get("/vendors/get-all", adminAuth, getAllVendors);
