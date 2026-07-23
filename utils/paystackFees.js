@@ -14,9 +14,9 @@ export function calculatePaystackTransferFee(amount) {
     if (typeof amount !== "number" || amount < 0) {
         throw new TypeError(`calculatePaystackTransferFee expects a non-negative number, got: ${amount}`);
     }
-    if (amount < 5000) return 100;
-    if (amount < 10000) return 200;
-    return 300;
+    const transferFee = amount <= 5000 ? 10 : amount <= 50000 ? 25 : 50;
+    const stampDuty = amount >= 10000 ? 50 : 0;
+    return transferFee + stampDuty;
 }
 
 /**

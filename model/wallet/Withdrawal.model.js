@@ -59,14 +59,23 @@ const withdrawalSchema = new mongoose.Schema(
       type: Date,
       default: null,            // Populated when transfer.success webhook fires
     },
+    walletDebitedAt: { type: Date, default: null },
+    retryOf: { type: mongoose.Schema.Types.ObjectId, ref: "Withdrawal", unique: true, sparse: true },
+    activePayoutKey: { type: String, unique: true, sparse: true },
+    fundsRestoredAt: { type: Date, default: null },
+    lastVerifiedAt: { type: Date, default: null },
+    providerStatus: { type: String, default: null },
+    providerFailureReason: { type: String, default: null },
+    providerTransferredAt: { type: Date, default: null },
+    reconciliationStatus: { type: String, enum: ["unverified", "matched", "status_mismatch", "amount_mismatch", "manual_review"], default: "unverified", index: true },
+    reconciliationAttempts: { type: Number, default: 0 },
+    lastProviderPayload: { type: mongoose.Schema.Types.Mixed, default: null },
+    reconciliationHistory: [{ source: String, localStatus: String, providerStatus: String, outcome: String, at: { type: Date, default: Date.now } }],
   },
   { timestamps: true }
 );
 
 // Compound index: fast lookup by vendor + status for dashboard queries
 withdrawalSchema.index({ vendorId: 1, status: 1 });
-
-// Compound index: fast lookup by reference for webhook processing
-withdrawalSchema.index({ paystackReference: 1 });
 
 export default mongoose.model("Withdrawal", withdrawalSchema);

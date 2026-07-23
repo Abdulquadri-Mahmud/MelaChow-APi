@@ -58,6 +58,7 @@ import { scheduledPayoutWorker, triggerScheduledPayouts } from "./jobs/scheduled
 import { expireStaleRiderAssignments } from "./jobs/riderAssignmentTimeout.job.js";
 import { retryPendingRiderAssignments } from "./jobs/riderAssignmentRetry.job.js";
 import cron from "node-cron";
+import { reconcileStaleWithdrawals } from "./services/transferReconciliation.service.js";
 import { RIDER_SWEEP_CRON, VENDOR_SWEEP_CRON } from "./config/payouts.js";
 import { releaseExpiredOptionStockReservations } from "./services/optionStock.service.js";
 
@@ -561,6 +562,20 @@ const startServer = async () => {
     );
 
     console.log(`✅ Scheduled payout crons registered (RIDER_SWEEP_CRON: ${RIDER_SWEEP_CRON}, VENDOR_SWEEP_CRON: ${VENDOR_SWEEP_CRON})`);
+
+    cron.schedule(
+        "*/5 * * * *",
+        async () => {
+            try {
+                const summary = await reconcileStaleWithdrawals({ olderThanMinutes: 10, limit: 100 });
+                if (summary.checked > 0) logger.info(summary, "Paystack transfer reconciliation sweep completed");
+                if (summary.errors.length > 0) logger.warn({ errors: summary.errors }, "Some Paystack transfers could not be reconciled");
+            } catch (err) {
+                logger.error({ err: err.message }, "Paystack transfer reconciliation sweep failed");
+            }
+        },
+        { timezone: "Africa/Lagos" }
+    );
 
     cron.schedule(
         "* * * * *",

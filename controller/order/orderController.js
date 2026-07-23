@@ -34,6 +34,7 @@ import {
 import { usePostgresOrderStatusWrites, usePostgresPaymentWrites, usePostgresRiderAssignmentWrites } from "../../services/postgres/compat.js";
 import { adminOrdersRepository } from "../../services/postgres/adminOrders.repository.js";
 import { postgresPaymentRepository } from "../../services/postgres/payment.repository.js";
+import { applyTransferOutcome } from "../../services/transferReconciliation.service.js";
 
 // Helper function to normalize metadata from Paystack (Object or String)
 // Kept for backward compatibility if needed, though pendingOrder strategy supercedes it.
@@ -2115,27 +2116,30 @@ export const paystackWebhook = async (req, res) => {
    * ------------------------------- */
   if (eventType === "transfer.success") {
     try {
-      await handleTransferSuccess(event.data);
+      await applyTransferOutcome({ reference: event.data?.reference, providerData: { ...event.data, status: "success" }, source: "webhook" });
     } catch (err) {
       console.error("❌ handleTransferSuccess error:", err.message);
+      return res.status(500).send("Transfer success processing failed");
     }
     return res.status(200).send("Transfer success processed");
   }
 
   if (eventType === "transfer.failed") {
     try {
-      await handleTransferFailed(event.data);
+      await applyTransferOutcome({ reference: event.data?.reference, providerData: { ...event.data, status: "failed" }, source: "webhook" });
     } catch (err) {
       console.error("❌ handleTransferFailed error:", err.message);
+      return res.status(500).send("Transfer failure processing failed");
     }
     return res.status(200).send("Transfer failure processed");
   }
 
   if (eventType === "transfer.reversed") {
     try {
-      await handleTransferReversed(event.data);
+      await applyTransferOutcome({ reference: event.data?.reference, providerData: { ...event.data, status: "reversed" }, source: "webhook" });
     } catch (err) {
       console.error("❌ handleTransferReversed error:", err.message);
+      return res.status(500).send("Transfer reversal processing failed");
     }
     return res.status(200).send("Transfer reversal processed");
   }

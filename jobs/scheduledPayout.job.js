@@ -128,6 +128,7 @@ const processPayoutJob = async (job) => {
         bankName: bankName || "",
         accountNumber: accountNumber || "",
         accountName: accountName || "",
+        activePayoutKey: `${actorType}:${actorId}`,
     });
 
     // 5. Debit wallet immediately
@@ -143,6 +144,7 @@ const processPayoutJob = async (job) => {
             },
         },
     });
+    await Model.findByIdAndUpdate(withdrawalDoc._id, { walletDebitedAt: new Date() });
 
     // 6. Call Paystack Transfer API
     try {
@@ -164,6 +166,16 @@ const processPayoutJob = async (job) => {
         return { success: true, reference: paystackReference, amount: actualAmount };
 
     } catch (paystackErr) {
+        const uncertainOutcome = !paystackErr.response || paystackErr.response.status >= 500;
+        if (uncertainOutcome) {
+            await Model.findByIdAndUpdate(withdrawalDoc._id, {
+                status: "processing",
+                reconciliationStatus: "manual_review",
+                failureReason: "Transfer submission outcome is unknown; funds remain reserved pending reconciliation",
+            });
+            console.error(`Paystack transfer outcome uncertain for ${paystackReference}; queued for reconciliation`);
+            return { success: true, uncertain: true, reference: paystackReference };
+        }
         // Rollback: restore wallet balance
         await Wallet.findByIdAndUpdate(wallet._id, {
             $inc: { balance: actualAmount, totalWithdrawn: -actualAmount },
@@ -175,9 +187,11 @@ const processPayoutJob = async (job) => {
         });
 
         await Model.findByIdAndUpdate(withdrawalDoc._id, {
-            status: "failed",
-            failureReason:
-                paystackErr.response?.data?.message || "Paystack API error during scheduled payout",
+            $set: {
+                status: "failed",
+                failureReason: paystackErr.response?.data?.message || "Paystack API error during scheduled payout",
+            },
+            $unset: { activePayoutKey: 1 },
         });
 
         console.error(

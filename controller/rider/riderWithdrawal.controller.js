@@ -283,6 +283,7 @@ export const initiateRiderWithdrawal = async (req, res) => {
             bankName: rider.payoutDetails.bankName,
             accountNumber: rider.payoutDetails.accountNumber,
             accountName: rider.payoutDetails.accountName,
+            activePayoutKey: `rider:${riderId}`,
         });
 
         // STEP 8 — Debit wallet immediately
@@ -295,6 +296,8 @@ export const initiateRiderWithdrawal = async (req, res) => {
             transactionType: "withdrawal",
         });
         await wallet.save();
+        withdrawal.walletDebitedAt = new Date();
+        await withdrawal.save();
 
         // STEP 9 — Call Paystack Transfer API
         try {
@@ -336,6 +339,18 @@ export const initiateRiderWithdrawal = async (req, res) => {
             });
 
         } catch (paystackErr) {
+            const uncertainOutcome = !paystackErr.response || paystackErr.response.status >= 500;
+            if (uncertainOutcome) {
+                withdrawal.status = "processing";
+                withdrawal.reconciliationStatus = "manual_review";
+                withdrawal.failureReason = "Transfer submission outcome is unknown; funds remain reserved pending reconciliation";
+                await withdrawal.save();
+                return res.status(202).json({
+                    success: true,
+                    message: "Transfer status is uncertain. Funds remain reserved while Paystack reconciliation runs.",
+                    data: { reference: paystackReference, status: "processing" },
+                });
+            }
             // Rollback wallet debit
             wallet.balance = Number((wallet.balance + amount).toFixed(2));
             wallet.totalWithdrawn = Number((wallet.totalWithdrawn - amount).toFixed(2));
@@ -347,6 +362,7 @@ export const initiateRiderWithdrawal = async (req, res) => {
             await wallet.save();
 
             withdrawal.status = "failed";
+            withdrawal.activePayoutKey = undefined;
             withdrawal.failureReason = paystackErr.response?.data?.message || "Paystack API error";
             await withdrawal.save();
 
