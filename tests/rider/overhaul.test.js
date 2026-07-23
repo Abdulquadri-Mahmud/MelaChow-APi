@@ -89,25 +89,26 @@ describe('Payout Config Constants', () => {
 // ─── Paystack Fee Calculator ───────────────────────────────────────────────────
 
 describe('Paystack Fee Calculator', () => {
-    it('charges NGN 100 for amounts < NGN 5,000', () => {
-        expect(calculatePaystackTransferFee(4999)).toBe(100);
-        expect(calculatePaystackTransferFee(1)).toBe(100);
+    it('charges NGN 10 for transfers up to NGN 5,000', () => {
+        expect(calculatePaystackTransferFee(5000)).toBe(10);
+        expect(calculatePaystackTransferFee(1)).toBe(10);
     });
 
-    it('charges NGN 200 for amounts NGN 5,000 through NGN 9,999', () => {
-        expect(calculatePaystackTransferFee(5000)).toBe(200);
-        expect(calculatePaystackTransferFee(9999)).toBe(200);
+    it('charges NGN 25 for amounts NGN 5,001 through NGN 9,999', () => {
+        expect(calculatePaystackTransferFee(5001)).toBe(25);
+        expect(calculatePaystackTransferFee(9999)).toBe(25);
     });
 
-    it('charges NGN 300 for amounts >= NGN 10,000', () => {
-        expect(calculatePaystackTransferFee(10000)).toBe(300);
-        expect(calculatePaystackTransferFee(100000)).toBe(300);
+    it('adds NGN 50 stamp duty from NGN 10,000', () => {
+        expect(calculatePaystackTransferFee(10000)).toBe(75);
+        expect(calculatePaystackTransferFee(50000)).toBe(75);
+        expect(calculatePaystackTransferFee(50001)).toBe(100);
     });
 
     it('calcVendorNetPayout deducts fee from gross amount', () => {
         const { net, fee } = calcVendorNetPayout(10000);
-        expect(fee).toBe(300);
-        expect(net).toBe(9700);
+        expect(fee).toBe(75);
+        expect(net).toBe(9925);
     });
 
     it('vendor payout: net + fee === gross', () => {

@@ -9,6 +9,25 @@ const requirePaystackSecret = () => {
     }
 };
 
+const request = async (config) => {
+    requirePaystackSecret();
+    const response = await axios.request({
+        baseURL: PAYSTACK_BASE_URL,
+        timeout: 15000,
+        ...config,
+        headers: {
+            Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
+            "Content-Type": "application/json",
+            ...(config.headers || {}),
+        },
+    });
+    return response.data;
+};
+
+const cleanParams = (params = {}) => Object.fromEntries(
+    Object.entries(params).filter(([, value]) => value !== undefined && value !== null && value !== "")
+);
+
 const getAvailableNgnBalance = (payload) => {
     const data = payload?.data;
 
@@ -29,10 +48,8 @@ export const checkPaystackBalance = async (requiredAmountKobo) => {
     requirePaystackSecret();
 
     try {
-        const response = await axios.get(`${PAYSTACK_BASE_URL}/balance`, {
-            headers: { Authorization: `Bearer ${PAYSTACK_SECRET_KEY}` },
-        });
-        const available = getAvailableNgnBalance(response.data);
+        const payload = await request({ method: "GET", url: "/balance" });
+        const available = getAvailableNgnBalance(payload);
         return {
             sufficient: available >= requiredAmountKobo,
             available,
@@ -60,24 +77,19 @@ export const initiatePaystackTransfer = async ({
 }) => {
     requirePaystackSecret();
 
-    const response = await axios.post(
-        `${PAYSTACK_BASE_URL}/transfer`,
-        {
+    const payload = await request({
+        method: "POST",
+        url: "/transfer",
+        data: {
             source: "balance",
             amount: amountKobo,
             recipient: recipientCode,
             reference,
             reason,
         },
-        {
-            headers: {
-                Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
-                "Content-Type": "application/json",
-            },
-        }
-    );
+    });
 
-    const data = response.data?.data;
+    const data = payload?.data;
     return {
         transferCode: data?.transfer_code || null,
         status: data?.status || "pending",
@@ -95,24 +107,50 @@ export const initiatePaystackTransfer = async ({
 export const createTransferRecipient = async ({ name, accountNumber, bankCode }) => {
     requirePaystackSecret();
 
-    const response = await axios.post(
-        `${PAYSTACK_BASE_URL}/transferrecipient`,
-        {
+    const payload = await request({
+        method: "POST",
+        url: "/transferrecipient",
+        data: {
             type: "nuban",
             name,
             account_number: accountNumber,
             bank_code: bankCode,
             currency: "NGN",
         },
-        {
-            headers: {
-                Authorization: `Bearer ${PAYSTACK_SECRET_KEY}`,
-                "Content-Type": "application/json",
-            },
-        }
-    );
+    });
 
-    const recipientCode = response.data?.data?.recipient_code;
+    const recipientCode = payload?.data?.recipient_code;
     if (!recipientCode) throw new Error("Paystack did not return a recipient code");
     return recipientCode;
+};
+
+export const verifyPaystackTransfer = async (reference) => {
+    if (!reference) throw new Error("Transfer reference is required");
+    const payload = await request({ method: "GET", url: `/transfer/verify/${encodeURIComponent(reference)}` });
+    return payload?.data || null;
+};
+
+export const fetchPaystackTransfer = async (idOrCode) => {
+    if (!idOrCode) throw new Error("Transfer id or code is required");
+    const payload = await request({ method: "GET", url: `/transfer/${encodeURIComponent(idOrCode)}` });
+    return payload?.data || null;
+};
+
+export const listPaystackTransfers = async (params = {}) => request({ method: "GET", url: "/transfer", params: cleanParams(params) });
+export const getPaystackBalances = async () => (await request({ method: "GET", url: "/balance" }))?.data || [];
+export const getPaystackBalanceLedger = async (params = {}) => request({ method: "GET", url: "/balance/ledger", params: cleanParams(params) });
+export const listPaystackSettlements = async (params = {}) => request({ method: "GET", url: "/settlement", params: cleanParams(params) });
+export const listPaystackSettlementTransactions = async (id, params = {}) => {
+    if (!id) throw new Error("Settlement id is required");
+    return request({ method: "GET", url: `/settlement/${encodeURIComponent(id)}/transactions`, params: cleanParams(params) });
+};
+export const listPaystackDisputes = async (params = {}) => request({ method: "GET", url: "/dispute", params: cleanParams(params) });
+export const fetchPaystackDispute = async (id) => {
+    if (!id) throw new Error("Dispute id is required");
+    return (await request({ method: "GET", url: `/dispute/${encodeURIComponent(id)}` }))?.data || null;
+};
+export const listPaystackRefunds = async (params = {}) => request({ method: "GET", url: "/refund", params: cleanParams(params) });
+export const fetchPaystackRefund = async (id) => {
+    if (!id) throw new Error("Refund id is required");
+    return (await request({ method: "GET", url: `/refund/${encodeURIComponent(id)}` }))?.data || null;
 };

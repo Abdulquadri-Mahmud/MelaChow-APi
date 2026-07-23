@@ -12,6 +12,7 @@ import {
     retryWithdrawal,
     forceFailWithdrawal
 } from "../../controller/wallet/withdrawal.controller.js";
+import { applyTransferOutcome } from "../../services/transferReconciliation.service.js";
 
 describe("Admin Payout & Withdrawal Oversight Controller", () => {
     let mockRes, mockReq;
@@ -83,6 +84,8 @@ describe("Admin Payout & Withdrawal Oversight Controller", () => {
 
         jest.clearAllMocks();
     });
+
+    afterEach(() => jest.restoreAllMocks());
 
     describe("getAdminWithdrawals", () => {
         it("should return combined and paginated withdrawals", async () => {
@@ -212,6 +215,16 @@ describe("Admin Payout & Withdrawal Oversight Controller", () => {
                 accountName: "Test Merchant Account"
             });
 
+            await Wallet.findByIdAndUpdate(vendorWalletId, {
+                $inc: { balance: -1000, totalWithdrawn: 1000 },
+                $push: { transactions: {
+                    type: "debit",
+                    amount: 1000,
+                    description: "Withdrawal initiated — Ref: WD_PENDING_V1",
+                    transactionType: "withdrawal",
+                } },
+            });
+
             jest.spyOn(axios, "post").mockResolvedValue({
                 data: {
                     status: true,
@@ -287,18 +300,21 @@ describe("Admin Payout & Withdrawal Oversight Controller", () => {
                 transferFee: 0,
                 netAmount: 1000,
                 status: "failed",
+                fundsRestoredAt: new Date(),
                 paystackReference: "WD_OLD_REF",
                 recipientCode: "RCP_rider123",
                 accountName: "Test Rider Account"
             });
 
-            jest.spyOn(axios, "post").mockResolvedValue({
+            jest.spyOn(axios, "request")
+              .mockResolvedValueOnce({ data: { data: { status: "failed", amount: 100000, reference: "WD_OLD_REF" } } })
+              .mockResolvedValueOnce({
                 data: {
                     status: true,
                     message: "Transfer queued",
                     data: { transfer_code: "TRF_retry123" }
                 }
-            });
+              });
 
             mockReq = { params: { id: wd._id } };
             await retryWithdrawal(mockReq, mockRes);
@@ -324,16 +340,15 @@ describe("Admin Payout & Withdrawal Oversight Controller", () => {
                 transferFee: 0,
                 netAmount: 1000,
                 status: "failed",
+                fundsRestoredAt: new Date(),
                 paystackReference: "WD_OLD_REF",
                 recipientCode: "RCP_rider123",
                 accountName: "Test Rider Account"
             });
 
-            jest.spyOn(axios, "post").mockRejectedValue({
-                response: {
-                    data: { message: "Account number resolved failed" }
-                }
-            });
+            jest.spyOn(axios, "request")
+              .mockResolvedValueOnce({ data: { data: { status: "failed", amount: 100000, reference: "WD_OLD_REF" } } })
+              .mockRejectedValueOnce({ response: { status: 400, data: { message: "Account number resolved failed" } } });
 
             mockReq = { params: { id: wd._id } };
             await retryWithdrawal(mockReq, mockRes);
@@ -342,15 +357,44 @@ describe("Admin Payout & Withdrawal Oversight Controller", () => {
 
             const updatedWd = await RiderWithdrawal.findById(wd._id);
             expect(updatedWd.status).toBe("failed");
-            expect(updatedWd.failureReason).toBe("Account number resolved failed");
+            const retry = await RiderWithdrawal.findOne({ retryOf: wd._id });
+            expect(retry.status).toBe("failed");
+            expect(retry.failureReason).toBe("Account number resolved failed");
 
             const updatedWallet = await Wallet.findById(riderWalletId);
             expect(updatedWallet.balance).toBe(3000); // remained 3000 due to rollback
-            expect(updatedWallet.transactions).toHaveLength(0);
+            expect(updatedWallet.transactions.filter((item) => item.type === "debit")).toHaveLength(1);
+            expect(updatedWallet.transactions.filter((item) => item.type === "credit")).toHaveLength(1);
         });
     });
 
     describe("forceFailWithdrawal", () => {
+        it("restores a failed transfer only once when Paystack delivers duplicates", async () => {
+            const wd = await Withdrawal.create({
+                vendorId,
+                walletId: vendorWalletId,
+                requestedAmount: 1000,
+                transferFee: 100,
+                netAmount: 900,
+                status: "processing",
+                paystackReference: "WD_DUPLICATE_EVENT",
+                recipientCode: "RCP_vendor123",
+                activePayoutKey: `vendor:${vendorId}`,
+            });
+            await Wallet.findByIdAndUpdate(vendorWalletId, { balance: 4000, totalWithdrawn: 1000 });
+
+            const payload = { status: "failed", amount: 90000, reference: wd.paystackReference, reason: "Bank rejected transfer" };
+            await applyTransferOutcome({ reference: wd.paystackReference, providerData: payload, source: "test" });
+            await applyTransferOutcome({ reference: wd.paystackReference, providerData: payload, source: "test_duplicate" });
+
+            const wallet = await Wallet.findById(vendorWalletId);
+            const updated = await Withdrawal.findById(wd._id);
+            expect(wallet.balance).toBe(5000);
+            expect(wallet.transactions.filter((item) => item.type === "credit")).toHaveLength(1);
+            expect(updated.fundsRestoredAt).not.toBeNull();
+            expect(updated.activePayoutKey).toBeUndefined();
+        });
+
         it("should force fail a processing vendor withdrawal and refund the balance", async () => {
             const wd = await Withdrawal.create({
                 vendorId,
@@ -371,6 +415,9 @@ describe("Admin Payout & Withdrawal Oversight Controller", () => {
             await wallet.save();
 
             mockReq = { params: { withdrawalId: wd._id } };
+            jest.spyOn(axios, "request").mockResolvedValueOnce({
+                data: { data: { status: "failed", amount: 90000, reference: "WD_PROCESSING_V1", reason: "Admin override — stuck withdrawal" } }
+            });
             await forceFailWithdrawal(mockReq, mockRes);
 
             expect(mockRes.json).toHaveBeenCalled();
@@ -407,6 +454,9 @@ describe("Admin Payout & Withdrawal Oversight Controller", () => {
             await wallet.save();
 
             mockReq = { params: { withdrawalId: wd._id } };
+            jest.spyOn(axios, "request").mockResolvedValueOnce({
+                data: { data: { status: "failed", amount: 150000, reference: "WD_PENDING_R1", reason: "Admin override — stuck withdrawal" } }
+            });
             await forceFailWithdrawal(mockReq, mockRes);
 
             expect(mockRes.json).toHaveBeenCalled();

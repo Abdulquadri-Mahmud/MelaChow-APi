@@ -44,6 +44,8 @@ const riderWithdrawalSchema = new mongoose.Schema(
             unique: true,
             required: true,
         },
+        retryOf: { type: mongoose.Schema.Types.ObjectId, ref: "RiderWithdrawal", unique: true, sparse: true },
+        activePayoutKey: { type: String, unique: true, sparse: true },
         paystackTransferCode: {
             type: String,
             default: null,
@@ -57,12 +59,20 @@ const riderWithdrawalSchema = new mongoose.Schema(
         accountName:   { type: String, default: "" },
         failureReason: { type: String, default: null },
         initiatedAt:   { type: Date, default: Date.now },
+        walletDebitedAt: { type: Date, default: null },
         settledAt:     { type: Date, default: null },
+        fundsRestoredAt: { type: Date, default: null },
+        lastVerifiedAt: { type: Date, default: null },
+        providerStatus: { type: String, default: null },
+        providerFailureReason: { type: String, default: null },
+        providerTransferredAt: { type: Date, default: null },
+        reconciliationStatus: { type: String, enum: ["unverified", "matched", "status_mismatch", "amount_mismatch", "manual_review"], default: "unverified", index: true },
+        reconciliationAttempts: { type: Number, default: 0 },
+        lastProviderPayload: { type: mongoose.Schema.Types.Mixed, default: null },
+        reconciliationHistory: [{ source: String, localStatus: String, providerStatus: String, outcome: String, at: { type: Date, default: Date.now } }],
     },
     { timestamps: true }
 );
 
 riderWithdrawalSchema.index({ riderId: 1, status: 1 });
-riderWithdrawalSchema.index({ paystackReference: 1 });
-
 export default mongoose.model("RiderWithdrawal", riderWithdrawalSchema);
