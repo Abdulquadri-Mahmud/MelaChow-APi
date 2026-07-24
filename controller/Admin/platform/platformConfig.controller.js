@@ -35,6 +35,7 @@ export const getAdminPlatformConfig = async (req, res) => {
           serviceFeeType: "fixed",
           serviceFeeValue: 0,
           serviceFeeCap: 500,
+          paystackFeeBearer: "customer",
           lastUpdatedBy: null,
           updatedAt: null,
           _isDefault: true,  // Signal to frontend: "not yet saved"
@@ -42,7 +43,13 @@ export const getAdminPlatformConfig = async (req, res) => {
       });
     }
 
-    return res.json({ success: true, data: config });
+    return res.json({
+      success: true,
+      data: {
+        ...config,
+        paystackFeeBearer: config.paystackFeeBearer || "customer",
+      },
+    });
   } catch (error) {
     logger.error({ error: error.message }, "❌ Failed to fetch platform config");
     return res.status(500).json({ success: false, message: error.message });
@@ -60,6 +67,7 @@ export const getAdminPlatformConfig = async (req, res) => {
  * - serviceFeeType ∈ [fixed, percentage]
  * - percentage fee ≤ 20% (business guard rail)
  * - serviceFeeCap ≥ 0
+ * - paystackFeeBearer ∈ [customer, platform]
  */
 export const updateAdminPlatformConfig = async (req, res) => {
   try {
@@ -75,6 +83,7 @@ export const updateAdminPlatformConfig = async (req, res) => {
       serviceFeeType,
       serviceFeeValue,
       serviceFeeCap,
+      paystackFeeBearer,
     } = req.body;
 
     // ── Input validation ───────────────────────────────────────────────────
@@ -124,6 +133,10 @@ export const updateAdminPlatformConfig = async (req, res) => {
       errors.push("serviceFeeCap must be a non-negative number");
     }
 
+    if (paystackFeeBearer !== undefined && !["customer", "platform"].includes(paystackFeeBearer)) {
+      errors.push("paystackFeeBearer must be 'customer' or 'platform'");
+    }
+
     if (errors.length > 0) {
       return res.status(400).json({ success: false, errors });
     }
@@ -140,6 +153,7 @@ export const updateAdminPlatformConfig = async (req, res) => {
     if (serviceFeeType !== undefined) update.serviceFeeType = serviceFeeType;
     if (serviceFeeValue !== undefined) update.serviceFeeValue = serviceFeeValue;
     if (serviceFeeCap !== undefined) update.serviceFeeCap = serviceFeeCap;
+    if (paystackFeeBearer !== undefined) update.paystackFeeBearer = paystackFeeBearer;
 
     const config = await PlatformConfig.findOneAndUpdate(
       { type: "singleton" },

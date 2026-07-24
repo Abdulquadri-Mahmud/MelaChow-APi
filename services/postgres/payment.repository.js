@@ -493,7 +493,45 @@ export const postgresPaymentRepository = {
 
     const expectedKobo = Number(order.total || 0);
     const paidKobo = Number(payData.amount || 0);
-    if (paidKobo !== expectedKobo) {
+
+    const rawFees = payData.fees !== undefined && payData.fees !== null ? payData.fees : payData.fees_split?.paystack;
+    const feesKobo = rawFees !== undefined && rawFees !== null ? Number(rawFees) : null;
+    const feeBearer = payData.metadata?.feeBearer || "customer";
+
+    if (feesKobo === null) {
+      await this.recordPaymentAttemptEvent({
+        reference,
+        order,
+        payData,
+        status: "amount_mismatch",
+        recoveryState: "review",
+        type: "payment_fees_data_missing",
+        message: "Paystack verification payload is missing fees data; flagged for manual review",
+        metadata: {
+          expectedKobo,
+          paidKobo,
+          feeBearer,
+          moneyUnit: "kobo",
+        },
+      });
+      const error = new Error("Payment fee verification data missing. Flagged for manual review.");
+      error.code = "PAYMENT_FEES_DATA_MISSING";
+      error.statusCode = 409;
+      throw error;
+    }
+
+    let isAmountValid = false;
+    let expectedPaidKobo = expectedKobo;
+
+    if (feeBearer === "customer") {
+      expectedPaidKobo = expectedKobo + feesKobo;
+      isAmountValid = paidKobo === expectedPaidKobo || paidKobo === expectedKobo;
+    } else {
+      expectedPaidKobo = expectedKobo;
+      isAmountValid = paidKobo === expectedKobo;
+    }
+
+    if (!isAmountValid) {
       await this.recordPaymentAttemptEvent({
         reference,
         order,
@@ -501,15 +539,19 @@ export const postgresPaymentRepository = {
         status: "amount_mismatch",
         recoveryState: "review",
         type: "payment_amount_mismatch",
-        message: "Provider amount does not match backend-calculated order total",
+        message: `Provider amount mismatch under '${feeBearer}' fee bearer mode`,
         metadata: {
+          feeBearerMode: feeBearer,
           expectedKobo,
           paidKobo,
+          feesKobo,
+          expectedPaidKobo,
+          diffKobo: paidKobo - expectedPaidKobo,
           moneyUnit: "kobo",
         },
       });
       const error = new Error(
-        `Payment amount mismatch. Expected ₦${(expectedKobo / 100).toLocaleString()}, received ₦${(paidKobo / 100).toLocaleString()}. Please contact support.`
+        `Payment amount mismatch (${feeBearer} fee mode). Expected ₦${(expectedPaidKobo / 100).toLocaleString()}, received ₦${(paidKobo / 100).toLocaleString()} (fees: ₦${(feesKobo / 100).toLocaleString()}). Please contact support.`
       );
       error.code = "PAYMENT_AMOUNT_MISMATCH";
       error.statusCode = 409;
@@ -523,11 +565,11 @@ export const postgresPaymentRepository = {
       status: "success",
       recoveryState: "awaiting_verification",
       type: "payment_verified",
-      message: "Provider payment verified against backend order total; fulfillment pending Postgres migration",
-      metadata: { expectedKobo, paidKobo, fulfillmentMigrated: false },
+      message: `Provider payment verified under '${feeBearer}' fee bearer mode`,
+      metadata: { expectedKobo, paidKobo, feesKobo, feeBearerMode: feeBearer, fulfillmentMigrated: false },
     });
 
-    return { expectedKobo, paidKobo, paidAmount: paidKobo / 100 };
+    return { expectedKobo, paidKobo, feesKobo, feeBearerMode: feeBearer, paidAmount: paidKobo / 100 };
   },
 
   async markOrderPaymentFailed(order, payData = null) {

@@ -2200,7 +2200,8 @@ export const createOrderController = async (req, res) => {
             });
 
             const userEmail = req.user?.email || req.body.email;
-            if (!userEmail) throw new Error("Email required for payment initialization");
+            const platformConfig = await getPlatformConfig();
+            const feeBearer = platformConfig?.paystackFeeBearer || "customer";
 
             let paystackResponse;
             try {
@@ -2216,6 +2217,7 @@ export const createOrderController = async (req, res) => {
                             postgresOrderId: result.order.id,
                             userId: String(userId),
                             moneyUnit: "kobo",
+                            feeBearer,
                         }
                     },
                     {
@@ -2307,7 +2309,8 @@ export const createOrderController = async (req, res) => {
         });
 
         const userEmail = req.user?.email || req.body.email;
-        if (!userEmail) throw new Error("Email required for payment initialization");
+        const platformConfig = await getPlatformConfig();
+        const feeBearer = platformConfig?.paystackFeeBearer || "customer";
 
         // Initialize Paystack
         const paystackResponse = await axios.post(
@@ -2319,7 +2322,8 @@ export const createOrderController = async (req, res) => {
                 callback_url: process.env.CALL_BACK_URL,
                 metadata: {
                     orderId: order.orderId,
-                    userId: String(userId)
+                    userId: String(userId),
+                    feeBearer,
                 }
             },
             {

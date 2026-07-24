@@ -845,6 +845,9 @@ export const initializePayment = async (req, res) => {
     /* ========================================
      * 4️⃣ INITIALIZE PAYSTACK
      * ======================================== */
+    const platformConfig = await getPlatformConfig();
+    const feeBearer = platformConfig?.paystackFeeBearer || "customer";
+
     const response = await axios.post(
       "https://api.paystack.co/transaction/initialize",
       {
@@ -854,7 +857,8 @@ export const initializePayment = async (req, res) => {
         callback_url: process.env.CALL_BACK_URL,
         metadata: {
           orderId: order.orderId,
-          userId: String(userId)
+          userId: String(userId),
+          feeBearer,
         },
       },
       {

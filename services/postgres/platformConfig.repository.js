@@ -10,6 +10,7 @@ const defaultPlatformConfig = {
   serviceFeeType: "fixed",
   serviceFeeValue: 0,
   serviceFeeCap: 500,
+  paystackFeeBearer: "customer",
 };
 
 const legacyId = (record) => record?.legacyMongoId || record?.id || null;

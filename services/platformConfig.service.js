@@ -24,10 +24,14 @@ export const getPlatformConfig = async () => {
       serviceFeeType: "fixed",
       serviceFeeValue: 0,
       serviceFeeCap: 500,
+      paystackFeeBearer: "customer",
     };
   }
 
-  return config;
+  return {
+    ...config,
+    paystackFeeBearer: config.paystackFeeBearer || "customer",
+  };
 };
 
 /**
