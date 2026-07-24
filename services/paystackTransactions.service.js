@@ -103,8 +103,11 @@ export const enrichTransactionWithLocalStatus = (tx, localOrder, localAttempt) =
         }
     }
 
+    const platform = tx.metadata?.platform || "unknown";
+
     return {
         ...tx,
+        platform,
         authorization: sanitizeAuthorization(tx.authorization),
         customer: sanitizeCustomer(tx.customer),
         ip_address: undefined, // Redact IP address
@@ -174,7 +177,12 @@ export const listPaystackTransactions = async (queryParams = {}) => {
     });
 
     const rawTransactions = payload?.data || [];
-    const enriched = await enrichAndSanitizeTransactions(rawTransactions);
+    let enriched = await enrichAndSanitizeTransactions(rawTransactions);
+
+    if (queryParams.platform) {
+        const targetPlatform = String(queryParams.platform).toLowerCase();
+        enriched = enriched.filter((t) => String(t.platform).toLowerCase() === targetPlatform);
+    }
 
     // Sort NOT_FOUND_LOCAL and MISMATCH_UNPAID_LOCAL to the top by default for admin attention
     enriched.sort((a, b) => {

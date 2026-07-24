@@ -309,6 +309,9 @@ export const initiateRiderWithdrawal = async (req, res) => {
                     recipient: rider.payoutDetails.recipientCode,
                     reference: paystackReference,
                     reason: `MelaChow rider payout — ${rider.name}`,
+                    metadata: {
+                        platform: "melachow",
+                    },
                 },
                 {
                     headers: {

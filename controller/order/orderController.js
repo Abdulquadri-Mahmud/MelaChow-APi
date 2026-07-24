@@ -859,6 +859,7 @@ export const initializePayment = async (req, res) => {
           orderId: order.orderId,
           userId: String(userId),
           feeBearer,
+          platform: "melachow",
         },
       },
       {

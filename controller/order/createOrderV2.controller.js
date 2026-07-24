@@ -2218,6 +2218,7 @@ export const createOrderController = async (req, res) => {
                             userId: String(userId),
                             moneyUnit: "kobo",
                             feeBearer,
+                            platform: "melachow",
                         }
                     },
                     {
@@ -2324,6 +2325,7 @@ export const createOrderController = async (req, res) => {
                     orderId: order.orderId,
                     userId: String(userId),
                     feeBearer,
+                    platform: "melachow",
                 }
             },
             {

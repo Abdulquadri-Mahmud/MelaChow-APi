@@ -86,6 +86,9 @@ export const initiatePaystackTransfer = async ({
             recipient: recipientCode,
             reference,
             reason,
+            metadata: {
+                platform: "melachow",
+            },
         },
     });
 
