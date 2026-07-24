@@ -23,6 +23,13 @@ import {
     getPaystackTransfers,
     reconcileAdminWithdrawal,
 } from "../../controller/Admin/finance/paystackOperations.controller.js";
+import {
+    exportPaystackTransactionsAdmin,
+    getPaystackTransactionAdmin,
+    getPaystackTransactionTimelineAdmin,
+    getPaystackTransactionTotalsAdmin,
+    getPaystackTransactionsAdmin,
+} from "../../controller/Admin/finance/paystackTransactions.controller.js";
 
 const router = express.Router();
 
@@ -45,5 +52,13 @@ router.get("/paystack/disputes", financeAdminOnly, getPaystackDisputes);
 router.get("/paystack/disputes/:id", financeAdminOnly, getPaystackDispute);
 router.get("/paystack/refunds", financeAdminOnly, getPaystackRefunds);
 router.get("/paystack/refunds/:id", financeAdminOnly, getPaystackRefund);
+
+// Paystack Transactions Oversight Routes (financeAdminOnly)
+// Specific sub-paths registered before generic :id route to avoid route matching conflicts
+router.get("/paystack/transactions/totals", financeAdminOnly, getPaystackTransactionTotalsAdmin);
+router.get("/paystack/transactions/export", financeAdminOnly, exportPaystackTransactionsAdmin);
+router.get("/paystack/transactions/timeline/:idOrRef", financeAdminOnly, getPaystackTransactionTimelineAdmin);
+router.get("/paystack/transactions/:id", financeAdminOnly, getPaystackTransactionAdmin);
+router.get("/paystack/transactions", financeAdminOnly, getPaystackTransactionsAdmin);
 
 export default router;
