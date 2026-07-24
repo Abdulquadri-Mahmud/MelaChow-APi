@@ -1,5 +1,7 @@
 import axios from "axios";
 import PaymentAttempt from "../model/order/PaymentAttempt.js";
+import logger from "../config/logger.js";
+import { getPlatformConfig } from "./platformConfig.service.js";
 
 const PAYSTACK_VERIFY_URL = "https://api.paystack.co/transaction/verify";
 
@@ -168,7 +170,52 @@ export const validateSuccessfulPaymentForOrder = async (order, payData, { sessio
   const expectedKobo = toKobo(order.total);
   const paidKobo = Number(payData.amount || 0);
 
-  if (paidKobo !== expectedKobo) {
+  const rawFees = payData.fees !== undefined && payData.fees !== null ? payData.fees : payData.fees_split?.paystack;
+  const feesKobo = rawFees !== undefined && rawFees !== null ? Number(rawFees) : null;
+
+  const platformConfig = await getPlatformConfig().catch(() => null);
+  const feeBearer = payData.metadata?.feeBearer || platformConfig?.paystackFeeBearer || "customer";
+
+  if (feesKobo === null) {
+    await recordPaymentAttemptEvent({
+      reference,
+      order,
+      payData,
+      status: "amount_mismatch",
+      recoveryState: "review",
+      type: "payment_fees_data_missing",
+      message: "Paystack verification payload is missing fees data; flagged for manual review",
+      metadata: {
+        expectedKobo,
+        paidKobo,
+        feeBearer,
+        expectedAmount: Number(order.total || 0),
+        paidAmount: paidKobo / 100,
+      },
+      session,
+    });
+    logger.warn(
+      { reference, orderId: order.orderId, expectedKobo, paidKobo, feeBearer },
+      "⚠️ Payment verification failed: Paystack payload is missing fees data"
+    );
+    const error = new Error("Payment fee verification data missing. Flagged for manual review.");
+    error.code = "PAYMENT_FEES_DATA_MISSING";
+    error.statusCode = 409;
+    throw error;
+  }
+
+  let isAmountValid = false;
+  let expectedPaidKobo = expectedKobo;
+
+  if (feeBearer === "customer") {
+    expectedPaidKobo = expectedKobo + feesKobo;
+    isAmountValid = paidKobo === expectedPaidKobo || paidKobo === expectedKobo;
+  } else {
+    expectedPaidKobo = expectedKobo;
+    isAmountValid = paidKobo === expectedKobo;
+  }
+
+  if (!isAmountValid) {
     await recordPaymentAttemptEvent({
       reference,
       order,
@@ -176,17 +223,37 @@ export const validateSuccessfulPaymentForOrder = async (order, payData, { sessio
       status: "amount_mismatch",
       recoveryState: "review",
       type: "payment_amount_mismatch",
-      message: "Provider amount does not match backend-calculated order total",
+      message: `Provider amount mismatch under '${feeBearer}' fee bearer mode`,
       metadata: {
+        feeBearerMode: feeBearer,
         expectedKobo,
         paidKobo,
+        feesKobo,
+        expectedPaidKobo,
+        diffKobo: paidKobo - expectedPaidKobo,
         expectedAmount: Number(order.total || 0),
         paidAmount: paidKobo / 100,
+        feesAmount: feesKobo / 100,
       },
       session,
     });
+
+    logger.error(
+      {
+        reference,
+        orderId: order.orderId,
+        feeBearerMode: feeBearer,
+        expectedOrderTotal: Number(order.total || 0),
+        paidAmount: paidKobo / 100,
+        feesFromPaystack: feesKobo / 100,
+        expectedPaidAmount: expectedPaidKobo / 100,
+        diffAmount: (paidKobo - expectedPaidKobo) / 100,
+      },
+      "❌ Payment amount mismatch detected"
+    );
+
     const error = new Error(
-      `Payment amount mismatch. Expected ₦${Number(order.total || 0).toLocaleString()}, received ₦${(paidKobo / 100).toLocaleString()}. Please contact support.`
+      `Payment amount mismatch (${feeBearer} fee mode). Expected ₦${(expectedPaidKobo / 100).toLocaleString()}, received ₦${(paidKobo / 100).toLocaleString()} (fees: ₦${(feesKobo / 100).toLocaleString()}). Please contact support.`
     );
     error.code = "PAYMENT_AMOUNT_MISMATCH";
     error.statusCode = 409;
@@ -200,15 +267,23 @@ export const validateSuccessfulPaymentForOrder = async (order, payData, { sessio
     status: "success",
     recoveryState: "verified",
     type: "payment_verified",
-    message: "Provider payment verified against backend order total",
-    metadata: { expectedKobo, paidKobo },
+    message: `Provider payment verified under '${feeBearer}' fee bearer mode`,
+    metadata: {
+      expectedKobo,
+      paidKobo,
+      feesKobo,
+      feeBearerMode: feeBearer,
+    },
     session,
   });
 
   return {
     expectedKobo,
     paidKobo,
+    feesKobo,
+    feeBearerMode: feeBearer,
     paidAmount: paidKobo / 100,
+    feesAmount: feesKobo / 100,
   };
 };
 export const hasProcessedPaymentWebhookEvent = async (reference, webhookEventKey) => {

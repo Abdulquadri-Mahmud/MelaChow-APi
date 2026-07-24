@@ -97,12 +97,23 @@ const platformConfigSchema = new mongoose.Schema(
       min: [0, "Service fee cap cannot be negative"],
     },
 
+    // ── Paystack Fee Bearer ────────────────────────────────────────────────
+    // Manual mirror of the Paystack Merchant Dashboard setting ("customer" | "platform").
+    // Must be kept in sync with the Paystack Dashboard fee allocation toggle.
+    // - "customer": Customer is charged order subtotal + Paystack processing fees.
+    // - "platform": Platform absorbs processing fees; customer is charged order subtotal only.
+    paystackFeeBearer: {
+      type: String,
+      enum: ["customer", "platform"],
+      default: "customer",
+    },
+
     // ── Rider payout schedule ─────────────────────────────────────────────
     riderPayoutHour: {
       type: Number,
       default: 10,
       min: [0, "Payout hour cannot be negative"],
-      max: [23, "Payout hour must be a valid hour"]
+      max: [23, "Payout hour must be a valid hour"],
     },
 
     // ── Audit ─────────────────────────────────────────────────────────────
