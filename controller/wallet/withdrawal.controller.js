@@ -120,6 +120,8 @@ export const initiateWithdrawal = async (req, res) => {
     await withdrawal.save();
 
     // STEP 9 — Call Paystack Transfer API
+
+    // STEP 9 — Call Paystack Transfer API
     try {
       const paystackResponse = await axios.post(
         "https://api.paystack.co/transfer",
@@ -129,6 +131,9 @@ export const initiateWithdrawal = async (req, res) => {
           recipient: vendor.payoutDetails.recipientCode,
           reference: paystackReference,
           reason: `MelaChow vendor payout — ${vendor.storeName}`,
+          metadata: {
+            platform: "melachow",
+          },
         },
         {
           headers: {
@@ -432,6 +437,9 @@ export const approvePendingWithdrawal = async (req, res) => {
           recipient: withdrawal.recipientCode,
           reference: withdrawal.paystackReference,
           reason: `MelaChow ${type} payout approved — ${withdrawal.accountName}`,
+          metadata: {
+            platform: "melachow",
+          },
         },
         {
           headers: {
@@ -495,77 +503,6 @@ export const approvePendingWithdrawal = async (req, res) => {
 
 // POST /api/admin/finance/withdrawals/:id/retry
 const legacyRetryWithdrawal = async (req, res) => {
-  try {
-    const { id } = req.params;
-
-    // Check Withdrawal
-    let withdrawal = await Withdrawal.findById(id);
-    let type = "vendor";
-    if (!withdrawal) {
-      withdrawal = await RiderWithdrawal.findById(id);
-      type = "rider";
-    }
-
-    if (!withdrawal) {
-      return res.status(404).json({ success: false, message: "Withdrawal not found" });
-    }
-
-    if (withdrawal.status !== "failed") {
-      return res.status(400).json({
-        success: false,
-        message: `Only failed withdrawals can be retried. Current status: ${withdrawal.status}`,
-      });
-    }
-
-    // Verify wallet has enough balance to withdraw the requested amount
-    const wallet = await Wallet.findById(withdrawal.walletId);
-    if (!wallet) {
-      return res.status(404).json({ success: false, message: "Wallet not found" });
-    }
-
-    if (wallet.balance < withdrawal.requestedAmount) {
-      return res.status(400).json({
-        success: false,
-        message: `Insufficient wallet balance to retry. Available: ₦${wallet.balance.toLocaleString()}, Required: ₦${withdrawal.requestedAmount.toLocaleString()}`,
-      });
-    }
-
-    // Generate a new paystack reference to avoid duplicate reference error on Paystack
-    const newReference = `WD_RETRY_${randomUUID().replace(/-/g, "").toUpperCase()}`;
-
-    // Debit wallet balance
-    wallet.balance = Number((wallet.balance - withdrawal.requestedAmount).toFixed(2));
-    wallet.totalWithdrawn = Number((wallet.totalWithdrawn + withdrawal.requestedAmount).toFixed(2));
-    wallet.transactions.push({
-      type: "debit",
-      amount: withdrawal.requestedAmount,
-      description: `Withdrawal retry initiated — Ref: ${newReference}`,
-      transactionType: "withdrawal",
-    });
-    await wallet.save();
-
-    // Update withdrawal document before calling API
-    withdrawal.paystackReference = newReference;
-    withdrawal.status = "processing";
-    withdrawal.failureReason = null;
-    await withdrawal.save();
-
-    // Call Paystack Transfer API
-    try {
-      const paystackResponse = await axios.post(
-        "https://api.paystack.co/transfer",
-        {
-          source: "balance",
-          amount: withdrawal.netAmount * 100, // Convert to kobo
-          recipient: withdrawal.recipientCode,
-          reference: newReference,
-          reason: `MelaChow ${type} payout retry — ${withdrawal.accountName}`,
-        },
-        {
-          headers: {
-            Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
-            "Content-Type": "application/json",
-          },
         }
       );
 
