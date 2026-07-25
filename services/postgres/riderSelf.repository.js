@@ -229,6 +229,7 @@ const activeOrderShape = async ({ order, vendorOrder = null, restaurant }) => {
   shaped.restaurantId = restaurantShape(restaurant);
   shaped.restaurantName = restaurant?.storeName || "Partner Merchant";
   shaped.restaurantLogo = restaurant?.logo || null;
+  shaped.restaurantAddress = restaurantAddress(restaurant);
   shaped.userName = userName(order.user);
   shaped.userPhone = order.user?.phone || order.phone || null;
   shaped.deliveryFullAddress = deliveryFullAddress(order.deliveryAddress);
