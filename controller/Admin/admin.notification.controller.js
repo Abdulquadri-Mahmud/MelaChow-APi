@@ -23,6 +23,23 @@ export const subscribeAdmin = async (req, res) => {
     }
 };
 
+export const unsubscribeAdmin = async (req, res) => {
+    try {
+        const { endpoint } = req.body;
+        if (!endpoint) return res.status(400).json({ message: 'Endpoint is required' });
+
+        await AdminPushSubscription.findOneAndDelete({
+            adminId: req.admin._id,
+            'subscription.endpoint': endpoint
+        });
+
+        res.json({ success: true, message: 'Admin unsubscribed' });
+    } catch (error) {
+        console.error('Admin Unsubscribe Error:', error);
+        res.status(500).json({ message: 'Failed to unsubscribe admin', error: error.message });
+    }
+};
+
 export const getAdminNotifications = async (req, res) => {
     try {
         const { limit = 50, skip = 0, type, unread } = req.query;
