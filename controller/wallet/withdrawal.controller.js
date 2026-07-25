@@ -501,45 +501,6 @@ export const approvePendingWithdrawal = async (req, res) => {
   }
 };
 
-// POST /api/admin/finance/withdrawals/:id/retry
-const legacyRetryWithdrawal = async (req, res) => {
-        }
-      );
-
-      const transferCode = paystackResponse.data?.data?.transfer_code;
-      withdrawal.paystackTransferCode = transferCode || null;
-      await withdrawal.save();
-
-      return res.json({
-        success: true,
-        message: "Withdrawal retried and sent to Paystack",
-        withdrawal,
-      });
-    } catch (paystackError) {
-      // ROLLBACK: reverse wallet debit
-      wallet.balance = Number((wallet.balance + withdrawal.requestedAmount).toFixed(2));
-      wallet.totalWithdrawn = Number((wallet.totalWithdrawn - withdrawal.requestedAmount).toFixed(2));
-      wallet.transactions = wallet.transactions.filter(
-        t => !t.description?.includes(newReference)
-      );
-      await wallet.save();
-
-      // Mark withdrawal as failed again
-      withdrawal.status = "failed";
-      withdrawal.failureReason = paystackError.response?.data?.message || "Paystack API error during retry";
-      await withdrawal.save();
-
-      return res.status(502).json({
-        success: false,
-        message: `Paystack failed: ${withdrawal.failureReason}. Funds have been restored.`,
-      });
-    }
-  } catch (err) {
-    console.error("retryWithdrawal error:", err);
-    return res.status(500).json({ success: false, message: err.message });
-  }
-};
-
 // Financially safe replacement: Paystack is always the source of truth before
 // funds are restored. If Paystack cannot be reached, no balance is changed.
 export const forceFailWithdrawal = async (req, res) => {
