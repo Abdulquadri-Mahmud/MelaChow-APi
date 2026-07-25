@@ -222,11 +222,16 @@ export const getActiveOrder = async (riderId) => {
         
         const restaurantId = vendorOrder ? vendorOrder.restaurantId : (order.items?.[0]?.restaurantId || order.vendorId);
         const VendorModel = mongoose.model("Vendor");
-        const restaurant = await VendorModel.findById(restaurantId).select("storeName address phone location coords logo cityId stateId");
+        const restaurant = await VendorModel.findById(restaurantId).select("storeName address phone location coords logo cityId stateId fullAddress");
         
         orderObj.restaurantId = restaurant || null;
         orderObj.restaurantName = restaurant?.storeName || "Partner Merchant";
         orderObj.restaurantLogo = restaurant?.logo || null;
+
+        const restAddr = restaurant?.address;
+        orderObj.restaurantAddress = restaurant?.fullAddress ||
+            (restAddr ? (typeof restAddr === 'string' ? restAddr : `${restAddr.street || restAddr.addressLine || ''}, ${restAddr.city || ''}, ${restAddr.state || ''}`.replace(/^[ ,]+|[ ,]+$/g, '').replace(/, ,/g, ',')) : '') ||
+            "Restaurant Location";
 
         // Customer Name resolution
         const user = await User.findById(order.userId).select("firstname lastname name fullName phone email");
