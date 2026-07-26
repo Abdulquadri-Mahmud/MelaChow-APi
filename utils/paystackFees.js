@@ -48,19 +48,28 @@ export function calcVendorNetPayout(grossAmount) {
  * @returns {{ feeBearer: "platform" | "vendor" | "rider", markupAmount: number }}
  */
 export function getEffectiveFeeConfig(actorType, actor, platformConfig = {}) {
-    const defaultFeeBearer = actorType === "rider" ? "platform" : "vendor";
+    // Platform-wide defaults come from PlatformConfig — falls back to the
+    // hardcoded literal only if platformConfig wasn't passed or the field
+    // is genuinely absent (e.g. a very old config doc pre-dating these fields).
+    const platformDefaultBearer = actorType === "rider"
+        ? (platformConfig.riderTransferFeeBearer || "platform")
+        : (platformConfig.vendorTransferFeeBearer || "vendor");
+    const platformDefaultMarkup = actorType === "rider"
+        ? (platformConfig.riderTransferMarkup ?? 0)
+        : (platformConfig.vendorTransferMarkup ?? 0);
+
     const override = actor?.payoutFeeOverride;
 
     if (override && override.status === "active") {
         return {
-            feeBearer: override.feeBearer || defaultFeeBearer,
-            markupAmount: typeof override.markupAmount === "number" ? override.markupAmount : 0,
+            feeBearer: override.feeBearer || platformDefaultBearer,
+            markupAmount: typeof override.markupAmount === "number" ? override.markupAmount : platformDefaultMarkup,
         };
     }
 
     return {
-        feeBearer: defaultFeeBearer,
-        markupAmount: 0,
+        feeBearer: platformDefaultBearer,
+        markupAmount: platformDefaultMarkup,
     };
 }
 

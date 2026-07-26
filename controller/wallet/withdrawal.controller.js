@@ -6,10 +6,11 @@ import Withdrawal from "../../model/wallet/Withdrawal.model.js";
 import RiderWithdrawal from "../../model/wallet/RiderWithdrawal.model.js";
 import { usePostgresWalletReads } from "../../services/postgres/compat.js";
 import { walletRepository } from "../../services/postgres/wallet.repository.js";
-import { calculatePaystackTransferFee } from "../../utils/paystackFees.js";
+import { calculatePaystackTransferFee, getEffectiveFeeConfig, computeActorPayout } from "../../utils/paystackFees.js";
 import { checkPaystackBalance, initiatePaystackTransfer } from "../../services/paystackTransfer.service.js";
 import { applyTransferOutcome, findWithdrawal, reconcileWithdrawal } from "../../services/transferReconciliation.service.js";
 import { getNextPayoutWindowMessage } from "../../utils/payoutSchedule.js";
+import { getPlatformConfig } from "../../services/platformConfig.service.js";
 
 /**
  * ─── FUNCTION 1: initiateWithdrawal ───
@@ -52,12 +53,16 @@ export const initiateWithdrawal = async (req, res) => {
       });
     }
 
-    // STEP 3B — Calculate the fee upfront so the balance check reflects the
-    // REAL amount Paystack will transfer (netAmount), not the gross amount —
-    // Paystack's own fee is deducted separately and never leaves the platform
-    // balance as part of this specific transfer call.
-    const transferFee = calculatePaystackTransferFee(amount);
-    const netAmount = amount - transferFee;
+    // STEP 3B — Resolve this vendor's effective fee-bearer/markup (defaults to
+    // vendor-absorbs-own-fee unless an admin-set override is active), then
+    // calculate the fee upfront so the balance check reflects the REAL amount
+    // Paystack will transfer (netAmount), not the gross amount.
+    const platformConfig = await getPlatformConfig();
+    const effectiveConfig = getEffectiveFeeConfig("vendor", vendor, platformConfig);
+    const payoutCalc = computeActorPayout("vendor", amount, effectiveConfig);
+    const transferFee = payoutCalc.feeChargedToActor;
+    const markupCharged = payoutCalc.markupChargedToActor;
+    const netAmount = payoutCalc.net;
     if (netAmount <= 0) {
       return res.status(400).json({ message: "Withdrawal amount too small after fees" });
     }
@@ -129,6 +134,7 @@ export const initiateWithdrawal = async (req, res) => {
       accountNumber: vendor.payoutDetails.accountNumber,
       accountName: vendor.payoutDetails.accountName,
       activePayoutKey: `vendor:${req.vendor._id}`,
+      appliedMarkup: markupCharged,
     });
 
     // STEP 8 — Debit wallet balance immediately

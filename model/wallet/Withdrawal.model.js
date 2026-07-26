@@ -25,6 +25,10 @@ const withdrawalSchema = new mongoose.Schema(
       type: Number,
       required: true,           // requestedAmount - transferFee (what actually hits their account)
     },
+    appliedMarkup: {
+      type: Number,
+      default: 0,               // Platform markup revenue charged on this withdrawal, tracked separately from the Paystack transferFee pass-through cost
+    },
     status: {
       type: String,
       enum: ["pending", "processing", "completed", "failed", "reversed"],
