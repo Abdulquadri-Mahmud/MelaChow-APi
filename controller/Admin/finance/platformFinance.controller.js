@@ -1353,6 +1353,112 @@ export const getDailyFinancialSnapshot = async (req, res) => {
 };
 
 /**
+ * GET /api/admin/finance/order-profit-breakdown
+ * Per-order platform gain: commission + service fee + net delivery margin.
+ * Sourced from the SAME Wallet transaction records that feed getDailyFinancialSnapshot's
+ * platformKept figure — the totals returned here should match that endpoint's numbers
+ * for the same date range. If they ever disagree, one of the two calculations has drifted.
+ * Rider transfer fee cost is NOT attributable per-order (it's tied to a withdrawal batch,
+ * not a specific order), so it's excluded here and only shown at the aggregate level.
+ */
+export const getOrderProfitBreakdown = async (req, res) => {
+    try {
+        const { startDate, endDate, page = 1, limit = 25 } = req.query;
+        const dateMatch = {};
+        if (startDate) dateMatch.$gte = new Date(startDate);
+        if (endDate) dateMatch.$lte = new Date(endDate);
+
+        const matchStage = { "transactions.orderId": { $ne: null } };
+        if (startDate || endDate) matchStage["transactions.date"] = dateMatch;
+
+        const perOrder = await Wallet.aggregate([
+            { $match: { ownerModel: "Admin" } },
+            { $unwind: "$transactions" },
+            { $match: matchStage },
+            {
+                $group: {
+                    _id: "$transactions.orderId",
+                    commission: {
+                        $sum: { $cond: [{ $eq: ["$transactions.transactionType", "commission"] }, "$transactions.amount", 0] },
+                    },
+                    serviceFee: {
+                        $sum: { $cond: [{ $eq: ["$transactions.transactionType", "service_fee"] }, "$transactions.amount", 0] },
+                    },
+                    grossDeliveryFee: {
+                        $sum: { $cond: [{ $eq: ["$transactions.transactionType", "delivery_fee"] }, "$transactions.amount", 0] },
+                    },
+                    netDeliveryMargin: {
+                        $sum: { $cond: [{ $eq: ["$transactions.transactionType", "delivery_spread"] }, { $ifNull: ["$transactions.reportingAmount", 0] }, 0] },
+                    },
+                    deliveryCompleted: {
+                        $max: { $cond: [{ $eq: ["$transactions.transactionType", "delivery_spread"] }, true, false] },
+                    },
+                    earliestDate: { $min: "$transactions.date" },
+                },
+            },
+            {
+                $lookup: { from: "orders", localField: "_id", foreignField: "_id", as: "order" },
+            },
+            { $unwind: { path: "$order", preserveNullAndEmptyArrays: true } },
+            {
+                $project: {
+                    orderId: "$_id",
+                    orderCode: "$order.orderId",
+                    date: "$earliestDate",
+                    commission: 1,
+                    serviceFee: 1,
+                    grossDeliveryFee: 1,
+                    netDeliveryMargin: 1,
+                    deliveryCompleted: 1,
+                    platformGain: { $add: ["$commission", "$serviceFee", "$netDeliveryMargin"] },
+                },
+            },
+            { $sort: { date: -1 } },
+            {
+                $facet: {
+                    orders: [{ $skip: (parseInt(page) - 1) * parseInt(limit) }, { $limit: parseInt(limit) }],
+                    count: [{ $count: "total" }],
+                    totals: [
+                        {
+                            $group: {
+                                _id: null,
+                                totalCommission: { $sum: "$commission" },
+                                totalServiceFee: { $sum: "$serviceFee" },
+                                totalNetDeliveryMargin: { $sum: "$netDeliveryMargin" },
+                                totalPlatformGain: { $sum: "$platformGain" },
+                                orderCount: { $sum: 1 },
+                            },
+                        },
+                    ],
+                },
+            },
+        ]);
+
+        const total = perOrder[0].count[0]?.total || 0;
+        const totals = perOrder[0].totals[0] || {
+            totalCommission: 0, totalServiceFee: 0, totalNetDeliveryMargin: 0, totalPlatformGain: 0, orderCount: 0,
+        };
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                orders: perOrder[0].orders,
+                totals,
+                pagination: {
+                    total,
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    totalPages: Math.ceil(total / limit),
+                },
+                note: "totalPlatformGain excludes rider transfer fees absorbed — see getDailyFinancialSnapshot for that figure at the aggregate level.",
+            },
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
  * GET /api/admin/finance/reconciliation
  * Compares internal Admin wallet ledger balance vs all outstanding obligations
  * (escrow held + vendor wallet balances + rider wallet balances).
