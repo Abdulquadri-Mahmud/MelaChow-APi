@@ -101,6 +101,25 @@ const vendorSchema = new Schema(
       default: undefined,
     },
 
+    payoutFeeOverride: {
+      feeBearer: { type: String, default: null },
+      markupAmount: { type: Number, default: null },
+      status: { type: String, enum: ["active", "pending_notice", "none"], default: "none" },
+      noticeSentAt: { type: Date, default: null },
+      effectiveAt: { type: Date, default: null },
+      setBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin", default: null },
+      setAt: { type: Date, default: null },
+      reason: { type: String, default: "" },
+      history: [{
+        feeBearer: { type: String, default: null },
+        markupAmount: { type: Number, default: null },
+        status: { type: String, default: "none" },
+        changedBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin", default: null },
+        changedAt: { type: Date, default: Date.now },
+        note: { type: String, default: "" },
+      }],
+    },
+
     // Foods linked to this vendor
     foods: [{ type: mongoose.Schema.Types.ObjectId, ref: "Food" }],
 

@@ -12,6 +12,13 @@ import {
     getReconciliationSnapshot,
     getOrderProfitBreakdown,
 } from "../../controller/Admin/finance/platformFinance.controller.js";
+import {
+    setVendorOverride,
+    setRiderOverride,
+    confirmRiderNotice,
+    clearVendorOverride,
+    clearRiderOverride,
+} from "../../controller/Admin/finance/payoutFeeOverride.controller.js";
 import { financeAdminOnly } from "../../middleware/adminAuth.js";
 import {
     getPaystackBalanceLedgerAdmin,
@@ -47,6 +54,15 @@ router.post("/payment-recovery/:reference/reconcile", financeAdminOnly, reconcil
 router.get("/daily-snapshot", financeAdminOnly, getDailyFinancialSnapshot);
 router.get("/reconciliation", financeAdminOnly, getReconciliationSnapshot);
 router.get("/order-profit-breakdown", financeAdminOnly, getOrderProfitBreakdown);
+
+// Payout fee overrides — vendor changes activate immediately; rider changes
+// that reduce take-home require manual notice confirmation first (see
+// controller/Admin/finance/payoutFeeOverride.controller.js for the rationale).
+router.patch("/vendors/:vendorId/payout-fee-override", financeAdminOnly, setVendorOverride);
+router.delete("/vendors/:vendorId/payout-fee-override", financeAdminOnly, clearVendorOverride);
+router.patch("/riders/:riderId/payout-fee-override", financeAdminOnly, setRiderOverride);
+router.delete("/riders/:riderId/payout-fee-override", financeAdminOnly, clearRiderOverride);
+router.patch("/riders/:riderId/payout-fee-override/confirm-notice", financeAdminOnly, confirmRiderNotice);
 router.get("/paystack/overview", financeAdminOnly, getPaystackOperationsOverview);
 router.get("/paystack/transfers", financeAdminOnly, getPaystackTransfers);
 router.get("/paystack/transfers/:idOrCode", financeAdminOnly, getPaystackTransfer);

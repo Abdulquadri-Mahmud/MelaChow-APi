@@ -33,3 +33,54 @@ export function calcVendorNetPayout(grossAmount) {
         fee,
     };
 }
+
+/**
+ * Resolves the effective fee configuration for a vendor or rider.
+ * Default for rider: feeBearer = "platform", markupAmount = 0.
+ * Default for vendor: feeBearer = "vendor", markupAmount = 0.
+ *
+ * Gating rule: Overrides ONLY take effect if override.status === "active".
+ * Rider overrides with status "pending_notice" are ignored and revert to default.
+ *
+ * @param {"vendor" | "rider"} actorType
+ * @param {Object} actor - Vendor or Rider Mongoose doc / object
+ * @param {Object} [platformConfig] - Optional platform config object
+ * @returns {{ feeBearer: "platform" | "vendor" | "rider", markupAmount: number }}
+ */
+export function getEffectiveFeeConfig(actorType, actor, platformConfig = {}) {
+    const defaultFeeBearer = actorType === "rider" ? "platform" : "vendor";
+    const override = actor?.payoutFeeOverride;
+
+    if (override && override.status === "active") {
+        return {
+            feeBearer: override.feeBearer || defaultFeeBearer,
+            markupAmount: typeof override.markupAmount === "number" ? override.markupAmount : 0,
+        };
+    }
+
+    return {
+        feeBearer: defaultFeeBearer,
+        markupAmount: 0,
+    };
+}
+
+/**
+ * Computes actor payout net amount, transfer fee charged to actor, and markup charged to actor.
+ *
+ * @param {"vendor" | "rider"} actorType
+ * @param {number} grossAmount - Amount requested / gross payout
+ * @param {{ feeBearer: string, markupAmount: number }} effectiveConfig
+ * @returns {{ feeChargedToActor: number, markupChargedToActor: number, net: number }}
+ */
+export function computeActorPayout(actorType, grossAmount, effectiveConfig) {
+    const paystackFee = calculatePaystackTransferFee(grossAmount);
+    const feeChargedToActor = (effectiveConfig.feeBearer === actorType) ? paystackFee : 0;
+    const markupChargedToActor = effectiveConfig.markupAmount || 0;
+    const net = Number((grossAmount - feeChargedToActor - markupChargedToActor).toFixed(2));
+
+    return {
+        feeChargedToActor,
+        markupChargedToActor,
+        net,
+    };
+}
