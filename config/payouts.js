@@ -11,11 +11,21 @@ export const RIDER_FIXED_PAYOUT = 800;
 export const RIDER_PAYOUT_THRESHOLD  = 0;
 export const VENDOR_PAYOUT_THRESHOLD = 0;
 
-/** Rider sweep: 9:30 PM WAT = 20:30 UTC */
-export const RIDER_SWEEP_CRON  = "0 30 20 * * *";
+/**
+ * T+1 payout timing: Paystack settles collected payments the NEXT business
+ * day. Sweeping payouts the same evening an order is paid risks attempting
+ * a transfer before the platform's real Paystack balance has caught up.
+ * Both sweeps now run the following morning, after settlement has landed.
+ * No longer staggered — both are gated by the same settlement clock — but
+ * kept as separate exported constants in case they need to diverge later.
+ *
+ * Sweep time: 7:30 AM WAT = 06:30 UTC
+ */
+export const PAYOUT_SWEEP_HOUR_UTC = 6;
+export const PAYOUT_SWEEP_MINUTE_UTC = 30;
 
-/** Vendor sweep: 10:30 PM WAT = 21:30 UTC */
-export const VENDOR_SWEEP_CRON = "0 30 21 * * *";
+export const RIDER_SWEEP_CRON  = "0 30 6 * * *";
+export const VENDOR_SWEEP_CRON = "0 30 6 * * *";
 
 /** Broadcast TTL in seconds. 5 minutes. */
 export const BROADCAST_TTL_SECONDS = 300;
