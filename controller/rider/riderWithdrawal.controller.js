@@ -7,6 +7,8 @@ import { usePostgresWalletReads } from "../../services/postgres/compat.js";
 import { walletRepository } from "../../services/postgres/wallet.repository.js";
 import { checkPaystackBalance } from "../../services/paystackTransfer.service.js";
 import { getNextPayoutWindowMessage } from "../../utils/payoutSchedule.js";
+import { getPlatformConfig } from "../../services/platformConfig.service.js";
+import { getEffectiveFeeConfig, computeActorPayout } from "../../utils/paystackFees.js";
 
 /**
  * ─── STEP 1: Resolve bank account name ───────────────────────────────────────
@@ -235,12 +237,27 @@ export const initiateRiderWithdrawal = async (req, res) => {
             });
         }
 
-        // STEP 3B — Confirm the platform's actual Paystack balance can cover this
+        // STEP 3B — Resolve effective fee-bearer/markup for this rider (defaults to
+        // platform-absorbs-everything unless an ACTIVE override exists — see
+        // getEffectiveFeeConfig, which only honors overrides that have cleared
+        // manual notice confirmation).
+        const platformConfig = await getPlatformConfig();
+        const effectiveConfig = getEffectiveFeeConfig("rider", rider, platformConfig);
+        const payoutCalc = computeActorPayout("rider", amount, effectiveConfig);
+        const transferFee = payoutCalc.feeChargedToActor;
+        const markupCharged = payoutCalc.markupChargedToActor;
+        const netAmount = payoutCalc.net;
+
+        if (netAmount <= 0) {
+            return res.status(400).json({ success: false, message: "Withdrawal amount too small after fees" });
+        }
+
+        // Confirm the platform's actual Paystack balance can cover this
         // transfer BEFORE touching the rider's wallet or creating any withdrawal
         // record. Paystack settles T+1, so the live Paystack balance can lag
         // behind what riders' wallets show on any given day.
         try {
-            const { sufficient } = await checkPaystackBalance(amount * 100);
+            const { sufficient } = await checkPaystackBalance(netAmount * 100);
             if (!sufficient) {
                 const { message } = getNextPayoutWindowMessage();
                 return res.status(400).json({
@@ -287,14 +304,10 @@ export const initiateRiderWithdrawal = async (req, res) => {
             }
         }
 
-        // STEP 5 — Rider manual withdrawal: platform absorbs the Paystack transfer fee; rider receives full amount.
-        const transferFee = 0;
-        const netAmount = amount;
-
-        // STEP 6 — Generate idempotency reference
+        // STEP 5 — Generate idempotency reference
         const paystackReference = `RWD_${randomUUID().replace(/-/g, "").toUpperCase()}`;
 
-        // STEP 7 — Create withdrawal document
+        // STEP 6 — Create withdrawal document
         const withdrawal = await RiderWithdrawal.create({
             riderId,
             walletId: wallet._id,
@@ -308,6 +321,10 @@ export const initiateRiderWithdrawal = async (req, res) => {
             accountNumber: rider.payoutDetails.accountNumber,
             accountName: rider.payoutDetails.accountName,
             activePayoutKey: `rider:${riderId}`,
+            // Record what was actually applied, for audit trail — markup is tracked
+            // separately from transferFee since it's platform revenue, not a
+            // pass-through Paystack cost.
+            appliedMarkup: markupCharged,
         });
 
         // STEP 8 — Debit wallet immediately

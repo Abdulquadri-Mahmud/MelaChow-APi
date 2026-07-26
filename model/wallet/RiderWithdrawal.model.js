@@ -29,6 +29,10 @@ const riderWithdrawalSchema = new mongoose.Schema(
             type: Number,
             default: 0,
         },
+        appliedMarkup: {
+            type: Number,
+            default: 0,
+        },
         netAmount: {
             type: Number,
             required: true,
