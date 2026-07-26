@@ -1,4 +1,5 @@
 import prisma from "../../config/prisma.js";
+import Vendor from "../../model/vendor/vendor.model.js";
 
 const defaultPlatformConfig = {
   riderFixedPayout: 600,
@@ -397,11 +398,25 @@ export const adminFinanceRepository = {
     }
     const vendors = [...rows.values()].sort((left, right) => right.orderCount - left.orderCount);
     const total = vendors.length;
+    const pageSlice = vendors.slice((pageNumber - 1) * limitNumber, pageNumber * limitNumber);
+
+    const vendorIds = pageSlice.map(v => v.vendorId).filter(Boolean);
+    if (vendorIds.length > 0) {
+      try {
+        const mongoVendors = await Vendor.find({ _id: { $in: vendorIds } }).select("_id payoutFeeOverride").lean();
+        const overrideMap = Object.fromEntries(mongoVendors.map(v => [String(v._id), v.payoutFeeOverride]));
+        pageSlice.forEach(v => {
+          v.payoutFeeOverride = overrideMap[String(v.vendorId)] || null;
+        });
+      } catch (err) {
+        console.error("Failed to populate vendor payoutFeeOverride:", err.message);
+      }
+    }
 
     return {
       success: true,
       data: {
-        vendors: vendors.slice((pageNumber - 1) * limitNumber, pageNumber * limitNumber),
+        vendors: pageSlice,
         pagination: { total, page: pageNumber, limit: limitNumber, totalPages: Math.ceil(total / limitNumber) },
         totals: {
           _id: null,
