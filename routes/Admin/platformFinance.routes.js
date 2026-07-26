@@ -10,6 +10,7 @@ import {
     reconcilePaymentReference,
     getDailyFinancialSnapshot,
     getReconciliationSnapshot,
+    getOrderProfitBreakdown,
 } from "../../controller/Admin/finance/platformFinance.controller.js";
 import { financeAdminOnly } from "../../middleware/adminAuth.js";
 import {
@@ -45,6 +46,7 @@ router.get("/payment-recovery", financeAdminOnly, getPaymentRecoveryList);
 router.post("/payment-recovery/:reference/reconcile", financeAdminOnly, reconcilePaymentReference);
 router.get("/daily-snapshot", financeAdminOnly, getDailyFinancialSnapshot);
 router.get("/reconciliation", financeAdminOnly, getReconciliationSnapshot);
+router.get("/order-profit-breakdown", financeAdminOnly, getOrderProfitBreakdown);
 router.get("/paystack/overview", financeAdminOnly, getPaystackOperationsOverview);
 router.get("/paystack/transfers", financeAdminOnly, getPaystackTransfers);
 router.get("/paystack/transfers/:idOrCode", financeAdminOnly, getPaystackTransfer);
