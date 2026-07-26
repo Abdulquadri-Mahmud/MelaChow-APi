@@ -7,8 +7,9 @@ import RiderWithdrawal from "../../model/wallet/RiderWithdrawal.model.js";
 import { usePostgresWalletReads } from "../../services/postgres/compat.js";
 import { walletRepository } from "../../services/postgres/wallet.repository.js";
 import { calculatePaystackTransferFee } from "../../utils/paystackFees.js";
-import { initiatePaystackTransfer } from "../../services/paystackTransfer.service.js";
+import { checkPaystackBalance, initiatePaystackTransfer } from "../../services/paystackTransfer.service.js";
 import { applyTransferOutcome, findWithdrawal, reconcileWithdrawal } from "../../services/transferReconciliation.service.js";
+import { getNextPayoutWindowMessage } from "../../utils/payoutSchedule.js";
 
 /**
  * ─── FUNCTION 1: initiateWithdrawal ───
@@ -51,6 +52,38 @@ export const initiateWithdrawal = async (req, res) => {
       });
     }
 
+    // STEP 3B — Calculate the fee upfront so the balance check reflects the
+    // REAL amount Paystack will transfer (netAmount), not the gross amount —
+    // Paystack's own fee is deducted separately and never leaves the platform
+    // balance as part of this specific transfer call.
+    const transferFee = calculatePaystackTransferFee(amount);
+    const netAmount = amount - transferFee;
+    if (netAmount <= 0) {
+      return res.status(400).json({ message: "Withdrawal amount too small after fees" });
+    }
+
+    // Confirm the platform's actual Paystack balance can cover this transfer
+    // BEFORE touching the vendor's wallet or creating any withdrawal record.
+    // Paystack settles T+1, so the live Paystack balance can lag behind what
+    // vendors' wallets show on any given day.
+    try {
+      const { sufficient } = await checkPaystackBalance(netAmount * 100);
+      if (!sufficient) {
+        const { message } = getNextPayoutWindowMessage();
+        return res.status(400).json({
+          success: false,
+          code: "PAYSTACK_BALANCE_PENDING_SETTLEMENT",
+          message,
+        });
+      }
+    } catch (balanceCheckErr) {
+      console.error("❌ Paystack balance check failed during manual vendor withdrawal:", balanceCheckErr.message);
+      return res.status(503).json({
+        success: false,
+        message: "Could not verify payout availability right now. Please try again shortly."
+      });
+    }
+
     // STEP 4 — Check for pending/processing withdrawal (prevent duplicate)
     const existingPending = await Withdrawal.findOne({
       vendorId: req.vendor._id,
@@ -79,15 +112,7 @@ export const initiateWithdrawal = async (req, res) => {
       }
     }
 
-    // STEP 5 — Calculate Paystack transfer fee
-    const transferFee = calculatePaystackTransferFee(amount);
-
-    const netAmount = amount - transferFee;
-    if (netAmount <= 0) {
-      return res.status(400).json({ message: "Withdrawal amount too small after fees" });
-    }
-
-    // STEP 6 — Generate idempotency reference
+    // STEP 5 — Generate idempotency reference
     const paystackReference = `WD_${randomUUID().replace(/-/g, "").toUpperCase()}`;
 
     // STEP 7 — Create Withdrawal document with status "pending"
@@ -417,6 +442,28 @@ export const approvePendingWithdrawal = async (req, res) => {
       await withdrawal.save();
     }
 
+    // T+1 guard — confirm the platform's live Paystack balance can cover this
+    // payout before advancing it to processing. Admin approvals are not exempt:
+    // Paystack settles yesterday's orders overnight, so approving before the
+    // settlement lands would result in a failed transfer.
+    try {
+      const { sufficient } = await checkPaystackBalance(withdrawal.netAmount * 100);
+      if (!sufficient) {
+        const { message } = getNextPayoutWindowMessage();
+        return res.status(400).json({
+          success: false,
+          code: "PAYSTACK_BALANCE_PENDING_SETTLEMENT",
+          message: `Approval blocked: ${message}`,
+        });
+      }
+    } catch (balanceCheckErr) {
+      console.error("❌ Paystack balance check failed during admin approval:", balanceCheckErr.message);
+      return res.status(503).json({
+        success: false,
+        message: "Could not verify Paystack balance. Approval deferred — try again shortly.",
+      });
+    }
+
     const ApprovalModel = type === "vendor" ? Withdrawal : RiderWithdrawal;
     withdrawal = await ApprovalModel.findOneAndUpdate(
       { _id: withdrawal._id, status: "pending" },
@@ -596,6 +643,40 @@ export const retryWithdrawal = async (req, res) => {
     }
     retry.walletDebitedAt = new Date();
     await retry.save();
+
+    // T+1 guard — verify live Paystack balance covers the retry amount before
+    // firing the transfer. The wallet debit above is already recorded but the
+    // retry document is still "pending"; if the balance is short we bail here
+    // and leave the operator to approve again once Paystack settles.
+    try {
+      const { sufficient } = await checkPaystackBalance(retry.netAmount * 100);
+      if (!sufficient) {
+        const { message } = getNextPayoutWindowMessage();
+        // Roll back the wallet debit — retry is aborted, funds stay put
+        await Wallet.findByIdAndUpdate(original.walletId, {
+          $inc: { balance: original.requestedAmount, totalWithdrawn: -original.requestedAmount },
+          $pull: { transactions: { description: { $regex: newReference } } },
+        });
+        await Model.deleteOne({ _id: retry._id, status: "pending" });
+        return res.status(400).json({
+          success: false,
+          code: "PAYSTACK_BALANCE_PENDING_SETTLEMENT",
+          message: `Retry blocked: ${message}`,
+        });
+      }
+    } catch (balanceCheckErr) {
+      console.error("❌ Paystack balance check failed during admin retry:", balanceCheckErr.message);
+      // Roll back the wallet debit
+      await Wallet.findByIdAndUpdate(original.walletId, {
+        $inc: { balance: original.requestedAmount, totalWithdrawn: -original.requestedAmount },
+        $pull: { transactions: { description: { $regex: newReference } } },
+      });
+      await Model.deleteOne({ _id: retry._id, status: "pending" });
+      return res.status(503).json({
+        success: false,
+        message: "Could not verify Paystack balance. Retry deferred — try again shortly.",
+      });
+    }
 
     try {
       const provider = await initiatePaystackTransfer({

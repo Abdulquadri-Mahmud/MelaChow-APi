@@ -3,6 +3,9 @@ import Order from "../../../model/order/Order.js";
 import VendorOrder from "../../../model/vendor/VendorOrder.js";
 import Vendor from "../../../model/vendor/vendor.model.js";
 import Refund from "../../../model/refund.model.js";
+import Withdrawal from "../../../model/wallet/Withdrawal.model.js";
+import RiderWithdrawal from "../../../model/wallet/RiderWithdrawal.model.js";
+import { calculatePaystackTransferFee } from "../../../utils/paystackFees.js";
 import { getPlatformConfig } from "../../../services/platformConfig.service.js";
 import mongoose from "mongoose";
 import PaymentAttempt from "../../../model/order/PaymentAttempt.js";
@@ -32,6 +35,23 @@ const getAdminWalletBalance = async () => {
     const wallet = await Wallet.findOne({ ownerModel: "Admin" }).select("balance").lean();
     return wallet?.balance || 0;
 };
+
+// Shared helper: back-computes the Paystack transfer fee the platform silently
+// absorbed on completed rider withdrawals in a window (RiderWithdrawal.transferFee
+// is always stored as 0 by design — the real cost never touches our own records
+// anywhere else, so this is an ESTIMATE using the same fee schedule Paystack
+// actually charges us, mirrored in utils/paystackFees.js).
+const getEstimatedRiderTransferFeeCost = async (dayStart, dayEnd) => {
+    const match = { status: "completed" };
+    if (dayStart && dayEnd) match.settledAt = { $gte: dayStart, $lt: dayEnd };
+
+    const withdrawals = await RiderWithdrawal.find(match, { requestedAmount: 1 }).lean();
+    const estimatedFeeTotal = withdrawals.reduce(
+        (sum, w) => sum + calculatePaystackTransferFee(w.requestedAmount || 0), 0
+    );
+    return { estimatedFeeTotal, withdrawalCount: withdrawals.length };
+};
+
 
 const getPaymentRecoveryState = (order, vendorOrderCount = 0) => {
     if (!order) return "missing_order";
@@ -256,6 +276,14 @@ export const getRevenueSummary = async (req, res) => {
         const totalDeliverySpreadEarned = delivRevenue;
         const deliveryFeeExample = 1000;
 
+        // Rider transfer fees are absorbed by the platform and never recorded anywhere
+        // else — this is the only place that real cost becomes visible in reporting.
+        const riderFeeStats = await getEstimatedRiderTransferFeeCost(
+            startDate ? new Date(startDate) : null,
+            endDate ? new Date(endDate) : null
+        );
+        const estimatedRiderTransferFeesAbsorbed = riderFeeStats.estimatedFeeTotal;
+
         res.status(200).json({
             success: true,
             data: {
@@ -265,7 +293,10 @@ export const getRevenueSummary = async (req, res) => {
                 totalCommissionEarned: commEarned,
                 totalDeliverySpreadEarned,
                 totalServiceFeeRevenue,
+                estimatedRiderTransferFeesAbsorbed,
                 combinedPlatformRevenue: commEarned + delivRevenue + totalServiceFeeRevenue,
+                combinedPlatformRevenueNetOfRiderFees:
+                    commEarned + delivRevenue + totalServiceFeeRevenue - estimatedRiderTransferFeesAbsorbed,
                 totalOrderRevenue: orderStats[0]?.totalOrderRevenue || 0,
                 totalDeliveryFeesCollected: orderStats[0]?.totalDeliveryFeesCollected || 0,
                 totalServiceFeesCollected: orderStats[0]?.totalServiceFeesCollected || 0,
@@ -1158,3 +1189,233 @@ export const reconcilePaymentReference = async (req, res) => {
         return res.status(500).json({ success: false, message: error.message });
     }
 };
+
+/**
+ * GET /api/admin/finance/daily-snapshot
+ * Returns today vs yesterday: money in, escrow released, money out (actual Paystack
+ * disbursements using netAmount for vendors), and platform kept (net delivery margin + service fee + commission,
+ * minus rider-absorbed Paystack transfer fees).
+ */
+export const getDailyFinancialSnapshot = async (req, res) => {
+    try {
+        const now = new Date();
+        const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const endOfToday = new Date(startOfToday);
+        endOfToday.setDate(endOfToday.getDate() + 1);
+        const startOfYesterday = new Date(startOfToday);
+        startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+
+        const buildDayStats = async (dayStart, dayEnd) => {
+            const [
+                moneyIn,
+                escrowReleasedToday,
+                walletCredits,
+                deliverySpreadStats,
+                vendorWithdrawals,
+                riderFeeStats,
+                riderWithdrawalsCompletedTotal,
+            ] = await Promise.all([
+                // Money In: paid orders created in this window (already includes gross
+                // delivery fee as part of order.total — do not add delivery_fee again below)
+                Order.aggregate([
+                    { $match: { paymentStatus: "paid", createdAt: { $gte: dayStart, $lt: dayEnd } } },
+                    { $group: { _id: null, total: { $sum: "$total" }, count: { $sum: 1 } } },
+                ]),
+
+                // Escrow Released: vendor orders where escrowReleased=true and updatedAt
+                // falls in window (approximation — no escrowReleasedAt field exists).
+                VendorOrder.aggregate([
+                    { $match: { escrowReleased: true, updatedAt: { $gte: dayStart, $lt: dayEnd } } },
+                    { $group: { _id: null, total: { $sum: "$escrowAmount" }, count: { $sum: 1 } } },
+                ]),
+
+                // Commission + service fee + GROSS delivery fee (informational only —
+                // gross delivery fee includes the rider's share, never sum this into
+                // platformKept; see deliverySpreadStats below for the actual net figure).
+                // These are recorded at ORDER-PAID time.
+                Wallet.aggregate([
+                    { $match: { ownerModel: "Admin" } },
+                    { $unwind: "$transactions" },
+                    { $match: { "transactions.date": { $gte: dayStart, $lt: dayEnd }, "transactions.type": "credit" } },
+                    {
+                        $group: {
+                            _id: null,
+                            grossDeliveryFeesCollected: {
+                                $sum: { $cond: [{ $eq: ["$transactions.transactionType", "delivery_fee"] }, "$transactions.amount", 0] },
+                            },
+                            serviceFees: {
+                                $sum: { $cond: [{ $eq: ["$transactions.transactionType", "service_fee"] }, "$transactions.amount", 0] },
+                            },
+                            commission: {
+                                $sum: { $cond: [{ $eq: ["$transactions.transactionType", "commission"] }, "$transactions.amount", 0] },
+                            },
+                        },
+                    },
+                ]),
+
+                // NET delivery margin the platform actually keeps (gross delivery fee
+                // minus rider payout). Written as a zero-amount informational entry with
+                // the real value in reportingAmount, at DELIVERY-COMPLETION time — a
+                // different clock than commission/service fee above. A delivery
+                // completed today may belong to an order paid yesterday, and vice versa.
+                Wallet.aggregate([
+                    { $match: { ownerModel: "Admin" } },
+                    { $unwind: "$transactions" },
+                    {
+                        $match: {
+                            "transactions.date": { $gte: dayStart, $lt: dayEnd },
+                            "transactions.transactionType": "delivery_spread",
+                        },
+                    },
+                    { $group: { _id: null, total: { $sum: { $ifNull: ["$transactions.reportingAmount", 0] } }, count: { $sum: 1 } } },
+                ]),
+
+                // Money Out (vendor): use netAmount — what Paystack actually transferred,
+                // not requestedAmount which includes the vendor's own fee deduction.
+                Withdrawal.aggregate([
+                    { $match: { status: "completed", settledAt: { $gte: dayStart, $lt: dayEnd } } },
+                    { $group: { _id: null, total: { $sum: "$netAmount" }, fee: { $sum: "$transferFee" }, count: { $sum: 1 } } },
+                ]),
+
+                // Estimated rider transfer fee cost absorbed on withdrawals settled today
+                getEstimatedRiderTransferFeeCost(dayStart, dayEnd),
+
+                // Money Out (rider): netAmount === requestedAmount for riders (platform
+                // absorbs the fee separately, tracked above), so requestedAmount is correct here.
+                RiderWithdrawal.aggregate([
+                    { $match: { status: "completed", settledAt: { $gte: dayStart, $lt: dayEnd } } },
+                    { $group: { _id: null, total: { $sum: "$requestedAmount" }, count: { $sum: 1 } } },
+                ]),
+            ]);
+
+            const grossDeliveryFeesCollected = walletCredits[0]?.grossDeliveryFeesCollected || 0;
+            const serviceFees = walletCredits[0]?.serviceFees || 0;
+            const comm = walletCredits[0]?.commission || 0;
+            const netDeliveryMargin = deliverySpreadStats[0]?.total || 0;
+            const vendorPayoutsTotal = vendorWithdrawals[0]?.total || 0;
+            const vendorTransferFees = vendorWithdrawals[0]?.fee || 0;
+            const riderPayoutsTotal = riderWithdrawalsCompletedTotal[0]?.total || 0;
+            const riderPayoutCount = riderWithdrawalsCompletedTotal[0]?.count || 0;
+            const riderTransferFeeCost = riderFeeStats.estimatedFeeTotal;
+
+            // platformKept = actual net revenue sources minus rider transfer fees absorbed.
+            // Uses netDeliveryMargin (delivery_spread), NOT grossDeliveryFeesCollected.
+            const platformKept = netDeliveryMargin + serviceFees + comm - riderTransferFeeCost;
+
+            return {
+                moneyIn: moneyIn[0]?.total || 0,
+                moneyInOrderCount: moneyIn[0]?.count || 0,
+                escrowReleased: escrowReleasedToday[0]?.total || 0,
+                escrowReleasedCount: escrowReleasedToday[0]?.count || 0,
+                grossDeliveryFeesCollected, // informational only — includes rider's share
+                netDeliveryMargin,          // what platform actually keeps from delivery
+                serviceFees,
+                commission: comm,
+                vendorPayoutsTotal,
+                vendorPayoutTransferFees: vendorTransferFees,
+                vendorPayoutCount: vendorWithdrawals[0]?.count || 0,
+                riderPayoutsTotal,
+                riderPayoutTransferFeesAbsorbed: riderTransferFeeCost,
+                riderPayoutCount,
+                totalMoneyOut: vendorPayoutsTotal + riderPayoutsTotal,
+                platformKept,
+            };
+        };
+
+        const [today, yesterday, currentEscrowHeld] = await Promise.all([
+            buildDayStats(startOfToday, endOfToday),
+            buildDayStats(startOfYesterday, startOfToday),
+            VendorOrder.aggregate([
+                { $match: { escrowReleased: false } },
+                { $group: { _id: null, total: { $sum: "$escrowAmount" }, count: { $sum: 1 } } },
+            ]),
+        ]);
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                today,
+                yesterday,
+                currentEscrowHeld: currentEscrowHeld[0]?.total || 0,
+                currentEscrowOrderCount: currentEscrowHeld[0]?.count || 0,
+                generatedAt: new Date(),
+                caveats: {
+                    escrowReleasedUsesUpdatedAt: true,
+                    escrowReleasedNote: "VendorOrder has no escrowReleasedAt field. updatedAt is used as an approximation — may include non-release updates on the same day.",
+                    riderTransferFeeNote: "Rider transferFee is always 0 in the DB (platform absorbs it). Cost is back-computed via calculatePaystackTransferFee(requestedAmount).",
+                    timingBasisNote: "commission and serviceFees are recorded at order-payment time. netDeliveryMargin is recorded at delivery-completion time (a different event, possibly a different day). 'Today' therefore mixes two clocks — this is inherent to the ledger design, not a bug.",
+                },
+            },
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * GET /api/admin/finance/reconciliation
+ * Compares internal Admin wallet ledger balance vs all outstanding obligations
+ * (escrow held + vendor wallet balances + rider wallet balances).
+ * Flags a mismatch if availableAfterObligations < 0.
+ *
+ * Paystack live balance is fetched separately client-side via the existing
+ * getPaystackOverview() endpoint — this endpoint covers internal-system numbers only.
+ */
+export const getReconciliationSnapshot = async (req, res) => {
+    try {
+        const [ledgerBalance, escrowHeld, vendorWalletTotal, riderWalletTotal, pendingVendorWithdrawals, pendingRiderWithdrawals] = await Promise.all([
+            getAdminWalletBalance(),
+            VendorOrder.aggregate([
+                { $match: { escrowReleased: false } },
+                { $group: { _id: null, total: { $sum: "$escrowAmount" } } },
+            ]),
+            Wallet.aggregate([
+                { $match: { ownerModel: "Vendor" } },
+                { $group: { _id: null, total: { $sum: "$balance" } } },
+            ]),
+            Wallet.aggregate([
+                { $match: { ownerModel: "Rider" } },
+                { $group: { _id: null, total: { $sum: "$balance" } } },
+            ]),
+            // Pending/processing vendor withdrawals (wallet debited but not yet settled)
+            Withdrawal.aggregate([
+                { $match: { status: { $in: ["pending", "processing"] } } },
+                { $group: { _id: null, total: { $sum: "$requestedAmount" } } },
+            ]),
+            // Pending/processing rider withdrawals
+            RiderWithdrawal.aggregate([
+                { $match: { status: { $in: ["pending", "processing"] } } },
+                { $group: { _id: null, total: { $sum: "$requestedAmount" } } },
+            ]),
+        ]);
+
+        const escrowTotal = escrowHeld[0]?.total || 0;
+        const vendorPayables = vendorWalletTotal[0]?.total || 0;
+        const riderPayables = riderWalletTotal[0]?.total || 0;
+        const pendingVendorPayout = pendingVendorWithdrawals[0]?.total || 0;
+        const pendingRiderPayout = pendingRiderWithdrawals[0]?.total || 0;
+        const totalOwed = vendorPayables + riderPayables;
+        const totalPendingPayouts = pendingVendorPayout + pendingRiderPayout;
+        const availableAfterObligations = ledgerBalance - escrowTotal - totalOwed;
+
+        return res.status(200).json({
+            success: true,
+            data: {
+                internalLedgerBalance: ledgerBalance,
+                escrowHeld: escrowTotal,
+                vendorPayables,
+                riderPayables,
+                totalOwed,
+                pendingVendorPayouts: pendingVendorPayout,
+                pendingRiderPayouts: pendingRiderPayout,
+                totalPendingPayouts,
+                availableAfterObligations,
+                flagged: availableAfterObligations < 0,
+                generatedAt: new Date(),
+            },
+        });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+

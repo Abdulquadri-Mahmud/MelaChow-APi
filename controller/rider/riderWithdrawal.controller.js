@@ -5,6 +5,8 @@ import Wallet from "../../model/wallet/wallet.mode.js";
 import RiderWithdrawal from "../../model/wallet/RiderWithdrawal.model.js";
 import { usePostgresWalletReads } from "../../services/postgres/compat.js";
 import { walletRepository } from "../../services/postgres/wallet.repository.js";
+import { checkPaystackBalance } from "../../services/paystackTransfer.service.js";
+import { getNextPayoutWindowMessage } from "../../utils/payoutSchedule.js";
 
 /**
  * ─── STEP 1: Resolve bank account name ───────────────────────────────────────
@@ -230,6 +232,28 @@ export const initiateRiderWithdrawal = async (req, res) => {
             return res.status(400).json({
                 success: false,
                 message: `Insufficient balance. Available: ₦${wallet.balance.toLocaleString()}`
+            });
+        }
+
+        // STEP 3B — Confirm the platform's actual Paystack balance can cover this
+        // transfer BEFORE touching the rider's wallet or creating any withdrawal
+        // record. Paystack settles T+1, so the live Paystack balance can lag
+        // behind what riders' wallets show on any given day.
+        try {
+            const { sufficient } = await checkPaystackBalance(amount * 100);
+            if (!sufficient) {
+                const { message } = getNextPayoutWindowMessage();
+                return res.status(400).json({
+                    success: false,
+                    code: "PAYSTACK_BALANCE_PENDING_SETTLEMENT",
+                    message,
+                });
+            }
+        } catch (balanceCheckErr) {
+            console.error("❌ Paystack balance check failed during manual rider withdrawal:", balanceCheckErr.message);
+            return res.status(503).json({
+                success: false,
+                message: "Could not verify payout availability right now. Please try again shortly."
             });
         }
 

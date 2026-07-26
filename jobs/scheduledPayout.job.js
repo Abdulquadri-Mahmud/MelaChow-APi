@@ -319,7 +319,8 @@ const enqueueRiderPayouts = async (today) => {
     return riderCount;
 };
 
-// ── Trigger functions — riders at 7:30 PM WAT, vendors at 8 PM WAT ───────────
+// ── Trigger functions — both riders and vendors sweep at 7:30 AM WAT
+// (T+1 settlement timing, see config/payouts.js for the shared rationale) ───
 /**
  * Finds actors with balance >= ₦0 and a verified bank account,
  * then enqueues one BullMQ job per actor.
