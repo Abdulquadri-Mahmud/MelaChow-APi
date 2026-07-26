@@ -1379,10 +1379,10 @@ export const getOrderProfitBreakdown = async (req, res) => {
                 $group: {
                     _id: "$transactions.orderId",
                     commission: {
-                        $sum: { $cond: [{ $eq: ["$transactions.transactionType", "commission"] }, "$transactions.amount", 0] },
+                        $sum: { $cond: [{ $and: [{ $eq: ["$transactions.transactionType", "commission"] }, { $eq: ["$transactions.type", "credit"] }] }, "$transactions.amount", 0] },
                     },
                     serviceFee: {
-                        $sum: { $cond: [{ $eq: ["$transactions.transactionType", "service_fee"] }, "$transactions.amount", 0] },
+                        $sum: { $cond: [{ $and: [{ $eq: ["$transactions.transactionType", "service_fee"] }, { $eq: ["$transactions.type", "credit"] }] }, "$transactions.amount", 0] },
                     },
                     grossDeliveryFee: {
                         $sum: { $cond: [{ $eq: ["$transactions.transactionType", "delivery_fee"] }, "$transactions.amount", 0] },
