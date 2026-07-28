@@ -38,7 +38,7 @@ import { reserveOptionStockForOrder, restoreOptionStockForOrder } from "../../se
 const PROMO_MAX_CLAIMS_PER_IP = 5;
 const PROMO_RESERVATION_TTL_MS = 45 * 60 * 1000;
 const VENDOR_ORDER_AUTO_CANCEL_DELAY_MS =
-  Number(process.env.VENDOR_ORDER_AUTO_CANCEL_MINUTES || 5) * 60 * 1000;
+  Number(process.env.VENDOR_ORDER_AUTO_CANCEL_MINUTES || 10) * 60 * 1000;
 
 async function queueVendorOrderAutoCancelChecks(order, vendorOrderMapping = {}) {
   const vendorOrderIds = Object.values(vendorOrderMapping).filter(Boolean);

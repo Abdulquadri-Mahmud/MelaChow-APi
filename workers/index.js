@@ -2,7 +2,7 @@ import { Worker } from 'bullmq';
 import { bullmqRedisConnection } from '../config/redis.js';
 import { QUEUE_NAMES } from '../config/queue.js';
 import logger from '../config/logger.js';
-import { refundOrderToWallet } from '../services/refund.service.js';
+import { refundOrderToWallet, refundVendorOrderToWallet } from '../services/refund.service.js';
 import { broadcastTimeoutWorker } from './broadcastTimeout.worker.js';
 import './deliveryWatchdog.worker.js';
 import './disputeEscalation.worker.js';
@@ -96,7 +96,12 @@ const orderAutoCancelWorker = new Worker(
         );
 
         try {
-            await refundOrderToWallet(order._id, 'auto_cancel');
+            const vendorOrderCount = await VendorOrder.countDocuments({ userOrderId: order._id });
+            if (vendorOrderCount <= 1) {
+                await refundOrderToWallet(order._id, 'auto_cancel');
+            } else {
+                await refundVendorOrderToWallet(order._id, vendorOrder._id, 'auto_cancel');
+            }
             logger.info({ orderId: order._id, vendorOrderId }, 'Auto-cancel refund completed');
 
             const vendor = await Vendor.findById(vendorOrder.restaurantId).select('storeName');
@@ -107,7 +112,9 @@ const orderAutoCancelWorker = new Worker(
                     orderDatabaseId: order._id,
                     restaurantName,
                     cancellationReason: 'vendor_timeout',
-                    message: 'The restaurant did not confirm this order in time. Your payment has been returned to your MelaChow wallet.',
+                    message: vendorOrderCount <= 1
+                        ? 'The restaurant did not confirm this order in time. Your payment has been returned to your MelaChow wallet.'
+                        : 'One restaurant did not confirm in time. That restaurant’s items were cancelled and refunded to your MelaChow wallet; other restaurants in this order are unchanged.',
                 }),
                 sendVendorNotification(vendorOrder.restaurantId, order.orderId || orderCode, 'vendor_order_timeout', {
                     orderDatabaseId: vendorOrder._id,
