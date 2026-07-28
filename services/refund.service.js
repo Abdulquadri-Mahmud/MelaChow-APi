@@ -170,3 +170,32 @@ export const refundOrderToWallet = async (orderId, reason) => {
         throw error;
     }
 };
+
+/** Refund one vendor's unaccepted part of a multi-vendor order without affecting accepted vendors. */
+export const refundVendorOrderToWallet = async (orderId, vendorOrderId, reason = 'auto_cancel') => {
+    const session = await mongoose.startSession();
+    session.startTransaction();
+    try {
+        const order = await Order.findById(orderId).session(session);
+        const vendorOrder = await VendorOrder.findById(vendorOrderId).session(session);
+        if (!order || !vendorOrder || vendorOrder.userOrderId.toString() !== order._id.toString()) throw new Error('Order segment not found');
+        if (vendorOrder.orderStatus !== 'pending' || order.paymentStatus !== 'paid') { await session.abortTransaction(); return null; }
+
+        const vendorFoodTotal = Number(vendorOrder.vendorTotal || vendorOrder.items.reduce((sum, item) => sum + Number(item.originalPrice || 0) * Number(item.quantity || 1), 0));
+        const deliveryFee = Number((order.vendorDeliveryFees || []).find((fee) => String(fee.restaurantId) === String(vendorOrder.restaurantId))?.deliveryFee || 0);
+        const discountShare = Number(order.appliedDiscount?.amount || 0) * (vendorFoodTotal / Math.max(1, Number(order.subtotal || 0)));
+        const refundAmount = Number(Math.max(0, vendorFoodTotal + deliveryFee - discountShare).toFixed(2));
+        const adminWallet = await Wallet.findOne({ ownerModel: 'Admin' }).session(session);
+        if (!adminWallet || adminWallet.balance < refundAmount) throw new Error('Admin wallet cannot fund vendor timeout refund');
+        let userWallet = await Wallet.findOne({ ownerId: order.userId, ownerModel: 'User' }).session(session);
+        if (!userWallet) [userWallet] = await Wallet.create([{ ownerId: order.userId, ownerModel: 'User', balance: 0, transactions: [] }], { session });
+        adminWallet.balance = Number((adminWallet.balance - refundAmount).toFixed(2));
+        userWallet.balance = Number((userWallet.balance + refundAmount).toFixed(2));
+        adminWallet.transactions.push({ type: 'debit', amount: refundAmount, description: `Partial refund for Order ${order.orderId} - ${reason}`, orderId: order._id, transactionType: 'refund' });
+        userWallet.transactions.push({ type: 'credit', amount: refundAmount, description: `Refund for cancelled restaurant in Order ${order.orderId}`, orderId: order._id, transactionType: 'refund' });
+        vendorOrder.orderStatus = 'cancelled';
+        await Promise.all([adminWallet.save({ session }), userWallet.save({ session }), vendorOrder.save({ session })]);
+        await session.commitTransaction();
+        return { refundAmount, vendorOrder, order };
+    } catch (error) { if (session.inTransaction()) await session.abortTransaction(); throw error; } finally { session.endSession(); }
+};

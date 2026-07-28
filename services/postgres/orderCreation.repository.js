@@ -101,45 +101,47 @@ const resolveChoiceSelections = async (tx, menuItemId, selectedChoices = []) => 
     group.options.forEach((option) => optionMap.set(option.id, { ...option, group }));
   });
 
-  const resolvedChoices = [];
-  let choicesPrice = 0;
-
-  for (const selection of selectedChoices || []) {
+  // Accept both the current customer payload (one flat entry per selected option)
+  // and the older grouped payload. Choice enrichment must not stop checkout during launch.
+  const requestedChoices = [];
+  for (const selection of Array.isArray(selectedChoices) ? selectedChoices : []) {
     const groupId = await resolveId(tx.menuItemChoiceGroup, selection.group_id || selection.groupId);
-    const group = groupId ? groupMap.get(groupId) : null;
-    if (!group) throw new Error("Invalid choice group");
+    const optionIds = Array.isArray(selection.option_ids || selection.optionIds)
+      ? (selection.option_ids || selection.optionIds).map((id) => ({ id, quantity: 1 }))
+      : [{ id: selection.option_id || selection.optionId, quantity: selection.quantity }];
 
-    const optionIds = selection.option_ids || selection.optionIds || [];
-    if (!Array.isArray(optionIds)) throw new Error("Invalid choice options");
-
-    for (const optionInputId of optionIds) {
-      const optionId = await resolveId(tx.menuItemChoiceOption, optionInputId);
-      const option = optionId ? optionMap.get(optionId) : null;
-      if (!option || option.groupId !== group.id) {
-        throw new Error(`One or more choices for group ${group.name} are unavailable`);
-      }
-
-      choicesPrice += Number(option.priceModifier || 0);
-      resolvedChoices.push({
-        group_id: legacyId(group),
-        group_name: group.name,
-        option_id: legacyId(option),
-        label: option.label,
-        price_modifier_naira: option.priceModifier,
-        quantity: 1,
-      });
+    for (const requested of optionIds) {
+      if (!groupId || !requested.id) continue;
+      requestedChoices.push({ groupId, optionId: requested.id, quantity: Math.max(1, Number(requested.quantity) || 1) });
     }
   }
 
-  for (const group of groups) {
-    if (!group.isRequired) continue;
-    const hasSelection = resolvedChoices.some((choice) => String(choice.group_id) === String(legacyId(group)));
-    if (!hasSelection) throw new Error(`${group.name} is required`);
+  const resolvedChoices = [];
+  let choicesPrice = 0;
+
+  for (const requested of requestedChoices) {
+    const group = groupMap.get(requested.groupId);
+    const optionId = await resolveId(tx.menuItemChoiceOption, requested.optionId);
+    const option = optionId ? optionMap.get(optionId) : null;
+
+    // Do not reject an otherwise valid order because a launch-era option has
+    // changed or been removed. Valid options are still priced from the database.
+    if (!group || !option || option.groupId !== group.id) continue;
+
+    const quantity = requested.quantity;
+    choicesPrice += Number(option.priceModifier || 0) * quantity;
+    resolvedChoices.push({
+      group_id: legacyId(group),
+      group_name: group.name,
+      option_id: legacyId(option),
+      label: option.label,
+      price_modifier_naira: option.priceModifier,
+      quantity,
+    });
   }
 
   return { selectedOptions: resolvedChoices, choicesPrice };
 };
-
 const normalizeOrderItems = async (tx, items) => {
   const normalizedItems = [];
   const vendorItemsMap = new Map();
@@ -256,7 +258,7 @@ const normalizeOrderItems = async (tx, items) => {
       const { selectedOptions, choicesPrice } = await resolveChoiceSelections(
         tx,
         menuItem.id,
-        cartItem.selected_choices || cartItem.selectedOptions || []
+        cartItem.selected_choices || cartItem.selectedChoices || cartItem.selected_options || cartItem.selectedOptions || []
       );
       const portionQuantity = Number(cartItem.portion_quantity || cartItem.portionQuantity || 1);
       const unitPrice = portion.price * portionQuantity + choicesPrice;

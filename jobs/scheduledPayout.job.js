@@ -10,7 +10,8 @@ import {
     initiatePaystackTransfer,
 } from "../services/paystackTransfer.service.js";
 import PlatformConfig from "../model/platform/PlatformConfig.model.js";
-import { calcVendorNetPayout } from "../utils/paystackFees.js";
+import { getEffectiveFeeConfig, computeActorPayout } from "../utils/paystackFees.js";
+import { getPlatformConfig } from "../services/platformConfig.service.js";
 import { RIDER_PAYOUT_THRESHOLD, VENDOR_PAYOUT_THRESHOLD } from "../config/payouts.js";
 
 // ── REDIS CONNECTION ───────────────────────────────────────────────────────────
@@ -28,11 +29,6 @@ const getMinPayoutBalance = async () => {
         return 500;
     }
 };
-
-// NOTE: Paystack deducts its own transfer fee (NGN 100/NGN 200/NGN 300) directly from the
-// MelaChow Paystack balance — NOT from the transfer amount the recipient receives.
-// We therefore send the rider's FULL wallet balance and record transferFee: 0 on
-// our side. The rider receives the exact amount we debit from their wallet.
 
 // ── Queue & Scheduler ─────────────────────────────────────────────────────────
 export const scheduledPayoutQueue = new Queue(QUEUE_NAME, {
@@ -88,14 +84,19 @@ const processPayoutJob = async (job) => {
     }
 
     const actualAmount = Math.floor(wallet.balance); // Whole naira only
-    let netAmount = actualAmount;
-    let transferFee = 0;
 
-    if (actorType === "vendor") {
-        const vendorNet = calcVendorNetPayout(actualAmount);
-        netAmount = vendorNet.net;
-        transferFee = vendorNet.fee;
-    }
+    // Resolve the effective fee-bearer/markup the SAME way manual withdrawals
+    // do — an automated sweep payout must never disagree with what a manual
+    // withdrawal would have applied to the same actor at the same moment.
+    const ActorModel = actorType === "vendor" ? Vendor : Rider;
+    const actorDoc = await ActorModel.findById(actorId).select("payoutFeeOverride").lean();
+    const platformConfig = await getPlatformConfig();
+    const effectiveConfig = getEffectiveFeeConfig(actorType, actorDoc, platformConfig);
+    const payoutCalc = computeActorPayout(actorType, actualAmount, effectiveConfig);
+
+    const netAmount = payoutCalc.net;
+    const transferFee = payoutCalc.feeChargedToActor;
+    const markupCharged = payoutCalc.markupChargedToActor;
 
     if (netAmount <= 0) {
         console.log(`⏭️ Skipping ${actorType} ${actorId} — net amount is zero or negative after fees (netAmount: ₦${netAmount})`);
@@ -129,6 +130,7 @@ const processPayoutJob = async (job) => {
         accountNumber: accountNumber || "",
         accountName: accountName || "",
         activePayoutKey: `${actorType}:${actorId}`,
+        appliedMarkup: markupCharged,
     });
 
     // 5. Debit wallet immediately
