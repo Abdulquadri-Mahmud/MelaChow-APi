@@ -8,6 +8,7 @@ import RiderWithdrawal from "../../../model/wallet/RiderWithdrawal.model.js";
 import { calculatePaystackTransferFee } from "../../../utils/paystackFees.js";
 import { getPlatformConfig } from "../../../services/platformConfig.service.js";
 import mongoose from "mongoose";
+import ExcelJS from "exceljs";
 import PaymentAttempt from "../../../model/order/PaymentAttempt.js";
 import {
     createVendorOrdersAndUpdateWallets,
@@ -1525,3 +1526,179 @@ export const getReconciliationSnapshot = async (req, res) => {
     }
 };
 
+
+const NIGERIA_TIME_ZONE = "Africa/Lagos";
+const completedStatuses = ["delivered", "completed"];
+
+const nigeriaDate = (value = new Date()) => new Intl.DateTimeFormat("en-CA", {
+    timeZone: NIGERIA_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit",
+}).format(value);
+
+const reportWindow = (date) => {
+    const reportDate = /^\d{4}-\d{2}-\d{2}$/.test(date || "") ? date : nigeriaDate();
+    const start = new Date(`${reportDate}T00:00:00+01:00`);
+    const end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + 1);
+    return { reportDate, start, end };
+};
+
+const currency = (value) => Number(value || 0);
+
+const getDailyFinanceReportData = async (date) => {
+    const { reportDate, start, end } = reportWindow(date);
+    const orders = await Order.find({
+        paymentStatus: "paid",
+        orderStatus: { $in: completedStatuses },
+        updatedAt: { $gte: start, $lt: end },
+    }).select("_id orderId updatedAt subtotal deliveryFee serviceFee total items").lean();
+
+    const orderIds = orders.map((order) => order._id);
+    const vendorOrders = orderIds.length ? await VendorOrder.find({
+        userOrderId: { $in: orderIds },
+        orderStatus: { $in: completedStatuses },
+    }).populate("restaurantId", "storeName").lean() : [];
+
+    const wallet = await Wallet.findOne({ ownerModel: "Admin" }).select("transactions").lean();
+    const orderIdSet = new Set(orderIds.map(String));
+    const ledgerByOrder = new Map();
+    for (const tx of wallet?.transactions || []) {
+        if (!tx.orderId || !orderIdSet.has(String(tx.orderId))) continue;
+        const row = ledgerByOrder.get(String(tx.orderId)) || { commission: 0, serviceFee: 0, deliverySpread: 0 };
+        if (tx.transactionType === "commission" && tx.type === "credit") row.commission += currency(tx.amount);
+        if (tx.transactionType === "service_fee" && tx.type === "credit") row.serviceFee += currency(tx.amount);
+        if (tx.transactionType === "delivery_spread") row.deliverySpread += currency(tx.reportingAmount ?? tx.amount);
+        ledgerByOrder.set(String(tx.orderId), row);
+    }
+
+    const vendorByOrder = new Map();
+    for (const vendorOrder of vendorOrders) {
+        const key = String(vendorOrder.userOrderId);
+        const rows = vendorByOrder.get(key) || [];
+        rows.push(vendorOrder);
+        vendorByOrder.set(key, rows);
+    }
+
+    const restaurants = new Map();
+    const orderRows = orders.map((order) => {
+        const financials = ledgerByOrder.get(String(order._id)) || {};
+        const relatedVendorOrders = vendorByOrder.get(String(order._id)) || [];
+        const commission = currency(financials.commission) || relatedVendorOrders.reduce((sum, row) => sum + currency(row.commission), 0);
+        const serviceFee = currency(financials.serviceFee) || currency(order.serviceFee);
+        const deliverySpread = currency(financials.deliverySpread);
+        const vendorEarnings = relatedVendorOrders.reduce((sum, row) => sum + currency(row.vendorTotal || row.escrowAmount), 0);
+        const restaurantNames = relatedVendorOrders.map((row) => row.restaurantId?.storeName || "Unknown restaurant").join(", ");
+        const items = order.items.map((item) => `${item.quantity} × ${item.name || "Item"}`).join("; ");
+
+        for (const row of relatedVendorOrders) {
+            const id = String(row.restaurantId?._id || row.restaurantId || "unknown");
+            const existing = restaurants.get(id) || { restaurant: row.restaurantId?.storeName || "Unknown restaurant", completedOrders: 0, foodSales: 0, commission: 0, vendorEarnings: 0 };
+            existing.completedOrders += 1;
+            existing.foodSales += currency(row.vendorTotal) + currency(row.commission);
+            existing.commission += currency(row.commission);
+            existing.vendorEarnings += currency(row.vendorTotal || row.escrowAmount);
+            restaurants.set(id, existing);
+        }
+
+        return {
+            orderNumber: order.orderId,
+            completedAt: order.updatedAt,
+            restaurants: restaurantNames,
+            items,
+            foodSubtotal: currency(order.subtotal),
+            deliveryFee: currency(order.deliveryFee),
+            serviceFee,
+            totalPaid: currency(order.total),
+            commission,
+            vendorEarnings,
+            deliverySpread,
+            platformRevenue: commission + serviceFee + deliverySpread,
+        };
+    });
+
+    const summary = orderRows.reduce((total, row) => ({
+        completedOrders: total.completedOrders + 1,
+        grossMerchandiseValue: total.grossMerchandiseValue + row.foodSubtotal,
+        grossDeliveryFees: total.grossDeliveryFees + row.deliveryFee,
+        serviceFees: total.serviceFees + row.serviceFee,
+        commission: total.commission + row.commission,
+        vendorEarnings: total.vendorEarnings + row.vendorEarnings,
+        deliverySpread: total.deliverySpread + row.deliverySpread,
+        platformRevenue: total.platformRevenue + row.platformRevenue,
+        customerPayments: total.customerPayments + row.totalPaid,
+    }), { completedOrders: 0, grossMerchandiseValue: 0, grossDeliveryFees: 0, serviceFees: 0, commission: 0, vendorEarnings: 0, deliverySpread: 0, platformRevenue: 0, customerPayments: 0 });
+
+    return { reportDate, summary, restaurants: [...restaurants.values()], orders: orderRows };
+};
+
+export const getDailyFinanceReport = async (req, res) => {
+    try {
+        return res.status(200).json({ success: true, data: await getDailyFinanceReportData(req.query.date) });
+    } catch (error) {
+        return res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+export const exportDailyFinanceReport = async (req, res) => {
+    try {
+        const report = await getDailyFinanceReportData(req.query.date);
+        const workbook = new ExcelJS.Workbook();
+        workbook.creator = "MelaChow";
+        workbook.created = new Date();
+        const moneyFormat = '₦#,##0.00';
+        const styleSheet = (sheet) => {
+            sheet.views = [{ state: "frozen", ySplit: 1 }];
+            sheet.getRow(1).font = { bold: true, color: { argb: "FFFFFFFF" } };
+            sheet.getRow(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFFF5A00" } };
+            sheet.columns.forEach((column) => { column.width = Math.max(14, Number(column.width || 14)); });
+        };
+
+        const summarySheet = workbook.addWorksheet("Daily Summary");
+        summarySheet.columns = [{ header: "Metric", key: "metric", width: 34 }, { header: "Amount", key: "amount", width: 20 }];
+        summarySheet.addRows([
+            { metric: "Report date (Africa/Lagos)", amount: report.reportDate },
+            { metric: "Completed customer orders", amount: report.summary.completedOrders },
+            { metric: "Customer payments", amount: report.summary.customerPayments },
+            { metric: "Food sales (GMV)", amount: report.summary.grossMerchandiseValue },
+            { metric: "Gross delivery fees collected", amount: report.summary.grossDeliveryFees },
+            { metric: "Service fees", amount: report.summary.serviceFees },
+            { metric: "Sales commission", amount: report.summary.commission },
+            { metric: "Vendor earnings", amount: report.summary.vendorEarnings },
+            { metric: "Net delivery spread", amount: report.summary.deliverySpread },
+            { metric: "Platform revenue", amount: report.summary.platformRevenue },
+        ]);
+        styleSheet(summarySheet);
+        summarySheet.getColumn("amount").numFmt = moneyFormat;
+        summarySheet.getCell("B3").numFmt = "0";
+
+        const restaurantSheet = workbook.addWorksheet("Restaurant Performance");
+        restaurantSheet.columns = [
+            { header: "Restaurant", key: "restaurant", width: 34 }, { header: "Completed orders", key: "completedOrders", width: 18 },
+            { header: "Food sales", key: "foodSales", width: 18 }, { header: "Commission", key: "commission", width: 18 },
+            { header: "Vendor earnings", key: "vendorEarnings", width: 20 },
+        ];
+        restaurantSheet.addRows(report.restaurants);
+        styleSheet(restaurantSheet);
+        ["foodSales", "commission", "vendorEarnings"].forEach((key) => { restaurantSheet.getColumn(key).numFmt = moneyFormat; });
+
+        const orderSheet = workbook.addWorksheet("Order Details");
+        orderSheet.columns = [
+            { header: "Order number", key: "orderNumber", width: 20 }, { header: "Completed at", key: "completedAt", width: 23 },
+            { header: "Restaurant(s)", key: "restaurants", width: 32 }, { header: "Items", key: "items", width: 48 },
+            { header: "Food subtotal", key: "foodSubtotal", width: 18 }, { header: "Delivery fee", key: "deliveryFee", width: 18 },
+            { header: "Service fee", key: "serviceFee", width: 18 }, { header: "Total paid", key: "totalPaid", width: 18 },
+            { header: "Commission", key: "commission", width: 18 }, { header: "Vendor earnings", key: "vendorEarnings", width: 20 },
+            { header: "Delivery spread", key: "deliverySpread", width: 20 }, { header: "Platform revenue", key: "platformRevenue", width: 21 },
+        ];
+        orderSheet.addRows(report.orders);
+        styleSheet(orderSheet);
+        orderSheet.getColumn("completedAt").numFmt = "yyyy-mm-dd hh:mm";
+        ["foodSubtotal", "deliveryFee", "serviceFee", "totalPaid", "commission", "vendorEarnings", "deliverySpread", "platformRevenue"].forEach((key) => { orderSheet.getColumn(key).numFmt = moneyFormat; });
+
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("Content-Disposition", `attachment; filename="melachow-daily-finance-${report.reportDate}.xlsx"`);
+        await workbook.xlsx.write(res);
+        res.end();
+    } catch (error) {
+        if (!res.headersSent) res.status(500).json({ success: false, message: error.message });
+    }
+};
