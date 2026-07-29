@@ -11,6 +11,8 @@ import {
     getDailyFinancialSnapshot,
     getReconciliationSnapshot,
     getOrderProfitBreakdown,
+    getDailyFinanceReport,
+    exportDailyFinanceReport,
 } from "../../controller/Admin/finance/platformFinance.controller.js";
 import {
     setVendorOverride,
@@ -54,6 +56,8 @@ router.post("/payment-recovery/:reference/reconcile", financeAdminOnly, reconcil
 router.get("/daily-snapshot", financeAdminOnly, getDailyFinancialSnapshot);
 router.get("/reconciliation", financeAdminOnly, getReconciliationSnapshot);
 router.get("/order-profit-breakdown", financeAdminOnly, getOrderProfitBreakdown);
+router.get("/daily-report", financeAdminOnly, getDailyFinanceReport);
+router.get("/daily-report/export", financeAdminOnly, exportDailyFinanceReport);
 
 // Payout fee overrides — vendor changes activate immediately; rider changes
 // that reduce take-home require manual notice confirmation first (see
