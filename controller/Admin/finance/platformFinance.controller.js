@@ -1210,6 +1210,7 @@ export const getDailyFinancialSnapshot = async (req, res) => {
             const [
                 moneyIn,
                 escrowReleasedToday,
+                releasedWithoutPaidParent,
                 walletCredits,
                 deliverySpreadStats,
                 vendorWithdrawals,
@@ -1228,6 +1229,14 @@ export const getDailyFinancialSnapshot = async (req, res) => {
                 VendorOrder.aggregate([
                     { $match: { escrowReleased: true, updatedAt: { $gte: dayStart, $lt: dayEnd } } },
                     { $group: { _id: null, total: { $sum: "$escrowAmount" }, count: { $sum: 1 } } },
+                ]),
+
+                VendorOrder.aggregate([
+                    { $match: { escrowReleased: true, updatedAt: { $gte: dayStart, $lt: dayEnd } } },
+                    { $lookup: { from: "orders", localField: "userOrderId", foreignField: "_id", as: "parentOrder" } },
+                    { $unwind: { path: "$parentOrder", preserveNullAndEmptyArrays: true } },
+                    { $match: { "parentOrder.paymentStatus": { $ne: "paid" } } },
+                    { $group: { _id: null, count: { $sum: 1 }, total: { $sum: "$escrowAmount" } } },
                 ]),
 
                 // Commission + service fee + GROSS delivery fee (informational only —
@@ -1308,6 +1317,8 @@ export const getDailyFinancialSnapshot = async (req, res) => {
                 moneyInOrderCount: moneyIn[0]?.count || 0,
                 escrowReleased: escrowReleasedToday[0]?.total || 0,
                 escrowReleasedCount: escrowReleasedToday[0]?.count || 0,
+                releasedWithoutPaidParentCount: releasedWithoutPaidParent[0]?.count || 0,
+                releasedWithoutPaidParentTotal: releasedWithoutPaidParent[0]?.total || 0,
                 grossDeliveryFeesCollected, // informational only — includes rider's share
                 netDeliveryMargin,          // what platform actually keeps from delivery
                 serviceFees,
