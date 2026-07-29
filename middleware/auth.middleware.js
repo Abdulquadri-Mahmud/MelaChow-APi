@@ -7,7 +7,12 @@ const auth = async (req, res, next) => {
 
   try {
     // Read token from cookie OR Authorization header
-    const token = req.cookies.token || req.headers.authorization?.split(" ")[1];
+    const headerToken = req.headers.authorization?.startsWith("Bearer ")
+      ? req.headers.authorization.slice(7)
+      : null;
+    // Prefer an explicit bearer token: it may have been freshly rotated while
+    // the browser still carries an older access-token cookie.
+    const token = headerToken || req.cookies.token;
 
     if (!token) {
       return res.status(401).json({ message: "Unauthorized. Token missing or invalid." });
