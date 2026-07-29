@@ -1038,14 +1038,20 @@ export const createOrderV2 = async ({
           .map(i => i.foodId)
           .filter(Boolean);
 
-        const menuItems = menuItemIds.length > 0
+        // A customer can order the same food in multiple cart lines when each
+        // line has different options. MongoDB's $in query returns one document
+        // per unique _id, so validate against the unique IDs rather than the
+        // number of cart lines.
+        const uniqueMenuItemIds = [...new Set(menuItemIds.map(id => id.toString()))];
+
+        const menuItems = uniqueMenuItemIds.length > 0
           ? await MenuItem.find({
-              _id:         { $in: menuItemIds },
+              _id:         { $in: uniqueMenuItemIds },
               is_archived: false,
             }).session(session).lean()
           : [];
 
-        if (menuItems.length !== menuItemIds.length) {
+        if (menuItems.length !== uniqueMenuItemIds.length) {
           throw new Error("One or more food items not found");
         }
 
