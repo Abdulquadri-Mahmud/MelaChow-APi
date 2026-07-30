@@ -1,7 +1,9 @@
 import mongoose from "mongoose";
 import SupportTicket from "../model/supportTicket.model.js";
 import Order from "../model/order/Order.js";
-import { notifyAdmins } from "../services/notification.service.js";
+import { notifyAdmins, sendNotification } from "../services/notification.service.js";
+import { sendMail } from "../config/mailer.js";
+import { settleSupportRefund } from "../services/supportRefundSettlement.service.js";
 
 const CATEGORY_PRIORITY = {
   payment_issue: "high",
@@ -18,6 +20,15 @@ const CATEGORY_PRIORITY = {
 
 const SUPPORT_STATUSES = new Set(["open", "pending", "escalated", "resolved", "closed"]);
 const SUPPORT_PRIORITIES = new Set(["low", "normal", "high", "urgent"]);
+const FIRST_RESPONSE_HOURS = { urgent: 1, high: 4, normal: 12, low: 24 };
+const RESOLUTION_HOURS = { urgent: 8, high: 24, normal: 72, low: 120 };
+function deadlineFromNow(hours) { return new Date(Date.now() + hours * 60 * 60 * 1000); }
+function safeEvidence(value) { const urls = Array.isArray(value) ? value : []; return [...new Set(urls.map((url) => cleanText(url, 1000)).filter((url) => /^https:\/\//i.test(url)))].slice(0, 5); }
+async function notifyCustomerSupport(ticket, title, message) {
+  const url = "/get-help/tickets/" + ticket._id;
+  await sendNotification(ticket.userId, "support_update", { title, message, url, additionalData: { ticketId: String(ticket._id), ticketNumber: ticket.ticketNumber } }).catch((error) => console.error("Support notification failed:", error.message));
+  if (ticket.customerEmail) sendMail({ to: ticket.customerEmail, subject: title + " — " + ticket.ticketNumber, html: "<p>" + message + "</p><p>Open your MelaChow support ticket: <a href='" + (process.env.FRONTEND_URL || "https://melachow.com") + url + "'>" + ticket.ticketNumber + "</a></p>" }).catch((error) => console.error("Support email failed:", error.message));
+}
 
 function cleanText(value, maxLength = 2500) {
   return String(value || "").trim().slice(0, maxLength);
@@ -48,6 +59,8 @@ export const createSupportTicket = async (req, res) => {
       paymentReference,
       customerPhone,
       customerEmail,
+      requestedResolution,
+      evidence,
     } = req.body || {};
 
     const normalizedSubject = cleanText(subject, 140);
@@ -77,6 +90,11 @@ export const createSupportTicket = async (req, res) => {
       customerName: getCustomerName(req.user),
       customerEmail: cleanText(customerEmail || req.user?.email || "", 160),
       customerPhone: cleanText(customerPhone || req.user?.phone || "", 40),
+      requestedResolution: cleanText(requestedResolution, 240),
+      evidence: safeEvidence(evidence),
+      conversation: [{ body: normalizedMessage, senderRole: "customer", senderId: userId, senderName: getCustomerName(req.user), attachments: safeEvidence(evidence) }],
+      firstResponseDueAt: deadlineFromNow(FIRST_RESPONSE_HOURS[CATEGORY_PRIORITY[safeCategory] || "normal"]),
+      resolutionDueAt: deadlineFromNow(RESOLUTION_HOURS[CATEGORY_PRIORITY[safeCategory] || "normal"]),
     });
 
     await notifyAdmins("support_ticket", {
@@ -105,7 +123,7 @@ export const createSupportTicket = async (req, res) => {
 export const getMySupportTickets = async (req, res) => {
   try {
     const tickets = await SupportTicket.find({ userId: req.userId })
-      .populate("order", "orderId total paymentStatus orderStatus createdAt")
+      .populate("order", "orderId total paymentStatus orderStatus riderId createdAt")
       .sort({ createdAt: -1 })
       .limit(30)
       .lean();
@@ -119,7 +137,7 @@ export const getMySupportTickets = async (req, res) => {
 export const getMySupportTicket = async (req, res) => {
   try {
     const ticket = await SupportTicket.findOne({ _id: req.params.ticketId, userId: req.userId })
-      .populate("order", "orderId total paymentStatus orderStatus createdAt")
+      .populate("order", "orderId total paymentStatus orderStatus riderId createdAt")
       .lean();
 
     if (!ticket) {
@@ -134,6 +152,7 @@ export const getMySupportTicket = async (req, res) => {
 
 export const getAdminSupportTickets = async (req, res) => {
   try {
+    await SupportTicket.updateMany({ status: { $in: ["open", "pending"] }, resolutionDueAt: { $lt: new Date() } }, { $set: { status: "escalated" } });
     const {
       status,
       category,
@@ -169,7 +188,7 @@ export const getAdminSupportTickets = async (req, res) => {
     const [tickets, total, statusCounts, categoryCounts] = await Promise.all([
       SupportTicket.find(filters)
         .populate("userId", "firstname lastname fullName email phone")
-        .populate("order", "orderId total paymentStatus orderStatus createdAt")
+        .populate("order", "orderId total paymentStatus orderStatus riderId createdAt")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(safeLimit)
@@ -208,7 +227,7 @@ export const getAdminSupportTicket = async (req, res) => {
   try {
     const ticket = await SupportTicket.findById(req.params.ticketId)
       .populate("userId", "firstname lastname fullName email phone")
-      .populate("order", "orderId total paymentStatus orderStatus deliveryAddress phone items createdAt")
+      .populate("order", "orderId total paymentStatus orderStatus riderId deliveryAddress phone items createdAt")
       .populate("adminNotes.adminId", "name email")
       .lean();
 
@@ -288,10 +307,11 @@ export const updateAdminSupportTicket = async (req, res) => {
     }
 
     await ticket.save();
+    if (previousStatus !== ticket.status) await notifyCustomerSupport(ticket, "Your support ticket status changed", "Your ticket " + ticket.ticketNumber + " is now " + ticket.status + ". Open the ticket to view the latest details.");
 
     const updatedTicket = await SupportTicket.findById(ticket._id)
       .populate("userId", "firstname lastname fullName email phone")
-      .populate("order", "orderId total paymentStatus orderStatus createdAt")
+      .populate("order", "orderId total paymentStatus orderStatus riderId createdAt")
       .lean();
 
     res.status(200).json({
@@ -302,4 +322,55 @@ export const updateAdminSupportTicket = async (req, res) => {
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
+};
+
+export const addCustomerSupportMessage = async (req, res) => {
+  try {
+    const ticket = await SupportTicket.findOne({ _id: req.params.ticketId, userId: req.userId });
+    const body = cleanText(req.body?.message, 2500);
+    if (!ticket) return res.status(404).json({ success: false, message: "Support ticket not found." });
+    if (body.length < 2) return res.status(400).json({ success: false, message: "Please enter a message." });
+    if (ticket.status === "closed" || ticket.status === "resolved") { ticket.status = "open"; ticket.reopenedAt = new Date(); }
+    ticket.conversation.push({ body, senderRole: "customer", senderId: req.userId, senderName: ticket.customerName, attachments: safeEvidence(req.body?.evidence) });
+    ticket.lastCustomerActivityAt = new Date();
+    await ticket.save();
+    await notifyAdmins("support_ticket", { message: ticket.ticketNumber + ": customer replied", url: "/admin/support", additionalData: { ticketId: String(ticket._id) } });
+    return res.json({ success: true, data: { ticket } });
+  } catch (error) { return res.status(500).json({ success: false, message: "Unable to send support message." }); }
+};
+
+export const replyToSupportTicket = async (req, res) => {
+  try {
+    const ticket = await SupportTicket.findById(req.params.ticketId);
+    const body = cleanText(req.body?.message, 2500);
+    if (!ticket) return res.status(404).json({ success: false, message: "Support ticket not found." });
+    if (body.length < 2) return res.status(400).json({ success: false, message: "Please enter a reply." });
+    const adminName = req.admin?.name || req.admin?.email || "MelaChow Support";
+    ticket.conversation.push({ body, senderRole: "admin", senderId: req.admin?._id, senderName: adminName });
+    ticket.assignedAdminId = ticket.assignedAdminId || req.admin?._id; ticket.assignedAdminName = ticket.assignedAdminName || adminName; ticket.firstRespondedAt = ticket.firstRespondedAt || new Date(); ticket.lastAdminActivityAt = new Date();
+    if (ticket.status === "open") ticket.status = "pending";
+    await ticket.save();
+    await notifyCustomerSupport(ticket, "MelaChow Support replied", adminName + ": " + body);
+    return res.json({ success: true, data: { ticket } });
+  } catch (error) { return res.status(500).json({ success: false, message: "Unable to send support reply." }); }
+};
+
+export const assignSupportTicketToMe = async (req, res) => {
+  try {
+    const ticket = await SupportTicket.findById(req.params.ticketId);
+    if (!ticket) return res.status(404).json({ success: false, message: "Support ticket not found." });
+    ticket.assignedAdminId = req.admin?._id; ticket.assignedAdminName = req.admin?.name || req.admin?.email || "Support"; ticket.lastAdminActivityAt = new Date();
+    await ticket.save();
+    return res.json({ success: true, data: { ticket } });
+  } catch (error) { return res.status(500).json({ success: false, message: "Unable to assign support ticket." }); }
+};
+export const approveSupportWalletRefund = async (req, res) => {
+  try {
+    const { amount, liabilities, reason, evidenceSummary = "" } = req.body || {};
+    if (!Array.isArray(liabilities) || !liabilities.length) return res.status(400).json({ success: false, message: "Select at least one liable party and amount." });
+    const settlement = await settleSupportRefund({ ticketId: req.params.ticketId, refundAmount: amount, liabilities, reason: cleanText(reason, 1000), evidenceSummary: cleanText(evidenceSummary, 2000), admin: req.admin });
+    const ticket = await SupportTicket.findById(req.params.ticketId);
+    await notifyCustomerSupport(ticket, "Your MelaChow wallet refund is complete", "₦" + settlement.refundAmount + " has been credited to your MelaChow wallet for ticket " + ticket.ticketNumber + ".");
+    return res.status(201).json({ success: true, data: { settlement } });
+  } catch (error) { return res.status(400).json({ success: false, message: error.message || "Unable to approve wallet refund." }); }
 };

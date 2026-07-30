@@ -27,6 +27,18 @@ const supportAdminNoteSchema = new mongoose.Schema(
   { _id: false }
 );
 
+const supportMessageSchema = new mongoose.Schema(
+  {
+    body: { type: String, required: true, trim: true, maxlength: 2500 },
+    senderRole: { type: String, enum: ["customer", "admin", "system"], required: true },
+    senderId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    senderName: { type: String, default: "" },
+    attachments: { type: [String], default: [] },
+    createdAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 const supportTicketSchema = new mongoose.Schema(
   {
     ticketNumber: {
@@ -81,6 +93,15 @@ const supportTicketSchema = new mongoose.Schema(
     customerName: { type: String, trim: true, default: "" },
     customerEmail: { type: String, trim: true, lowercase: true, default: "" },
     customerPhone: { type: String, trim: true, default: "" },
+    requestedResolution: { type: String, trim: true, maxlength: 240, default: "" },
+    evidence: { type: [String], default: [] },
+    conversation: { type: [supportMessageSchema], default: [] },
+    assignedAdminId: { type: mongoose.Schema.Types.ObjectId, ref: "Admin", default: null, index: true },
+    assignedAdminName: { type: String, default: "" },
+    firstResponseDueAt: { type: Date, default: null, index: true },
+    resolutionDueAt: { type: Date, default: null, index: true },
+    firstRespondedAt: { type: Date, default: null },
+    reopenedAt: { type: Date, default: null },
     adminNotes: { type: [supportAdminNoteSchema], default: [] },
     timeline: { type: [supportTimelineSchema], default: [] },
     lastCustomerActivityAt: { type: Date, default: Date.now },
