@@ -2,6 +2,7 @@ import Order from "../../../model/order/Order.js";
 import VendorOrder from "../../../model/vendor/VendorOrder.js";
 import Vendor from "../../../model/vendor/vendor.model.js";
 import Wallet from "../../../model/wallet/wallet.mode.js";
+import Withdrawal from "../../../model/wallet/Withdrawal.model.js";
 import User from "../../../model/user.model.js";
 import Rider from "../../../model/rider.model.js";
 import RiderAssignment from "../../../model/riderAssignment.model.js";
@@ -580,6 +581,17 @@ export const getCommissionLedger = async (req, res) => {
             totalCount: 0
         };
 
+        const vendorPayoutMatch = { status: "completed" };
+        if (startDate || endDate) {
+            vendorPayoutMatch.settledAt = {};
+            if (startDate) vendorPayoutMatch.settledAt.$gte = new Date(startDate);
+            if (endDate) vendorPayoutMatch.settledAt.$lte = new Date(endDate);
+        }
+        const vendorPayoutFees = await Withdrawal.aggregate([
+            { $match: vendorPayoutMatch },
+            { $group: { _id: null, requested: { $sum: "$requestedAmount" }, transferFee: { $sum: "$transferFee" }, netPaid: { $sum: "$netAmount" }, markup: { $sum: "$appliedMarkup" }, count: { $sum: 1 } } },
+        ]);
+        const payoutSummary = vendorPayoutFees[0] || { requested: 0, transferFee: 0, netPaid: 0, markup: 0, count: 0 };
         const orders = aggregationResult[0].data;
 
         res.status(200).json({
@@ -590,7 +602,12 @@ export const getCommissionLedger = async (req, res) => {
                     totalDeliveryFeesHeld: metadata.totalDeliveryFeesHeld,
                     totalDeliverySpread: metadata.totalDeliverySpread || 0,
                     totalServiceFees: metadata.totalServiceFees || 0,
-                    combinedPlatformRevenue: metadata.totalPlatformRevenue || 0
+                    combinedPlatformRevenue: (metadata.totalPlatformRevenue || 0) + (payoutSummary.markup || 0),
+                    vendorPayoutRequested: payoutSummary.requested || 0,
+                    vendorTransferFees: payoutSummary.transferFee || 0,
+                    vendorNetPayout: payoutSummary.netPaid || 0,
+                    vendorPayoutMarkup: payoutSummary.markup || 0,
+                    vendorPayoutCount: payoutSummary.count || 0
                 },
                 orders,
                 pagination: {
