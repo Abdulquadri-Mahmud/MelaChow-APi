@@ -198,7 +198,12 @@ const NOTIFICATION_CONFIGS = {
         requireInteraction: true,
         vibrate: [500, 100, 500, 100, 500]
     },
-    support_ticket: {
+    support_update: {
+        title: 'Support Ticket Update',
+        getBody: (data) => data.message || 'Your MelaChow support ticket has been updated.',
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: false
+    },    support_ticket: {
         title: 'New Customer Complaint',
         getBody: (data) => data.message || `Support ticket ${data.ticketNumber || ''} needs review.`,
         icon: '/icons/icon-192x192.png',

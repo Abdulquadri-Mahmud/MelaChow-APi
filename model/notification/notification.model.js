@@ -53,6 +53,7 @@ const notificationSchema = new mongoose.Schema({
             'rider_assignment_timeout',
             'vendor_review',
             'support_ticket',
+            'support_update',
             'system',
             'promo',
             'discount',
