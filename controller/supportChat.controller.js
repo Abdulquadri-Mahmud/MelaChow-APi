@@ -49,15 +49,22 @@ function buildKnowledgePrompt(role, knowledge) {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /**
- * Hash an IP address with the platform salt so we never store raw IPs.
- * Throws if IP_HASH_SALT is not configured — same approach as qr.controller.js.
+ * Produce a privacy-safe identity for chat rate limiting. IP hashing is preferred
+ * when IP_HASH_SALT is configured. A missing optional salt must not take the
+ * customer-support channel offline, so authenticated account identity is used
+ * as a fallback.
  */
-function hashIp(ip) {
+function getRateLimitIdentity({ ip, userId }) {
   const salt = process.env.IP_HASH_SALT;
-  if (!salt) {
-    throw new Error('IP_HASH_SALT environment variable is required');
+  if (salt) {
+    return crypto.createHash('sha256').update(`ip:${ip}:${salt}`).digest('hex');
   }
-  return crypto.createHash('sha256').update(ip + salt).digest('hex');
+
+  logger.warn(
+    { event: 'support_chat_ip_hash_salt_missing' },
+    'IP_HASH_SALT is not configured; using authenticated account rate limiting'
+  );
+  return crypto.createHash('sha256').update(`account:${String(userId || 'unknown')}`).digest('hex');
 }
 
 /**
@@ -195,17 +202,11 @@ export const handleSupportChat = async (req, res) => {
       .map(item => ({ role: item.role, content: item.content }));
   }
 
-  // 5. IP-hash rate limit — 20 messages per IP per rolling hour
-  let hashedIp;
-  try {
-    const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip || '0.0.0.0';
-    hashedIp = hashIp(ip);
-  } catch (err) {
-    logger.error({ event: 'support_chat_ip_hash_error', error: err.message }, 'Failed to hash IP');
-    return res.status(500).json({ error: 'Server configuration error.' });
-  }
+  // 5. Privacy-safe rate limit — per IP when salted, per authenticated account otherwise.
+  const ip = req.headers['x-forwarded-for']?.split(',')[0].trim() || req.ip || '0.0.0.0';
+  const rateLimitIdentity = getRateLimitIdentity({ ip, userId });
 
-  const limited = await isRateLimited(hashedIp);
+  const limited = await isRateLimited(rateLimitIdentity);
   if (limited) {
     return res.status(429).json({
       error: 'Too many messages. Please wait before sending more.'
