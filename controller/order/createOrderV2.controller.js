@@ -200,7 +200,8 @@ const validatePortionAndChoices = async (menuItem, cartItem, session) => {
       if (option.group_id.toString() !== group._id.toString()) {
         throw new Error(`${menuItem.name}: Option does not belong to "${group.name}"`);
       }
-      const selectedQuantity = Math.max(1, Number(sel.quantity) || 1);
+      const isSoupChoiceGroup = /^choose\s+your\s+soup$/i.test(String(group.name || "").trim());
+      const selectedQuantity = isSoupChoiceGroup ? 1 : Math.max(1, Number(sel.quantity) || 1);
       const requestedStock = selectedQuantity * Math.max(1, Number(cartItem.quantity) || 1);
       if (option.track_stock && option.stock_quantity < requestedStock) {
         throw new Error(`${menuItem.name}: Only ${option.stock_quantity} ${option.label} left`);
@@ -291,7 +292,8 @@ const validateCombo = async (cartItem, session) => {
       if (option.is_available === false) {
         throw new Error(`Combo option "${option.label}" is unavailable`);
       }
-      const selectedQuantity = Math.max(1, Number(sel.quantity) || 1);
+      const isSoupChoiceGroup = /^choose\s+your\s+soup$/i.test(String(group.name || "").trim());
+      const selectedQuantity = isSoupChoiceGroup ? 1 : Math.max(1, Number(sel.quantity) || 1);
       const requestedStock = selectedQuantity * Math.max(1, Number(cartItem.quantity) || 1);
       if (option.track_stock && option.stock_quantity < requestedStock) {
         throw new Error(`Combo: Only ${option.stock_quantity} ${option.label} left`);
