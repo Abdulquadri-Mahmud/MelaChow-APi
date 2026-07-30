@@ -93,7 +93,7 @@ export const verifyRegistration = async (req, res) => {
         }
 
         // Find user with OTP (need to explicitly select OTP fields)
-        const user = await User.findOne({ email }).select('+otp +otpExpires');
+        const user = await User.findOne({ email }).select('+otp +otpExpires +password');
 
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
@@ -189,23 +189,48 @@ export const loginWithPassword = async (req, res) => {
     try {
         const { email, password } = req.body;
 
-        if (!email || !password) {
-            return res.status(400).json({ message: 'Email and password are required' });
+        if (!email) {
+            return res.status(400).json({ message: 'Email is required' });
         }
 
         // Find user with password field (explicitly select it)
-        const user = await User.findOne({ email }).select('+password +loginAttempts +lockUntil');
+        const user = await User.findOne({ email }).select('+password +otp +otpExpires +loginAttempts +lockUntil');
 
         if (!user) {
             return res.status(401).json({ message: 'Invalid email or password' });
         }
 
-        // Check if account is verified
+        // Pending registrations cannot receive a session. Reissue an expired or
+        // missing registration code, then let the client take the customer to OTP.
         if (!user.isVerified) {
-            return res.status(401).json({
-                message: 'Account not verified. Please verify your email first.',
-                requiresVerification: true
+            const otpIsUsable = user.otp && user.otpExpires && user.otpExpires > Date.now();
+            if (!otpIsUsable) {
+                const otp = generateOTP();
+                user.otp = otp;
+                user.otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+                await user.save();
+
+                await sendMail({
+                    to: user.email,
+                    subject: 'Verify Your Email: ' + otp,
+                    html: wrapLayout(
+                        'Verify your MelaChow account',
+                        `<p class="p">Use the secure code below to continue creating your account.</p><div style="background: #F3F4F6; border-radius: 20px; padding: 32px; text-align: center; margin: 24px 0;"><span style="font-size: 36px; font-weight: 900; letter-spacing: 10px; color: #111827; font-family: 'Courier New', Courier, monospace;">${otp}</span></div><p class="p" style="font-size: 14px; color: #6B7280; text-align: center;">This code expires in 10 minutes.</p>`,
+                        'Verify account'
+                    )
+                });
+            }
+
+            return res.status(403).json({
+                code: 'ACCOUNT_VERIFICATION_REQUIRED',
+                message: 'Verify your email to continue. We have sent a verification code if your previous code expired.',
+                requiresVerification: true,
+                email: user.email
             });
+        }
+
+        if (!password) {
+            return res.status(400).json({ message: 'Password is required for this verified account' });
         }
 
         // Check if account is active
