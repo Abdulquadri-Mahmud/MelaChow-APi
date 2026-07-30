@@ -27,6 +27,14 @@ const RATE_LIMIT_WINDOW = 60 * 60;     // 1 hour in seconds
 const HISTORY_MAX       = 16;          // max history items consumed
 const MESSAGE_MAX_CHARS = 500;
 
+function buildDirectKnowledgeReply(articles) {
+  const bestArticle = articles?.[0];
+  const answer = String(bestArticle?.content || bestArticle?.answer || "").trim();
+
+  if (answer) return answer.slice(0, 2000);
+
+  return "Hi! I can help with orders, payments, delivery, and your account. Tell me what you need help with, or use Get Help for assistance with a specific order.";
+}
 function buildKnowledgePrompt(role, knowledge) {
   const articles = formatKnowledgeForPrompt(knowledge);
   return [
@@ -133,12 +141,6 @@ async function isRateLimited(hashedIp) {
  */
 export const handleSupportChat = async (req, res) => {
   const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    logger.error({ event: 'support_chat_no_api_key' }, 'ANTHROPIC_API_KEY is not configured');
-    return res.status(503).json({
-      error: 'The assistant is temporarily unavailable. Please email support@melachow.com.'
-    });
-  }
 
   // 2. Derive role from req.userType — NEVER from req.body
   const userType = req.userType;
@@ -222,6 +224,15 @@ export const handleSupportChat = async (req, res) => {
     logger.error({ event: 'support_knowledge_retrieval_error', error: error.message }, 'Support knowledge retrieval failed');
     return res.status(503).json({ error: 'The support assistant is temporarily unavailable. Please use Get Help to contact support.' });
   }
+  const directKnowledgeReply = buildDirectKnowledgeReply(knowledge.articles);
+
+  // The knowledge base remains available even during AI-provider outages.
+  // This only returns reviewed article content or the approved generic greeting.
+  if (!apiKey) {
+    logger.warn({ event: 'support_chat_ai_fallback', role, userId, knowledgeSource: knowledge.source }, 'Anthropic is not configured; returning direct knowledge response');
+    return res.status(200).json({ reply: directKnowledgeReply });
+  }
+
   const systemPrompt = buildKnowledgePrompt(role, knowledge.articles);
 
   // 7. Construct the Anthropic messages array:
@@ -254,9 +265,7 @@ export const handleSupportChat = async (req, res) => {
       { event: 'support_chat_error', role, userId, error: networkErr.message },
       'Anthropic API network error'
     );
-    return res.status(502).json({
-      error: 'The assistant is temporarily unavailable. Please try again or email support@melachow.com.'
-    });
+    return res.status(200).json({ reply: directKnowledgeReply });
   }
 
   // 9. Handle non-2xx from Anthropic
@@ -271,9 +280,7 @@ export const handleSupportChat = async (req, res) => {
       { event: 'support_chat_error', role, userId, error: String(errDetail) },
       'Anthropic API returned non-2xx'
     );
-    return res.status(502).json({
-      error: 'The assistant is temporarily unavailable. Please try again or email support@melachow.com.'
-    });
+    return res.status(200).json({ reply: directKnowledgeReply });
   }
 
   // 10. Extract reply and return ONLY { reply } — nothing else
@@ -285,9 +292,7 @@ export const handleSupportChat = async (req, res) => {
       { event: 'support_chat_error', role, userId, error: parseErr.message },
       'Failed to parse Anthropic response'
     );
-    return res.status(502).json({
-      error: 'The assistant is temporarily unavailable. Please try again or email support@melachow.com.'
-    });
+    return res.status(200).json({ reply: directKnowledgeReply });
   }
 
   const reply = data?.content?.[0]?.text;
@@ -297,9 +302,7 @@ export const handleSupportChat = async (req, res) => {
       { event: 'support_chat_error', role, userId, error: 'Empty content from Anthropic' },
       'Anthropic returned no text content'
     );
-    return res.status(502).json({
-      error: 'The assistant is temporarily unavailable. Please try again or email support@melachow.com.'
-    });
+    return res.status(200).json({ reply: directKnowledgeReply });
   }
 
   logger.info({ event: 'support_chat_response', role, userId, knowledgeSource: knowledge.source, matchedArticles: knowledge.articles.length }, 'Support chat response delivered');
