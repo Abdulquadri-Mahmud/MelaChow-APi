@@ -123,7 +123,7 @@ export const createSupportTicket = async (req, res) => {
 export const getMySupportTickets = async (req, res) => {
   try {
     const tickets = await SupportTicket.find({ userId: req.userId })
-      .populate("order", "orderId total paymentStatus orderStatus createdAt")
+      .populate("order", "orderId total paymentStatus orderStatus riderId createdAt")
       .sort({ createdAt: -1 })
       .limit(30)
       .lean();
@@ -137,7 +137,7 @@ export const getMySupportTickets = async (req, res) => {
 export const getMySupportTicket = async (req, res) => {
   try {
     const ticket = await SupportTicket.findOne({ _id: req.params.ticketId, userId: req.userId })
-      .populate("order", "orderId total paymentStatus orderStatus createdAt")
+      .populate("order", "orderId total paymentStatus orderStatus riderId createdAt")
       .lean();
 
     if (!ticket) {
@@ -188,7 +188,7 @@ export const getAdminSupportTickets = async (req, res) => {
     const [tickets, total, statusCounts, categoryCounts] = await Promise.all([
       SupportTicket.find(filters)
         .populate("userId", "firstname lastname fullName email phone")
-        .populate("order", "orderId total paymentStatus orderStatus createdAt")
+        .populate("order", "orderId total paymentStatus orderStatus riderId createdAt")
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(safeLimit)
@@ -227,7 +227,7 @@ export const getAdminSupportTicket = async (req, res) => {
   try {
     const ticket = await SupportTicket.findById(req.params.ticketId)
       .populate("userId", "firstname lastname fullName email phone")
-      .populate("order", "orderId total paymentStatus orderStatus deliveryAddress phone items createdAt")
+      .populate("order", "orderId total paymentStatus orderStatus riderId deliveryAddress phone items createdAt")
       .populate("adminNotes.adminId", "name email")
       .lean();
 
@@ -311,7 +311,7 @@ export const updateAdminSupportTicket = async (req, res) => {
 
     const updatedTicket = await SupportTicket.findById(ticket._id)
       .populate("userId", "firstname lastname fullName email phone")
-      .populate("order", "orderId total paymentStatus orderStatus createdAt")
+      .populate("order", "orderId total paymentStatus orderStatus riderId createdAt")
       .lean();
 
     res.status(200).json({
