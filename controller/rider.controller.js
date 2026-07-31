@@ -142,13 +142,13 @@ export const assignRider = async (req, res, next) => {
 
         const io = getIO(req);
 
-        // ✅ FIX: riderId is now included in the payload so the frontend
+        // âœ… FIX: riderId is now included in the payload so the frontend
         // handleRiderAssigned guard (data.riderId === riderId) actually passes
         io.to(SOCKET_ROOMS.rider(riderId)).emit(
             SOCKET_EVENTS.ORDER_ASSIGNED_TO_RIDER,
             buildPayload.orderAssigned({
                 orderId: order._id,
-                riderId,                                   // ← was missing
+                riderId,                                   // â† was missing
                 vendorId,
                 vendorName: req.vendor.storeName,
                 items: order.items,
@@ -172,7 +172,7 @@ export const assignRider = async (req, res, next) => {
             })
         );
 
-        // ✅ Use unified notification service for real-time + push capability
+        // âœ… Use unified notification service for real-time + push capability
         try {
             const { 
                 sendRiderNotification, 
@@ -200,9 +200,9 @@ export const assignRider = async (req, res, next) => {
                 restaurantName: req.vendor.storeName
             });
 
-            console.log(`✅ Assignment notifications + push sent to all parties for Order: ${order.orderId}`);
+            console.log(`âœ… Assignment notifications + push sent to all parties for Order: ${order.orderId}`);
         } catch (notifErr) {
-            console.warn('⚠️ Push/Notification service failed for rider assignment:', notifErr.message);
+            console.warn('âš ï¸ Push/Notification service failed for rider assignment:', notifErr.message);
         }
 
         res.status(200).json({
@@ -216,7 +216,7 @@ export const assignRider = async (req, res, next) => {
 };
 
 /**
- * ✅ FIX: New controller for GET /riders/:riderId/active-order
+ * âœ… FIX: New controller for GET /riders/:riderId/active-order
  * The frontend always called this endpoint but it never existed,
  * causing activeOrder to perpetually be null on the dashboard.
  */
@@ -224,7 +224,7 @@ export const getActiveOrder = async (req, res, next) => {
     try {
         const { riderId } = req.params;
 
-        // Auth guard — rider can only fetch their own active order
+        // Auth guard â€” rider can only fetch their own active order
         if (!req.rider || req.rider._id.toString() !== riderId) {
             return res.status(403).json({ success: false, message: "Unauthorized" });
         }
@@ -238,7 +238,7 @@ export const getActiveOrder = async (req, res, next) => {
             deliveryOtp = await getActiveDeliveryOTP(order._id);
         }
 
-        // ✅ FIX: Returning 200 with null instead of 404.
+        // âœ… FIX: Returning 200 with null instead of 404.
         // A 404 in the console looks like a "failure" to the user/dev, 
         // but having no active order is a valid and frequent state for a rider.
         res.status(200).json({ 
@@ -308,7 +308,7 @@ export const getRiderOrderDetails = async (req, res, next) => {
         }
 
         if (!isAssignedOwner && !isCandidate) {
-            console.warn(`🚫 [getRiderOrderDetails] 403: Rider ${riderId} unauthorized for Order ${orderId}`);
+            console.warn(`ðŸš« [getRiderOrderDetails] 403: Rider ${riderId} unauthorized for Order ${orderId}`);
             return res.status(403).json({ success: false, message: "Rider not authorized to view this order" });
         }
 
@@ -320,7 +320,7 @@ export const getRiderOrderDetails = async (req, res, next) => {
 
         res.status(200).json({ success: true, data: { ...orderObj, deliveryOtp } });
     } catch (error) {
-        console.error("💥 [getRiderOrderDetails] Error:", error.message);
+        console.error("ðŸ’¥ [getRiderOrderDetails] Error:", error.message);
         next(error);
     }
 };
@@ -458,9 +458,9 @@ export const updateRiderStatus = async (req, res, next) => {
             return res.status(200).json({ success: true, data: response.data });
         }
 
-        // ✅ FIX: Was calling getSingleRiderForVendor(riderId, req.rider?.vendorId || "dummy")
+        // âœ… FIX: Was calling getSingleRiderForVendor(riderId, req.rider?.vendorId || "dummy")
         // which queries { _id: riderId, vendorId: "dummy" } for admin-managed riders
-        // → always throws "Rider not found" BEFORE the status update happens.
+        // â†’ always throws "Rider not found" BEFORE the status update happens.
         // Now we fetch directly by ID, which works for all rider types.
         const oldRider = await Rider.findById(riderId).populate("currentOrderId");
         if (!oldRider) {
@@ -509,12 +509,12 @@ export const updateRiderStatus = async (req, res, next) => {
         }
         const rider = await riderService.updateRiderStatus(riderId, status, reason);
         
-        // 🚀 NEW: Instant catch-up for newly available riders
+        // ðŸš€ NEW: Instant catch-up for newly available riders
         if (status === "available") {
             const { catchupRiderWithPendingOrders } = await import("../services/riderAssignment.service.js");
             // Run in background to not block the response
             catchupRiderWithPendingOrders(riderId).catch(err => 
-                console.error(`❌ [Catch-up] Error for rider ${riderId}:`, err.message)
+                console.error(`âŒ [Catch-up] Error for rider ${riderId}:`, err.message)
             );
         }
 
@@ -585,10 +585,10 @@ export const updateRiderStatus = async (req, res, next) => {
                 }
 
                 if (!acceptedOrderUpdate) {
-                    // ✅ IDEMPOTENCY CHECK: If the rider is already the owner, treat as success
+                    // âœ… IDEMPOTENCY CHECK: If the rider is already the owner, treat as success
                     const alreadyOwned = (masterOrder.riderId?.toString() === riderId) || (vendorOrder && vendorOrder.riderId?.toString() === riderId);
                     if (alreadyOwned) {
-                        console.log(`♻️ [updateRiderStatus] Rider ${riderId} already owns Order ${orderId}. Treating as success.`);
+                        console.log(`â™»ï¸ [updateRiderStatus] Rider ${riderId} already owns Order ${orderId}. Treating as success.`);
                     } else {
                         await Rider.findByIdAndUpdate(riderId, {
                             $set: { status: "available", assignmentExpiresAt: null },
@@ -625,7 +625,7 @@ export const updateRiderStatus = async (req, res, next) => {
                     { sort: { createdAt: -1 } }
                 );
 
-                // ── Queue 1-hour delivery watchdog (MongoDB Path) ─────────────────
+                // â”€â”€ Queue 1-hour delivery watchdog (MongoDB Path) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 try {
                     const { deliveryWatchdogQueue } = await import("../config/queue.js");
                     const { DELIVERY_TIMEOUT_MS } = await import("../config/payouts.js");
@@ -646,9 +646,9 @@ export const updateRiderStatus = async (req, res, next) => {
                             removeOnFail:     false,
                         }
                     );
-                    logger.info({ orderId: actualOrderId, riderId }, "⏱️ Delivery watchdog queued (1 hour)");
+                    logger.info({ orderId: actualOrderId, riderId }, "â±ï¸ Delivery watchdog queued (1 hour)");
                 } catch (wErr) {
-                    console.error("⚠️ Watchdog queue failed (non-fatal):", wErr.message);
+                    console.error("âš ï¸ Watchdog queue failed (non-fatal):", wErr.message);
                 }
 
                 const losingAssignmentsQuery = vendorOrder
@@ -667,7 +667,7 @@ export const updateRiderStatus = async (req, res, next) => {
                         { $set: { status: "available", assignmentExpiresAt: null }, $unset: { currentOrderId: "" } }
                     );
 
-                    // ✅ SYNC: Notify all other riders to close their broadcast modals immediately
+                    // âœ… SYNC: Notify all other riders to close their broadcast modals immediately
                     losingRiderIds.forEach(id => {
                         const room = SOCKET_ROOMS.rider(id);
                         if (io) {
@@ -699,7 +699,7 @@ export const updateRiderStatus = async (req, res, next) => {
                     );
                 }
 
-                // Notify admin — critical for platform-managed orders where admin
+                // Notify admin â€” critical for platform-managed orders where admin
                 // assigned the rider and needs confirmation the delivery is underway
                 try {
                     const { sendNotification } = await import("../services/notification.service.js");
@@ -710,7 +710,7 @@ export const updateRiderStatus = async (req, res, next) => {
                         message: `Rider ${rider.name} accepted delivery assignment for Order #${finalOrderObj?.orderId || orderId}. Order is now in transit.`
                     }, 'admin');
                 } catch (notifErr) {
-                    console.warn('⚠️ Admin notification failed for rider accept:', notifErr.message);
+                    console.warn('âš ï¸ Admin notification failed for rider accept:', notifErr.message);
                 }
 
             } else if (status === "available") {
@@ -719,7 +719,7 @@ export const updateRiderStatus = async (req, res, next) => {
                 const actionMessage = isTimeout
                     ? `Rider ${rider.name} did not respond before the assignment timer expired. Manual reassignment required.`
                     : `Rider ${rider.name} rejected the assignment. Please assign another rider.`;
-                // ── RIDER REJECTED ────────────────────────────────────────────────
+                // â”€â”€ RIDER REJECTED â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
                 const OrderModel = (await import("../model/order/Order.js")).default;
                 const VendorOrder = (await import("../model/vendor/VendorOrder.js")).default;
                 
@@ -736,7 +736,7 @@ export const updateRiderStatus = async (req, res, next) => {
                 }
 
                 if (!masterOrder) {
-                    console.warn(`⚠️ Reject attempted for non-existent order ${orderId}`);
+                    console.warn(`âš ï¸ Reject attempted for non-existent order ${orderId}`);
                     return res.status(200).json({ success: true, data: rider.getPublicProfile() });
                 }
 
@@ -823,7 +823,7 @@ export const updateRiderStatus = async (req, res, next) => {
                         );
                     }
 
-                    // Notify admin — urgent for platform-managed orders, admin must
+                    // Notify admin â€” urgent for platform-managed orders, admin must
                     // reassign a rider manually. rider_assignment_needed triggers the
                     // high-priority alert config in notification.service.js.
                     try {
@@ -844,7 +844,7 @@ export const updateRiderStatus = async (req, res, next) => {
                                 : `Rider ${rider.name} rejected Order #${order.orderId}. Manual reassignment required.`
                         }, 'admin');
                     } catch (notifErr) {
-                        console.warn('⚠️ Admin notification failed for rider rejection:', notifErr.message);
+                        console.warn('âš ï¸ Admin notification failed for rider rejection:', notifErr.message);
                     }
                 }
             }
@@ -861,7 +861,7 @@ export const updateRiderStatus = async (req, res, next) => {
                     })
                 );
             } catch (socketErr) {
-                console.warn('⚠️ Socket emit failed:', socketErr.message);
+                console.warn('âš ï¸ Socket emit failed:', socketErr.message);
             }
         }
 
@@ -884,7 +884,7 @@ export const markPickedUp = async (req, res, next) => {
             ? await riderSelfRepository.markPickedUp(orderId, riderId)
             : await riderService.markPickedUp(orderId, riderId);
 
-        // Resolve vendorId from order items — handles admin-managed riders
+        // Resolve vendorId from order items â€” handles admin-managed riders
         // where req.rider.vendorId is null
         const pickupVendorId = (order.items?.[0]?.restaurantId || order.vendorId)?.toString() || null;
 
@@ -903,7 +903,7 @@ export const markPickedUp = async (req, res, next) => {
                 })
             );
         } catch (socketErr) {
-            console.warn('⚠️ Socket emit failed for customer pickup notification:', socketErr.message);
+            console.warn('âš ï¸ Socket emit failed for customer pickup notification:', socketErr.message);
         }
 
         // Emit real-time status update to vendor dashboard
@@ -923,7 +923,7 @@ export const markPickedUp = async (req, res, next) => {
                 );
             }
         } catch (socketErr) {
-            console.warn('⚠️ Socket emit failed for vendor pickup notification:', socketErr.message);
+            console.warn('âš ï¸ Socket emit failed for vendor pickup notification:', socketErr.message);
         }
 
         // Notify customer, vendor (push/in-app), and admin
@@ -949,16 +949,16 @@ export const markPickedUp = async (req, res, next) => {
                 });
             }
 
-            // 3. Admin notification — platform visibility on delivery progress
+            // 3. Admin notification â€” platform visibility on delivery progress
             await sendNotification(null, 'admin_order_ready', {
                 orderId: order.orderId || order._id,
                 orderDatabaseId: order._id,
                 restaurantName: pickupVendorId || 'the store',
-                message: `Rider ${req.rider.name} picked up Order #${order.orderId} — now out for delivery.`
+                message: `Rider ${req.rider.name} picked up Order #${order.orderId} â€” now out for delivery.`
             }, 'admin');
 
         } catch (notifErr) {
-            console.warn('⚠️ Push/Notification service failed for pick-up:', notifErr.message);
+            console.warn('âš ï¸ Push/Notification service failed for pick-up:', notifErr.message);
         }
 
         res.status(200).json({ success: true, message: "Order picked up", data: order });
@@ -1011,13 +1011,13 @@ export const requestDeliveryOTP = async (req, res, next) => {
             });
         }
 
-        // Resolve customer phone — delivery address phone takes priority
+        // Resolve customer phone â€” delivery address phone takes priority
         const customerPhone = order.deliveryAddress?.phone || order.phone;
 
         if (!customerPhone && !order.userId?.email) {
             return res.status(400).json({
                 success: false,
-                message: 'Customer has no phone or email on file — cannot send OTP'
+                message: 'Customer has no phone or email on file â€” cannot send OTP'
             });
         }
 
@@ -1070,7 +1070,7 @@ export const requestDeliveryOTP = async (req, res, next) => {
                 ? 'OTP sent to customer via SMS'
                 : result.method === 'email'
                     ? 'OTP sent to customer via Email'
-                    : 'System is in Bypass Mode — use code 123456',
+                    : 'System is in Bypass Mode â€” use code 123456',
             method: result.method,
         });
 
@@ -1116,7 +1116,7 @@ export const confirmDelivery = async (req, res, next) => {
             });
         }
 
-        // OTP verified — proceed with delivery confirmation
+        // OTP verified â€” proceed with delivery confirmation
         // markDelivered now returns a structured result, not raw order
         const { order, payoutCredited, isVendorManagedDelivery, payoutBlockedReason, escrowReleaseFailures = [] } = usePostgresRiderAssignmentWrites()
             ? await riderSelfRepository.markDelivered(actualOrderId, riderId)
@@ -1136,16 +1136,16 @@ export const confirmDelivery = async (req, res, next) => {
                 })
             );
         } catch (socketErr) {
-            console.warn('⚠️ Socket emit failed for confirmDelivery:', socketErr.message);
+            console.warn('âš ï¸ Socket emit failed for confirmDelivery:', socketErr.message);
         }
 
-        // ✅ Multi-party Notification Cascade (User, Vendor, Admin, Rider)
+        // âœ… Multi-party Notification Cascade (User, Vendor, Admin, Rider)
         try {
             const {
                 sendOrderNotification,
                 sendVendorNotification,
                 sendNotification,
-                sendRiderNotification,          // ← was missing, caused ReferenceError on every delivery
+                sendRiderNotification,          // â† was missing, caused ReferenceError on every delivery
             } = await import('../services/notification.service.js');
 
             // 1. Notify customer
@@ -1174,7 +1174,7 @@ export const confirmDelivery = async (req, res, next) => {
 
                 // Direct socket room emit for real-time vendor dashboard update.
                 // sendVendorNotification handles push and DB but does not emit
-                // to the vendor socket room — without this, the vendor dashboard
+                // to the vendor socket room â€” without this, the vendor dashboard
                 // stays on out_for_delivery until they manually refresh.
                 try {
                     const io = getIO();
@@ -1189,7 +1189,7 @@ export const confirmDelivery = async (req, res, next) => {
                         })
                     );
                 } catch (socketErr) {
-                    console.warn('⚠️ Socket emit failed for vendor delivery notification:', socketErr.message);
+                    console.warn('âš ï¸ Socket emit failed for vendor delivery notification:', socketErr.message);
                 }
             }
 
@@ -1218,9 +1218,9 @@ export const confirmDelivery = async (req, res, next) => {
                 }, 'admin');
             }
 
-            // 4. Notify rider — only if payout was platform-managed AND actually credited.
-            // Vendor-managed riders are paid cash by the vendor — no wallet credit occurs.
-            // If admin wallet was insufficient, payout was staged for manual review — do not
+            // 4. Notify rider â€” only if payout was platform-managed AND actually credited.
+            // Vendor-managed riders are paid cash by the vendor â€” no wallet credit occurs.
+            // If admin wallet was insufficient, payout was staged for manual review â€” do not
             // tell the rider their wallet was credited when it wasn't.
             if (!isVendorManagedDelivery) {
                 if (payoutCredited) {
@@ -1229,8 +1229,8 @@ export const confirmDelivery = async (req, res, next) => {
                         payout: 600
                     });
                 } else {
-                    // Payout was blocked (admin wallet underfunded) — honest notification
-                    console.warn(`⚠️ Rider payout not credited for Order ${order.orderId} — sending pending notification`);
+                    // Payout was blocked (admin wallet underfunded) â€” honest notification
+                    console.warn(`âš ï¸ Rider payout not credited for Order ${order.orderId} â€” sending pending notification`);
                     await sendRiderNotification(riderId, order._id, 'order_assigned', {
                         orderId: order.orderId || order._id,
                         restaurantName: 'the restaurant',
@@ -1238,11 +1238,11 @@ export const confirmDelivery = async (req, res, next) => {
                     });
                 }
             }
-            // If isVendorManagedDelivery — no payout notification. Rider was paid cash.
+            // If isVendorManagedDelivery â€” no payout notification. Rider was paid cash.
 
         } catch (notifErr) {
-            // Non-fatal — delivery already confirmed
-            console.warn('⚠️ Notification cascade failed after delivery:', notifErr.message);
+            // Non-fatal â€” delivery already confirmed
+            console.warn('âš ï¸ Notification cascade failed after delivery:', notifErr.message);
         }
 
         return res.status(200).json({
@@ -1318,6 +1318,19 @@ export const adminUpdateRider = async (req, res, next) => {
     }
 };
 
+export const adminForceRiderAvailable = async (req, res, next) => {
+    try {
+        const { riderId } = req.params;
+        const rider = await riderService.adminForceRiderAvailable(riderId, req.admin._id);
+        res.status(200).json({
+            success: true,
+            message: "Rider status overridden to available",
+            data: rider,
+        });
+    } catch (error) {
+        next(error);
+    }
+};
 export const adminApproveRider = async (req, res, next) => {
     try {
         const { riderId } = req.params;
@@ -1735,7 +1748,7 @@ export const adminRejectRiderAssignment = async (req, res, next) => {
 
         const { catchupRiderWithPendingOrders } = await import("../services/riderAssignment.service.js");
         catchupRiderWithPendingOrders(riderId).catch(err => 
-            console.error(`❌ [Catch-up] Error for rider ${riderId}:`, err.message)
+            console.error(`âŒ [Catch-up] Error for rider ${riderId}:`, err.message)
         );
 
         res.status(200).json({ success: true, message: "Offer rejected successfully. Rider is now available.", data: rider.getPublicProfile() });
@@ -1772,7 +1785,7 @@ export const getRiderOrders = async (req, res, next) => {
     try {
         const { riderId } = req.params;
 
-        // Auth guard — rider can only fetch their own orders
+        // Auth guard â€” rider can only fetch their own orders
         if (req.rider._id.toString() !== riderId) {
             return res.status(403).json({ success: false, message: "Unauthorized" });
         }
