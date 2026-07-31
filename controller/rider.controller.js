@@ -15,6 +15,7 @@ import { adminRidersRepository } from "../services/postgres/adminRiders.reposito
 import { riderSelfRepository } from "../services/postgres/riderSelf.repository.js";
 import { usePostgresWalletReads } from "../services/postgres/compat.js";
 import { walletRepository } from "../services/postgres/wallet.repository.js";
+import { sendRiderApprovalEmail, sendRiderSuspensionEmail } from "../config/riderAccount.mailer.js";
 
 export const createRider = async (req, res, next) => {
     try {
@@ -142,13 +143,13 @@ export const assignRider = async (req, res, next) => {
 
         const io = getIO(req);
 
-        // âœ… FIX: riderId is now included in the payload so the frontend
+        // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ FIX: riderId is now included in the payload so the frontend
         // handleRiderAssigned guard (data.riderId === riderId) actually passes
         io.to(SOCKET_ROOMS.rider(riderId)).emit(
             SOCKET_EVENTS.ORDER_ASSIGNED_TO_RIDER,
             buildPayload.orderAssigned({
                 orderId: order._id,
-                riderId,                                   // â† was missing
+                riderId,                                   // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Ãƒâ€šÃ‚Â was missing
                 vendorId,
                 vendorName: req.vendor.storeName,
                 items: order.items,
@@ -172,7 +173,7 @@ export const assignRider = async (req, res, next) => {
             })
         );
 
-        // âœ… Use unified notification service for real-time + push capability
+        // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Use unified notification service for real-time + push capability
         try {
             const { 
                 sendRiderNotification, 
@@ -200,9 +201,9 @@ export const assignRider = async (req, res, next) => {
                 restaurantName: req.vendor.storeName
             });
 
-            console.log(`âœ… Assignment notifications + push sent to all parties for Order: ${order.orderId}`);
+            console.log(`ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Assignment notifications + push sent to all parties for Order: ${order.orderId}`);
         } catch (notifErr) {
-            console.warn('âš ï¸ Push/Notification service failed for rider assignment:', notifErr.message);
+            console.warn('ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Push/Notification service failed for rider assignment:', notifErr.message);
         }
 
         res.status(200).json({
@@ -216,7 +217,7 @@ export const assignRider = async (req, res, next) => {
 };
 
 /**
- * âœ… FIX: New controller for GET /riders/:riderId/active-order
+ * ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ FIX: New controller for GET /riders/:riderId/active-order
  * The frontend always called this endpoint but it never existed,
  * causing activeOrder to perpetually be null on the dashboard.
  */
@@ -224,7 +225,7 @@ export const getActiveOrder = async (req, res, next) => {
     try {
         const { riderId } = req.params;
 
-        // Auth guard â€” rider can only fetch their own active order
+        // Auth guard ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â rider can only fetch their own active order
         if (!req.rider || req.rider._id.toString() !== riderId) {
             return res.status(403).json({ success: false, message: "Unauthorized" });
         }
@@ -238,7 +239,7 @@ export const getActiveOrder = async (req, res, next) => {
             deliveryOtp = await getActiveDeliveryOTP(order._id);
         }
 
-        // âœ… FIX: Returning 200 with null instead of 404.
+        // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ FIX: Returning 200 with null instead of 404.
         // A 404 in the console looks like a "failure" to the user/dev, 
         // but having no active order is a valid and frequent state for a rider.
         res.status(200).json({ 
@@ -308,7 +309,7 @@ export const getRiderOrderDetails = async (req, res, next) => {
         }
 
         if (!isAssignedOwner && !isCandidate) {
-            console.warn(`ðŸš« [getRiderOrderDetails] 403: Rider ${riderId} unauthorized for Order ${orderId}`);
+            console.warn(`ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â« [getRiderOrderDetails] 403: Rider ${riderId} unauthorized for Order ${orderId}`);
             return res.status(403).json({ success: false, message: "Rider not authorized to view this order" });
         }
 
@@ -320,7 +321,7 @@ export const getRiderOrderDetails = async (req, res, next) => {
 
         res.status(200).json({ success: true, data: { ...orderObj, deliveryOtp } });
     } catch (error) {
-        console.error("ðŸ’¥ [getRiderOrderDetails] Error:", error.message);
+        console.error("ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢Ãƒâ€šÃ‚Â¥ [getRiderOrderDetails] Error:", error.message);
         next(error);
     }
 };
@@ -341,16 +342,14 @@ export const updateRiderStatus = async (req, res, next) => {
                 return res.status(404).json({ success: false, message: "Rider not found" });
             }
 
-            const suspensionIsActive = suspension.isSuspended &&
-                suspension.suspendedUntil &&
-                suspension.suspendedUntil.getTime() > Date.now();
+            const suspensionIsActive = suspension.isSuspended && (!suspension.suspendedUntil || suspension.suspendedUntil.getTime() > Date.now());
 
             if (suspensionIsActive) {
                 return res.status(403).json({
                     success: false,
                     code: "RIDER_SUSPENDED",
                     suspendedUntil: suspension.suspendedUntil,
-                    message: `Your account is suspended until ${suspension.suspendedUntil.toISOString()}. You cannot go online or accept orders during this penalty.`,
+                    message: `Your account is suspended${suspension.suspendedUntil ? ` until ${suspension.suspendedUntil.toISOString()}` : ""}. You cannot go online or accept orders during this penalty.`,
                 });
             }
 
@@ -458,9 +457,9 @@ export const updateRiderStatus = async (req, res, next) => {
             return res.status(200).json({ success: true, data: response.data });
         }
 
-        // âœ… FIX: Was calling getSingleRiderForVendor(riderId, req.rider?.vendorId || "dummy")
+        // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ FIX: Was calling getSingleRiderForVendor(riderId, req.rider?.vendorId || "dummy")
         // which queries { _id: riderId, vendorId: "dummy" } for admin-managed riders
-        // â†’ always throws "Rider not found" BEFORE the status update happens.
+        // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ always throws "Rider not found" BEFORE the status update happens.
         // Now we fetch directly by ID, which works for all rider types.
         const oldRider = await Rider.findById(riderId).populate("currentOrderId");
         if (!oldRider) {
@@ -509,12 +508,12 @@ export const updateRiderStatus = async (req, res, next) => {
         }
         const rider = await riderService.updateRiderStatus(riderId, status, reason);
         
-        // ðŸš€ NEW: Instant catch-up for newly available riders
+        // ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã‚Â¡ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ NEW: Instant catch-up for newly available riders
         if (status === "available") {
             const { catchupRiderWithPendingOrders } = await import("../services/riderAssignment.service.js");
             // Run in background to not block the response
             catchupRiderWithPendingOrders(riderId).catch(err => 
-                console.error(`âŒ [Catch-up] Error for rider ${riderId}:`, err.message)
+                console.error(`ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ [Catch-up] Error for rider ${riderId}:`, err.message)
             );
         }
 
@@ -585,10 +584,10 @@ export const updateRiderStatus = async (req, res, next) => {
                 }
 
                 if (!acceptedOrderUpdate) {
-                    // âœ… IDEMPOTENCY CHECK: If the rider is already the owner, treat as success
+                    // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ IDEMPOTENCY CHECK: If the rider is already the owner, treat as success
                     const alreadyOwned = (masterOrder.riderId?.toString() === riderId) || (vendorOrder && vendorOrder.riderId?.toString() === riderId);
                     if (alreadyOwned) {
-                        console.log(`â™»ï¸ [updateRiderStatus] Rider ${riderId} already owns Order ${orderId}. Treating as success.`);
+                        console.log(`ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢Ãƒâ€šÃ‚Â»ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â [updateRiderStatus] Rider ${riderId} already owns Order ${orderId}. Treating as success.`);
                     } else {
                         await Rider.findByIdAndUpdate(riderId, {
                             $set: { status: "available", assignmentExpiresAt: null },
@@ -625,7 +624,7 @@ export const updateRiderStatus = async (req, res, next) => {
                     { sort: { createdAt: -1 } }
                 );
 
-                // â”€â”€ Queue 1-hour delivery watchdog (MongoDB Path) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ Queue 1-hour delivery watchdog (MongoDB Path) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
                 try {
                     const { deliveryWatchdogQueue } = await import("../config/queue.js");
                     const { DELIVERY_TIMEOUT_MS } = await import("../config/payouts.js");
@@ -646,9 +645,9 @@ export const updateRiderStatus = async (req, res, next) => {
                             removeOnFail:     false,
                         }
                     );
-                    logger.info({ orderId: actualOrderId, riderId }, "â±ï¸ Delivery watchdog queued (1 hour)");
+                    logger.info({ orderId: actualOrderId, riderId }, "ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€šÃ‚Â±ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Delivery watchdog queued (1 hour)");
                 } catch (wErr) {
-                    console.error("âš ï¸ Watchdog queue failed (non-fatal):", wErr.message);
+                    console.error("ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Watchdog queue failed (non-fatal):", wErr.message);
                 }
 
                 const losingAssignmentsQuery = vendorOrder
@@ -667,7 +666,7 @@ export const updateRiderStatus = async (req, res, next) => {
                         { $set: { status: "available", assignmentExpiresAt: null }, $unset: { currentOrderId: "" } }
                     );
 
-                    // âœ… SYNC: Notify all other riders to close their broadcast modals immediately
+                    // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ SYNC: Notify all other riders to close their broadcast modals immediately
                     losingRiderIds.forEach(id => {
                         const room = SOCKET_ROOMS.rider(id);
                         if (io) {
@@ -699,7 +698,7 @@ export const updateRiderStatus = async (req, res, next) => {
                     );
                 }
 
-                // Notify admin â€” critical for platform-managed orders where admin
+                // Notify admin ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â critical for platform-managed orders where admin
                 // assigned the rider and needs confirmation the delivery is underway
                 try {
                     const { sendNotification } = await import("../services/notification.service.js");
@@ -710,7 +709,7 @@ export const updateRiderStatus = async (req, res, next) => {
                         message: `Rider ${rider.name} accepted delivery assignment for Order #${finalOrderObj?.orderId || orderId}. Order is now in transit.`
                     }, 'admin');
                 } catch (notifErr) {
-                    console.warn('âš ï¸ Admin notification failed for rider accept:', notifErr.message);
+                    console.warn('ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Admin notification failed for rider accept:', notifErr.message);
                 }
 
             } else if (status === "available") {
@@ -719,7 +718,7 @@ export const updateRiderStatus = async (req, res, next) => {
                 const actionMessage = isTimeout
                     ? `Rider ${rider.name} did not respond before the assignment timer expired. Manual reassignment required.`
                     : `Rider ${rider.name} rejected the assignment. Please assign another rider.`;
-                // â”€â”€ RIDER REJECTED â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+                // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ RIDER REJECTED ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚ÂÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬
                 const OrderModel = (await import("../model/order/Order.js")).default;
                 const VendorOrder = (await import("../model/vendor/VendorOrder.js")).default;
                 
@@ -736,7 +735,7 @@ export const updateRiderStatus = async (req, res, next) => {
                 }
 
                 if (!masterOrder) {
-                    console.warn(`âš ï¸ Reject attempted for non-existent order ${orderId}`);
+                    console.warn(`ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Reject attempted for non-existent order ${orderId}`);
                     return res.status(200).json({ success: true, data: rider.getPublicProfile() });
                 }
 
@@ -823,7 +822,7 @@ export const updateRiderStatus = async (req, res, next) => {
                         );
                     }
 
-                    // Notify admin â€” urgent for platform-managed orders, admin must
+                    // Notify admin ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â urgent for platform-managed orders, admin must
                     // reassign a rider manually. rider_assignment_needed triggers the
                     // high-priority alert config in notification.service.js.
                     try {
@@ -844,7 +843,7 @@ export const updateRiderStatus = async (req, res, next) => {
                                 : `Rider ${rider.name} rejected Order #${order.orderId}. Manual reassignment required.`
                         }, 'admin');
                     } catch (notifErr) {
-                        console.warn('âš ï¸ Admin notification failed for rider rejection:', notifErr.message);
+                        console.warn('ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Admin notification failed for rider rejection:', notifErr.message);
                     }
                 }
             }
@@ -861,7 +860,7 @@ export const updateRiderStatus = async (req, res, next) => {
                     })
                 );
             } catch (socketErr) {
-                console.warn('âš ï¸ Socket emit failed:', socketErr.message);
+                console.warn('ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Socket emit failed:', socketErr.message);
             }
         }
 
@@ -884,7 +883,7 @@ export const markPickedUp = async (req, res, next) => {
             ? await riderSelfRepository.markPickedUp(orderId, riderId)
             : await riderService.markPickedUp(orderId, riderId);
 
-        // Resolve vendorId from order items â€” handles admin-managed riders
+        // Resolve vendorId from order items ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â handles admin-managed riders
         // where req.rider.vendorId is null
         const pickupVendorId = (order.items?.[0]?.restaurantId || order.vendorId)?.toString() || null;
 
@@ -903,7 +902,7 @@ export const markPickedUp = async (req, res, next) => {
                 })
             );
         } catch (socketErr) {
-            console.warn('âš ï¸ Socket emit failed for customer pickup notification:', socketErr.message);
+            console.warn('ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Socket emit failed for customer pickup notification:', socketErr.message);
         }
 
         // Emit real-time status update to vendor dashboard
@@ -923,7 +922,7 @@ export const markPickedUp = async (req, res, next) => {
                 );
             }
         } catch (socketErr) {
-            console.warn('âš ï¸ Socket emit failed for vendor pickup notification:', socketErr.message);
+            console.warn('ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Socket emit failed for vendor pickup notification:', socketErr.message);
         }
 
         // Notify customer, vendor (push/in-app), and admin
@@ -949,16 +948,16 @@ export const markPickedUp = async (req, res, next) => {
                 });
             }
 
-            // 3. Admin notification â€” platform visibility on delivery progress
+            // 3. Admin notification ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â platform visibility on delivery progress
             await sendNotification(null, 'admin_order_ready', {
                 orderId: order.orderId || order._id,
                 orderDatabaseId: order._id,
                 restaurantName: pickupVendorId || 'the store',
-                message: `Rider ${req.rider.name} picked up Order #${order.orderId} â€” now out for delivery.`
+                message: `Rider ${req.rider.name} picked up Order #${order.orderId} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â now out for delivery.`
             }, 'admin');
 
         } catch (notifErr) {
-            console.warn('âš ï¸ Push/Notification service failed for pick-up:', notifErr.message);
+            console.warn('ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Push/Notification service failed for pick-up:', notifErr.message);
         }
 
         res.status(200).json({ success: true, message: "Order picked up", data: order });
@@ -1011,13 +1010,13 @@ export const requestDeliveryOTP = async (req, res, next) => {
             });
         }
 
-        // Resolve customer phone â€” delivery address phone takes priority
+        // Resolve customer phone ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â delivery address phone takes priority
         const customerPhone = order.deliveryAddress?.phone || order.phone;
 
         if (!customerPhone && !order.userId?.email) {
             return res.status(400).json({
                 success: false,
-                message: 'Customer has no phone or email on file â€” cannot send OTP'
+                message: 'Customer has no phone or email on file ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â cannot send OTP'
             });
         }
 
@@ -1070,7 +1069,7 @@ export const requestDeliveryOTP = async (req, res, next) => {
                 ? 'OTP sent to customer via SMS'
                 : result.method === 'email'
                     ? 'OTP sent to customer via Email'
-                    : 'System is in Bypass Mode â€” use code 123456',
+                    : 'System is in Bypass Mode ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â use code 123456',
             method: result.method,
         });
 
@@ -1116,7 +1115,7 @@ export const confirmDelivery = async (req, res, next) => {
             });
         }
 
-        // OTP verified â€” proceed with delivery confirmation
+        // OTP verified ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â proceed with delivery confirmation
         // markDelivered now returns a structured result, not raw order
         const { order, payoutCredited, isVendorManagedDelivery, payoutBlockedReason, escrowReleaseFailures = [] } = usePostgresRiderAssignmentWrites()
             ? await riderSelfRepository.markDelivered(actualOrderId, riderId)
@@ -1136,16 +1135,16 @@ export const confirmDelivery = async (req, res, next) => {
                 })
             );
         } catch (socketErr) {
-            console.warn('âš ï¸ Socket emit failed for confirmDelivery:', socketErr.message);
+            console.warn('ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Socket emit failed for confirmDelivery:', socketErr.message);
         }
 
-        // âœ… Multi-party Notification Cascade (User, Vendor, Admin, Rider)
+        // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Multi-party Notification Cascade (User, Vendor, Admin, Rider)
         try {
             const {
                 sendOrderNotification,
                 sendVendorNotification,
                 sendNotification,
-                sendRiderNotification,          // â† was missing, caused ReferenceError on every delivery
+                sendRiderNotification,          // ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Ãƒâ€šÃ‚Â was missing, caused ReferenceError on every delivery
             } = await import('../services/notification.service.js');
 
             // 1. Notify customer
@@ -1174,7 +1173,7 @@ export const confirmDelivery = async (req, res, next) => {
 
                 // Direct socket room emit for real-time vendor dashboard update.
                 // sendVendorNotification handles push and DB but does not emit
-                // to the vendor socket room â€” without this, the vendor dashboard
+                // to the vendor socket room ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â without this, the vendor dashboard
                 // stays on out_for_delivery until they manually refresh.
                 try {
                     const io = getIO();
@@ -1189,7 +1188,7 @@ export const confirmDelivery = async (req, res, next) => {
                         })
                     );
                 } catch (socketErr) {
-                    console.warn('âš ï¸ Socket emit failed for vendor delivery notification:', socketErr.message);
+                    console.warn('ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Socket emit failed for vendor delivery notification:', socketErr.message);
                 }
             }
 
@@ -1218,9 +1217,9 @@ export const confirmDelivery = async (req, res, next) => {
                 }, 'admin');
             }
 
-            // 4. Notify rider â€” only if payout was platform-managed AND actually credited.
-            // Vendor-managed riders are paid cash by the vendor â€” no wallet credit occurs.
-            // If admin wallet was insufficient, payout was staged for manual review â€” do not
+            // 4. Notify rider ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â only if payout was platform-managed AND actually credited.
+            // Vendor-managed riders are paid cash by the vendor ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â no wallet credit occurs.
+            // If admin wallet was insufficient, payout was staged for manual review ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â do not
             // tell the rider their wallet was credited when it wasn't.
             if (!isVendorManagedDelivery) {
                 if (payoutCredited) {
@@ -1229,8 +1228,8 @@ export const confirmDelivery = async (req, res, next) => {
                         payout: 600
                     });
                 } else {
-                    // Payout was blocked (admin wallet underfunded) â€” honest notification
-                    console.warn(`âš ï¸ Rider payout not credited for Order ${order.orderId} â€” sending pending notification`);
+                    // Payout was blocked (admin wallet underfunded) ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â honest notification
+                    console.warn(`ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Rider payout not credited for Order ${order.orderId} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â sending pending notification`);
                     await sendRiderNotification(riderId, order._id, 'order_assigned', {
                         orderId: order.orderId || order._id,
                         restaurantName: 'the restaurant',
@@ -1238,11 +1237,11 @@ export const confirmDelivery = async (req, res, next) => {
                     });
                 }
             }
-            // If isVendorManagedDelivery â€” no payout notification. Rider was paid cash.
+            // If isVendorManagedDelivery ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â no payout notification. Rider was paid cash.
 
         } catch (notifErr) {
-            // Non-fatal â€” delivery already confirmed
-            console.warn('âš ï¸ Notification cascade failed after delivery:', notifErr.message);
+            // Non-fatal ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â delivery already confirmed
+            console.warn('ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Notification cascade failed after delivery:', notifErr.message);
         }
 
         return res.status(200).json({
@@ -1331,10 +1330,34 @@ export const adminForceRiderAvailable = async (req, res, next) => {
         next(error);
     }
 };
+export const adminSetRiderSuspension = async (req, res, next) => {
+    try {
+        const { riderId } = req.params;
+        const { suspended, reason = "" } = req.body;
+        if (typeof suspended !== "boolean") {
+            return res.status(400).json({ success: false, message: "A boolean suspended value is required" });
+        }
+
+        const rider = await riderService.adminSetRiderSuspension(riderId, { suspended, reason }, req.admin._id);
+        if (suspended && rider.email) {
+            sendRiderSuspensionEmail(rider, reason).catch((error) => {
+                console.error("Rider suspension email failed (non-blocking):", error.message);
+            });
+        }
+        res.status(200).json({ success: true, data: rider });
+    } catch (error) {
+        next(error);
+    }
+};
 export const adminApproveRider = async (req, res, next) => {
     try {
         const { riderId } = req.params;
         const rider = await riderService.adminApproveRider(riderId, req.admin?._id);
+        if (rider.email) {
+            sendRiderApprovalEmail(rider).catch((error) => {
+                console.error("Rider approval email failed (non-blocking):", error.message);
+            });
+        }
         res.status(200).json({
             success: true,
             message: "Rider approved and can now access the rider app",
@@ -1748,7 +1771,7 @@ export const adminRejectRiderAssignment = async (req, res, next) => {
 
         const { catchupRiderWithPendingOrders } = await import("../services/riderAssignment.service.js");
         catchupRiderWithPendingOrders(riderId).catch(err => 
-            console.error(`âŒ [Catch-up] Error for rider ${riderId}:`, err.message)
+            console.error(`ÃƒÆ’Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒâ€¦Ã¢â‚¬â„¢ [Catch-up] Error for rider ${riderId}:`, err.message)
         );
 
         res.status(200).json({ success: true, message: "Offer rejected successfully. Rider is now available.", data: rider.getPublicProfile() });
@@ -1785,7 +1808,7 @@ export const getRiderOrders = async (req, res, next) => {
     try {
         const { riderId } = req.params;
 
-        // Auth guard â€” rider can only fetch their own orders
+        // Auth guard ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â rider can only fetch their own orders
         if (req.rider._id.toString() !== riderId) {
             return res.status(403).json({ success: false, message: "Unauthorized" });
         }

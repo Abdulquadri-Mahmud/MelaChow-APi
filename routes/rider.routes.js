@@ -28,9 +28,9 @@ router.post("/riders/register", riderController.registerRider);
 // Vendor assigns a rider to an order (DISABLED - Admins now handle assignments or automated)
 // router.post("/vendors/:vendorId/orders/:orderId/assign-rider", authVendor, riderController.assignRider);
 
-// Ã¢Å“â€¦ FIX: This route was called by the dashboard (getActiveRiderOrder) but NEVER existed.
-// Without it, fetchActiveOrder() always got a 404 Ã¢â€ â€™ activeOrder was always null
-// Ã¢â€ â€™ rider could never see their assigned delivery on the dashboard.
+// ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ FIX: This route was called by the dashboard (getActiveRiderOrder) but NEVER existed.
+// Without it, fetchActiveOrder() always got a 404 ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ activeOrder was always null
+// ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ rider could never see their assigned delivery on the dashboard.
 router.get("/riders/:riderId/active-order", requireRiderAuth, riderController.getActiveOrder);
 router.get("/riders/:riderId/pending-offers", requireRiderAuth, riderController.getPendingOffers);
 
@@ -45,7 +45,7 @@ router.get("/riders/:riderId/wallet", requireRiderAuth, riderController.getRider
 router.post("/riders/:riderId/orders/:orderId/terminate", requireRiderAuth, riderController.riderTerminateOrder);
 router.post("/riders/:riderId/orders/:orderId/undeliverable", requireRiderAuth, riderController.riderReportUndeliverable);
 
-// Ã¢â€â‚¬Ã¢â€â‚¬ Rider payout routes Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+// ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ Rider payout routes ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
 // Step 1: Resolve account name before saving (lets rider confirm before committing)
 router.get("/riders/:riderId/payout/resolve-account", requireRiderAuth, resolveAccountName);
 // Step 2a: Save bank account and create Paystack recipient
@@ -57,7 +57,7 @@ router.post("/riders/:riderId/payout/withdraw", requireRiderAuth, initiateRiderW
 // History: Fetch past withdrawals
 router.get("/riders/:riderId/payout/history", requireRiderAuth, getRiderWithdrawalHistory);
 // Bank list: rider-scoped, uses same stateless Paystack controller as vendor
-// MUST NOT use /wallet/banks Ã¢â‚¬â€ that route is vendorAuth-protected and will 401 riders
+// MUST NOT use /wallet/banks ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â that route is vendorAuth-protected and will 401 riders
 router.get("/riders/banks", requireRiderAuth, getBankList);
 router.get("/riders/:riderId/orders", requireRiderAuth, riderController.getRiderOrders);
 router.get("/riders/:riderId/orders/:orderId", requireRiderAuth, riderController.getRiderOrderDetails);
@@ -69,12 +69,13 @@ router.patch("/admin/riders/:riderId", adminAuth, riderController.adminUpdateRid
 // Emergency dispatch override. Intentionally separate from normal updates so only
 // super-admins can make an on-delivery rider available.
 router.patch("/admin/riders/:riderId/force-available", superAdminOnly, riderController.adminForceRiderAvailable);
+router.patch("/admin/riders/:riderId/suspension", superAdminOnly, riderController.adminSetRiderSuspension);
 router.patch("/admin/riders/:riderId/approve", adminAuth, riderController.adminApproveRider);
 router.delete("/admin/riders/:riderId", adminAuth, riderController.adminDeactivateRider);
 router.patch("/admin/riders/:riderId/reject-offer", adminAuth, riderController.adminRejectRiderAssignment);
 router.patch("/admin/riders/:riderId/unassign-order", adminAuth, riderController.adminUnassignRiderFromOrder);
 router.get("/admin/riders/:riderId/history", adminAuth, riderController.adminGetRiderHistory);
-router.post("/admin/riders", adminAuth, riderController.createRider); // Ã¢Å“â€¦ NEW: Create platform-wide rider
+router.post("/admin/riders", adminAuth, riderController.createRider); // ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ NEW: Create platform-wide rider
 router.post("/admin/vendors/:vendorId/riders", adminAuth, riderController.createRider); // Tie to specific vendor
 router.get("/admin/rider-assignments", adminAuth, riderController.adminGetAssignmentHistory);
 router.get("/admin/platform-vehicles", adminAuth, riderController.adminGetPlatformVehicles);
