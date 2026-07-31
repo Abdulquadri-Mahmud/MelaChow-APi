@@ -90,9 +90,9 @@ export const createRider = async (riderData, vendorId = null) => {
             });
             finalPayoutDetails.recipientCode = recipientCode;
             finalPayoutDetails.payoutEnabled = true;
-            console.log(`âœ… Paystack recipient created for new rider: ${recipientCode}`);
+            console.log(`ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Paystack recipient created for new rider: ${recipientCode}`);
         } catch (err) {
-            console.error("âš ï¸ Failed to create Paystack recipient during rider creation:", err.message);
+            console.error("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Failed to create Paystack recipient during rider creation:", err.message);
         }
     }
 
@@ -128,10 +128,10 @@ export const createRider = async (riderData, vendorId = null) => {
                 balance: 0,
                 transactions: []
             });
-            console.log(`ðŸ’° Wallet created for rider: ${rider._id}`);
+            console.log(`ÃƒÂ°Ã…Â¸Ã¢â‚¬â„¢Ã‚Â° Wallet created for rider: ${rider._id}`);
         }
     } catch (walletError) {
-        console.error(`âš ï¸ Failed to create wallet for rider ${rider._id}:`, walletError.message);
+        console.error(`ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Failed to create wallet for rider ${rider._id}:`, walletError.message);
     }
 
     if (vendorId) {
@@ -174,7 +174,7 @@ export const getAvailableRiders = async (vendorId) => {
 };
 
 /**
- * âœ… FIX: Get the rider's currently active/assigned order.
+ * ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ FIX: Get the rider's currently active/assigned order.
  * The frontend calls GET /riders/:riderId/active-order.
  */
 export const getActiveOrder = async (riderId) => {
@@ -255,7 +255,7 @@ export const getActiveOrder = async (riderId) => {
 
         return orderObj;
     } catch (error) {
-        console.error("ðŸ’¥ Error in getActiveOrder service:", error.message);
+        console.error("ÃƒÂ°Ã…Â¸Ã¢â‚¬â„¢Ã‚Â¥ Error in getActiveOrder service:", error.message);
         return null; 
     }
 };
@@ -351,7 +351,7 @@ export const getPendingOffers = async (riderId) => {
 
         return offers;
     } catch (error) {
-        console.error("ðŸ’¥ Error in getPendingOffers service:", error.message);
+        console.error("ÃƒÂ°Ã…Â¸Ã¢â‚¬â„¢Ã‚Â¥ Error in getPendingOffers service:", error.message);
         return [];
     }
 };
@@ -406,7 +406,7 @@ export const getRiderOrderDetails = async (riderId, orderId) => {
 
         return orderObj;
     } catch (error) {
-        console.error(`ðŸ’¥ Error in getRiderOrderDetails service for Order ${orderId}:`, error.message);
+        console.error(`ÃƒÂ°Ã…Â¸Ã¢â‚¬â„¢Ã‚Â¥ Error in getRiderOrderDetails service for Order ${orderId}:`, error.message);
         throw error;
     }
 };
@@ -447,7 +447,7 @@ export const assignRiderToOrder = async (orderId, riderId, vendorId) => {
 
         await session.commitTransaction();
         
-        // ðŸ”” Send Rider Notification
+        // ÃƒÂ°Ã…Â¸Ã¢â‚¬ÂÃ¢â‚¬Â Send Rider Notification
         try {
             const { sendRiderNotification } = await import('../services/notification.service.js');
             const config = await getPlatformConfig();
@@ -456,7 +456,7 @@ export const assignRiderToOrder = async (orderId, riderId, vendorId) => {
                 orderDatabaseId: order._id,
                 payout: config.riderFixedPayout ?? RIDER_FIXED_PAYOUT,
             });
-        } catch (e) { console.error('âš ï¸ Notification error (rider):', e.message); }
+        } catch (e) { console.error('ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Notification error (rider):', e.message); }
 
         return { order, rider };
     } catch (error) {
@@ -585,12 +585,12 @@ export const markDelivered = async (orderId, riderId) => {
         const isAdminRider = rider.managedBy === 'admin';
 
         // Vendor-managed delivery is retired. Any non-admin rider reaching
-        // this point is a data integrity error â€” surface it immediately
-        // rather than silently paying â‚¦0.
+        // this point is a data integrity error ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â surface it immediately
+        // rather than silently paying ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¦0.
         if (!isAdminRider) {
             logger.error(
                 { riderId, orderId: order._id, managedBy: rider.managedBy },
-                'âŒ Non-admin rider hit delivery completion â€” vendor-managed flow is retired'
+                'ÃƒÂ¢Ã‚ÂÃ…â€™ Non-admin rider hit delivery completion ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â vendor-managed flow is retired'
             );
             throw new Error('Delivery flow error: vendor-managed riders are not supported. Contact admin.');
         }
@@ -612,7 +612,7 @@ export const markDelivered = async (orderId, riderId) => {
         order.riderEarnings = riderEarningsToRecord;
         await order.save({ session });
 
-        // â”€â”€ LOOPHOLE 3 FIX: Wallet writes inside the session â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ LOOPHOLE 3 FIX: Wallet writes inside the session ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
         // Previously these were OUTSIDE the session (post-commit), meaning a server
         // crash could mark the order as delivered but never credit the rider wallet.
         // Now the wallet debits/credits are atomic with the order status update.
@@ -624,12 +624,12 @@ export const markDelivered = async (orderId, riderId) => {
                 // The delivery is real; flag for manual reconciliation.
                 logger.error(
                     { orderId: order.orderId, riderPayout },
-                    'âš ï¸ Admin wallet not found â€” rider payout skipped, manual reconciliation required'
+                    'ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Admin wallet not found ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â rider payout skipped, manual reconciliation required'
                 );
             } else if (adminWallet.balance < riderPayout) {
                 logger.error(
                     { orderId: order.orderId, riderPayout, adminBalance: adminWallet.balance },
-                    'âš ï¸ Admin wallet insufficient for rider payout â€” delivery confirmed, payout deferred'
+                    'ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Admin wallet insufficient for rider payout ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â delivery confirmed, payout deferred'
                 );
                 try {
                     const { sendNotification } = await import('./notification.service.js');
@@ -640,7 +640,7 @@ export const markDelivered = async (orderId, riderId) => {
                         orderDatabaseId: order._id
                     }, 'admin');
                 } catch (notifErr) {
-                    logger.error({ error: notifErr.message }, 'âŒ Admin insufficient-funds notification failed');
+                    logger.error({ error: notifErr.message }, 'ÃƒÂ¢Ã‚ÂÃ…â€™ Admin insufficient-funds notification failed');
                 }
             } else {
                 // Debit admin wallet
@@ -664,7 +664,7 @@ export const markDelivered = async (orderId, riderId) => {
                 }
                 await adminWallet.save({ session });
 
-                // Credit rider wallet (upsert â€” creates wallet on first delivery)
+                // Credit rider wallet (upsert ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â creates wallet on first delivery)
                 await Wallet.findOneAndUpdate(
                     { ownerId: riderId, ownerModel: "Rider" },
                     {
@@ -684,7 +684,7 @@ export const markDelivered = async (orderId, riderId) => {
                 );
 
                 payoutActuallyCredited = true;
-                logger.info({ orderId: order.orderId, riderPayout }, 'âœ… Rider payout credited inside session');
+                logger.info({ orderId: order.orderId, riderPayout }, 'ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ Rider payout credited inside session');
             }
         }
 
@@ -748,8 +748,8 @@ export const markDelivered = async (orderId, riderId) => {
         session.endSession();
     }
 
-    // â”€â”€ LOOPHOLE 3 FIX: Escrow release via BullMQ queue (retry-safe) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // Previously: bare `await releaseEscrowToVendor(vo._id)` calls outside session â€”
+    // ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ LOOPHOLE 3 FIX: Escrow release via BullMQ queue (retry-safe) ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬ÃƒÂ¢Ã¢â‚¬ÂÃ¢â€šÂ¬
+    // Previously: bare `await releaseEscrowToVendor(vo._id)` calls outside session ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
     // a server crash here would leave vendor escrow unreleased forever.
     // Now: enqueued to escrowReleaseQueue (attempts: 5, exponential backoff)
     // so the worker retries automatically if the process dies mid-release.
@@ -765,14 +765,14 @@ export const markDelivered = async (orderId, riderId) => {
                     }
                 );
             } catch (queueErr) {
-                // Redis down â€” fall back to direct release as last resort
-                logger.error({ vendorOrderId: vo._id, error: queueErr.message }, 'âŒ Escrow queue add failed â€” attempting direct release');
+                // Redis down ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â fall back to direct release as last resort
+                logger.error({ vendorOrderId: vo._id, error: queueErr.message }, 'ÃƒÂ¢Ã‚ÂÃ…â€™ Escrow queue add failed ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â attempting direct release');
                 try {
                     await releaseEscrowToVendor(vo._id);
                 } catch (escrowErr) {
                     logger.error(
                         { orderId: completedOrder._id, vendorOrderId: vo._id, error: escrowErr.message },
-                        'âŒ Escrow direct release also failed â€” manual reconciliation required'
+                        'ÃƒÂ¢Ã‚ÂÃ…â€™ Escrow direct release also failed ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â manual reconciliation required'
                     );
                 }
             }
@@ -801,9 +801,9 @@ export const updateRiderStatus = async (riderId, status, reason = null) => {
     }
 
     if (["available", "on_delivery"].includes(status) && rider.isSuspended) {
-        const suspensionIsActive = rider.suspendedUntil && rider.suspendedUntil.getTime() > Date.now();
+        const suspensionIsActive = !rider.suspendedUntil || rider.suspendedUntil.getTime() > Date.now();
         if (suspensionIsActive) {
-            const error = new Error(`Your account is suspended until ${rider.suspendedUntil.toISOString()}. You cannot go online or accept orders during this penalty.`);
+            const error = new Error(`Your account is suspended${rider.suspendedUntil ? ` until ${rider.suspendedUntil.toISOString()}` : ""}. You cannot go online or accept orders during this penalty.`);
             error.statusCode = 403;
             error.code = "RIDER_SUSPENDED";
             throw error;
@@ -818,12 +818,12 @@ export const updateRiderStatus = async (riderId, status, reason = null) => {
     }
 
     if (status === "on_delivery" && rider.status !== "pending_assignment" && rider.status !== "available") {
-        // âœ… IDEMPOTENCY: If already on delivery, just return success
+        // ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ IDEMPOTENCY: If already on delivery, just return success
         if (rider.status === "on_delivery") return rider;
         throw new Error("You can only transition to on_delivery from pending_assignment or available");
     }
 
-    // âœ… IMPROVED: If rider is rejecting a broadcast offer (status === "available")
+    // ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ IMPROVED: If rider is rejecting a broadcast offer (status === "available")
     if (status === "available") {
         if (rider.status === "pending_assignment" || rider.status === "on_delivery") {
             // Find the active assignment they are rejecting
@@ -838,7 +838,7 @@ export const updateRiderStatus = async (riderId, status, reason = null) => {
                     { _id: activeAssignment._id },
                     { $set: { status: "rejected", respondedAt: new Date(), reason: reason || "rider_rejected_broadcast" } }
                 );
-                console.log(`âŒ Rider ${riderId} rejected broadcast for Order ${activeAssignment.orderId}`);
+                console.log(`ÃƒÂ¢Ã‚ÂÃ…â€™ Rider ${riderId} rejected broadcast for Order ${activeAssignment.orderId}`);
             }
         }
         
@@ -1035,7 +1035,7 @@ export const adminUpdateRider = async (riderId, updateData) => {
                 newPayout.recipientCode = recipientCode;
                 newPayout.payoutEnabled = true;
             } catch (err) {
-                console.error("âš ï¸ Paystack recipient error:", err.message);
+                console.error("ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â Paystack recipient error:", err.message);
             }
         }
         rider.payoutDetails = { ...currentPayout, ...newPayout };
@@ -1071,6 +1071,25 @@ export const adminForceRiderAvailable = async (riderId, adminId) => {
             to: "available",
             overriddenBy: adminId?.toString() || null,
             overriddenAt: new Date().toISOString(),
+        },
+    };
+    await rider.save();
+    return rider.getPublicProfile();
+};
+export const adminSetRiderSuspension = async (riderId, { suspended, reason = "" }, adminId) => {
+    const rider = await Rider.findById(riderId);
+    if (!rider) throw new Error("Rider not found");
+
+    rider.isSuspended = Boolean(suspended);
+    rider.suspendedUntil = null; // Super-admin suspensions remain active until explicitly lifted.
+    if (suspended) rider.status = "offline";
+    rider.metadata = {
+        ...(rider.metadata || {}),
+        lastSuspensionAction: {
+            suspended: Boolean(suspended),
+            reason: reason.trim(),
+            changedBy: adminId?.toString() || null,
+            changedAt: new Date().toISOString(),
         },
     };
     await rider.save();
@@ -1134,7 +1153,7 @@ export const getRiderHistorySummary = async (riderId, filters = {}) => {
     if (!rider) throw new Error('Rider not found');
 
     const config = await getPlatformConfig();
-    // payoutHour must always come from platform config â€” never from caller input.
+    // payoutHour must always come from platform config ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never from caller input.
     // A rider passing ?payoutHour=0 must not be able to shift financial window calculations.
     const payoutHour = Number(config.riderPayoutHour ?? 10);
     const now = new Date();
@@ -1278,11 +1297,11 @@ export const terminateOrder = async (orderId, riderId, note = "") => {
                         status:         "offline",
                     },
                 }, { session });
-                logger.warn({ riderId }, "ðŸš« Rider suspended after post-pickup termination strike");
+                logger.warn({ riderId }, "ÃƒÂ°Ã…Â¸Ã…Â¡Ã‚Â« Rider suspended after post-pickup termination strike");
             }
         }
 
-        // 7. Cancel the watchdog job (non-fatal â€” it will self-resolve if it fires)
+        // 7. Cancel the watchdog job (non-fatal ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it will self-resolve if it fires)
         try {
             const job = await deliveryWatchdogQueue.getJob(`watchdog:${vendorOrder?._id || orderId}`);
             if (job) await job.remove();
@@ -1310,7 +1329,7 @@ export const terminateOrder = async (orderId, riderId, note = "") => {
         const vendorOrderId = vendorOrder?._id || orderId;
         await offerOrderToAvailableRiders({ vendorOrderId, assignedBy: "system:rider_termination" });
     } catch (e) {
-        logger.error({ orderId: order._id, error: e.message }, "âŒ Re-broadcast after termination failed");
+        logger.error({ orderId: order._id, error: e.message }, "ÃƒÂ¢Ã‚ÂÃ…â€™ Re-broadcast after termination failed");
     }
 
     return {
@@ -1359,7 +1378,7 @@ export const reportUndeliverable = async (orderId, riderId, reason = "") => {
         { sort: { terminatedAt: -1 } }
     );
 
-    // Notify vendor â€” can they remake?
+    // Notify vendor ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â can they remake?
     // Vendor has 15 minutes to respond via their app.
     // If no response, escalate to admin automatically.
     try {
@@ -1389,7 +1408,7 @@ export const reportUndeliverable = async (orderId, riderId, reason = "") => {
             }
         );
     } catch (e) {
-        logger.error({ error: e.message }, "âŒ Dispute escalation queue failed");
+        logger.error({ error: e.message }, "ÃƒÂ¢Ã‚ÂÃ…â€™ Dispute escalation queue failed");
     }
 
     return { success: true, message: "Order flagged as disputed. Vendor has been notified." };
