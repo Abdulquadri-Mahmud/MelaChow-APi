@@ -6,7 +6,7 @@ import User from '../model/user.model.js';
 import logger from '../config/logger.js';
 import { wrapLayout } from './emailTemplate.service.js';
 
-// MongoDB OTP fallback collection — used when Redis is unavailable.
+// MongoDB OTP fallback collection Ã¢â‚¬â€ used when Redis is unavailable.
 // TTL index on expiresAt auto-deletes documents after 10 minutes.
 // Defined inline to avoid a separate model file for a simple structure.
 const otpFallbackSchema = new mongoose.Schema({
@@ -18,6 +18,7 @@ const OtpFallback = mongoose.models.OtpFallback ||
     mongoose.model('OtpFallback', otpFallbackSchema);
 
 const OTP_TTL_SECONDS = 600; // 10 minutes
+const OTP_RESEND_COOLDOWN_SECONDS = 60;
 const OTP_REDIS_PREFIX = 'delivery_otp:';
 
 /**
@@ -27,66 +28,70 @@ const OTP_REDIS_PREFIX = 'delivery_otp:';
  */
 const storeOtpPayload = async (redisKey, payload) => {
     const serialized = JSON.stringify(payload);
-    const stored = await safeRedisSet(redisKey, serialized, { EX: OTP_TTL_SECONDS });
-
-    if (!stored) {
-        // Redis unavailable — persist to MongoDB with TTL index
-        const expiresAt = new Date(Date.now() + OTP_TTL_SECONDS * 1000);
-        await OtpFallback.findOneAndUpdate(
-            { redisKey },
-            { redisKey, data: serialized, expiresAt },
-            { upsert: true, new: true }
-        );
-        logger.warn({ redisKey }, '⚠️ Redis unavailable — OTP stored in MongoDB fallback');
-    }
+    const expiresAt = new Date(Date.now() + OTP_TTL_SECONDS * 1000);
+    // MongoDB is durable; Redis is an optional cache.
+    await OtpFallback.findOneAndUpdate(
+        { redisKey },
+        { redisKey, data: serialized, expiresAt },
+        { upsert: true, new: true }
+    );
+    await safeRedisSet(redisKey, serialized, { EX: OTP_TTL_SECONDS });
 };
 
-/**
- * Retrieve OTP payload from Redis, falling back to MongoDB.
- */
 const retrieveOtpPayload = async (redisKey) => {
-    const fromRedis = await safeRedisGet(redisKey);
-    if (fromRedis) return fromRedis;
-
-    // Redis miss — check MongoDB fallback
     const fallback = await OtpFallback.findOne({ redisKey });
-    if (!fallback) return null;
-
-    // Check manual expiry in case TTL index hasn't fired yet
-    if (fallback.expiresAt < new Date()) {
-        await OtpFallback.deleteOne({ redisKey });
-        return null;
+    if (fallback) {
+        if (fallback.expiresAt < new Date()) {
+            await OtpFallback.deleteOne({ _id: fallback._id });
+            return null;
+        }
+        return fallback.data;
     }
-
-    logger.info({ redisKey }, '📦 OTP retrieved from MongoDB fallback');
-    return fallback.data;
+    return safeRedisGet(redisKey);
 };
-
 /**
  * Delete OTP payload from both stores after successful verification.
  */
 const deleteOtpPayload = async (redisKey) => {
-    // Redis delete — safeRedisSet with immediate expiry is not a true delete,
+    // Redis delete Ã¢â‚¬â€ safeRedisSet with immediate expiry is not a true delete,
     // so we overwrite with a 1-second TTL to flush it as fast as possible
     await safeRedisSet(redisKey, JSON.stringify({ expired: true }), { EX: 1 });
     await OtpFallback.deleteOne({ redisKey }).catch(() => null);
 };
 
-export const sendDeliveryOTP = async (orderId, customerPhone, customerUserId) => {
+export const sendDeliveryOTP = async (orderId, customerPhone, customerUserId, { forceResend = false } = {}) => {
     const redisKey = `${OTP_REDIS_PREFIX}${orderId}`;
+    const existing = await retrieveOtpPayload(redisKey);
+    if (existing) {
+        const existingData = JSON.parse(existing);
+        const issuedAt = new Date(existingData.issuedAt || 0).getTime();
+        const retryAfterSeconds = Math.max(0, OTP_RESEND_COOLDOWN_SECONDS - Math.floor((Date.now() - issuedAt) / 1000));
+        if (!forceResend) {
+            return { success: true, method: existingData.method, reused: true, retryAfterSeconds, expiresAt: existingData.expiresAt || null };
+        }
+        if (retryAfterSeconds > 0) {
+            const error = new Error(`Please wait ${retryAfterSeconds} seconds before sending a new delivery code.`);
+            error.statusCode = 429;
+            error.code = "OTP_RESEND_COOLDOWN";
+            error.retryAfterSeconds = retryAfterSeconds;
+            throw error;
+        }
+    }
 
-    // ── Development bypass ────────────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Development bypass Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     if (process.env.BYPASS_OTP === 'true') {
         await storeOtpPayload(redisKey, {
             method: 'dev',
             pinId: null,
             otp: '123456',
+            issuedAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + OTP_TTL_SECONDS * 1000).toISOString(),
         });
-        logger.info({ orderId }, 'Dev mode: OTP bypass active — use 123456');
+        logger.info({ orderId }, 'Dev mode: OTP bypass active Ã¢â‚¬â€ use 123456');
         return { success: true, method: 'dev' };
     }
 
-    // ── Production: Email via Resend ──────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Production: Email via Resend Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     try {
         const VendorOrder = mongoose.model('VendorOrder');
         const Order = mongoose.model('Order');
@@ -104,11 +109,13 @@ export const sendDeliveryOTP = async (orderId, customerPhone, customerUserId) =>
 
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
-        // Store OTP before sending email — if email fails, OTP was never exposed
+        // Store OTP before sending email Ã¢â‚¬â€ if email fails, OTP was never exposed
         await storeOtpPayload(redisKey, {
             method: 'email',
             pinId: null,
             otp,
+            issuedAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + OTP_TTL_SECONDS * 1000).toISOString(),
         });
 
         const readableOrderId = orderDoc?.orderId || orderId;
@@ -133,13 +140,13 @@ export const sendDeliveryOTP = async (orderId, customerPhone, customerUserId) =>
             ),
         });
 
-        logger.info({ orderId, email: user.email, readableOrderId }, '✅ Delivery OTP sent via Resend email');
+        logger.info({ orderId, email: user.email, readableOrderId }, 'Ã¢Å“â€¦ Delivery OTP sent via Resend email');
         return { success: true, method: 'email' };
 
     } catch (err) {
-        // Clean up stored OTP if email failed — don't leave an undelivered code
+        // Clean up stored OTP if email failed Ã¢â‚¬â€ don't leave an undelivered code
         await deleteOtpPayload(redisKey).catch(() => null);
-        logger.error({ orderId, error: err.message }, '❌ Delivery OTP email failed');
+        logger.error({ orderId, error: err.message }, 'Ã¢ÂÅ’ Delivery OTP email failed');
         throw new Error('Failed to send delivery OTP. Please check the customer has a valid email and try again.');
     }
 };
@@ -170,29 +177,29 @@ export const verifyDeliveryOTP = async (orderId, otp) => {
 
     const { method, otp: storedOtp } = otpData;
 
-    // ── Dev bypass ────────────────────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Dev bypass Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     if (method === 'dev') {
         const verified = otp === '123456';
         if (verified) {
-            // Delete immediately — one-time use only
+            // Delete immediately Ã¢â‚¬â€ one-time use only
             await deleteOtpPayload(redisKey);
         }
         return { verified };
     }
 
-    // ── Email OTP verification ────────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Email OTP verification Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     if (method === 'email' && storedOtp) {
         const verified = otp === storedOtp;
         if (verified) {
             // Delete immediately after first successful verification.
             // Prevents the same code being accepted a second time within TTL window.
             await deleteOtpPayload(redisKey);
-            logger.info({ orderId }, '✅ Delivery OTP verified and invalidated');
+            logger.info({ orderId }, 'Ã¢Å“â€¦ Delivery OTP verified and invalidated');
         }
         return { verified };
     }
 
-    // ── Legacy SMS handler ────────────────────────────────────────────────────
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Legacy SMS handler Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     // Termii is no longer active. Any in-flight SMS OTPs from before cutover
     // will hit this branch and get a clear error directing rider to resend.
     if (method === 'sms') {
@@ -218,7 +225,7 @@ export const getActiveDeliveryOTP = async (orderId) => {
         const otpData = JSON.parse(stored);
         return otpData.otp || null;
     } catch (error) {
-        logger.error({ orderId, error: error.message }, '❌ Error retrieving active OTP');
+        logger.error({ orderId, error: error.message }, 'Ã¢ÂÅ’ Error retrieving active OTP');
         return null;
     }
 };

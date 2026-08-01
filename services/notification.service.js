@@ -70,7 +70,13 @@ const NOTIFICATION_CONFIGS = {
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
-    delivery_nearby: {
+    delivery_confirmation_code: {
+        title: 'Delivery confirmation code',
+        getBody: (data) => `Your code for order #${data.orderId} is ${data.deliveryOtp}. Share it only after receiving your order.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: true,
+        vibrate: [200, 100, 200, 100, 200]
+    },    delivery_nearby: {
         title: 'Delivery Nearby',
         getBody: (data) => `Your delivery rider is approaching with your order #${data.orderId}!`,
         icon: '/icons/icon-192x192.png',
@@ -109,14 +115,14 @@ const NOTIFICATION_CONFIGS = {
     },
     order_assigned: {
         title: 'New Job Assigned!',
-        getBody: (data) => `Head to ${data.restaurantName || 'the store'} for pickup. Earn ₦${data.payout || 600}. Order #${data.orderId}`,
+        getBody: (data) => `Head to ${data.restaurantName || 'the store'} for pickup. Earn â‚¦${data.payout || 600}. Order #${data.orderId}`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: true,
         vibrate: [200, 100, 200, 100, 200]
     },
     rider_payout_credited: {
-        title: 'Earnings Credited! 💰',
-        getBody: (data) => `Order #${data.orderId} delivered. ₦${data.payout || 600} has been added to your wallet.`,
+        title: 'Earnings Credited! ðŸ’°',
+        getBody: (data) => `Order #${data.orderId} delivered. â‚¦${data.payout || 600} has been added to your wallet.`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
@@ -168,7 +174,7 @@ const NOTIFICATION_CONFIGS = {
     },
     admin_insufficient_funds: {
         title: 'Financial Alert: Payout Blocked',
-        getBody: (data) => `CRITICAL: Admin wallet insufficient (₦${data.adminBalance}) for Order #${data.orderId} payout (₦${data.riderPayout}). Top up now!`,
+        getBody: (data) => `CRITICAL: Admin wallet insufficient (â‚¦${data.adminBalance}) for Order #${data.orderId} payout (â‚¦${data.riderPayout}). Top up now!`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: true,
         vibrate: [500, 200, 500, 200, 500]
@@ -252,7 +258,8 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
                 location: data.location,
                 cancellationReason: data.cancellationReason,
                 reason: data.reason,
-                customMessage: data.customMessage
+                customMessage: data.customMessage,
+                deliveryOtp: data.deliveryOtp
             }),
             icon: data.icon || config.icon,
             image: data.image,
@@ -608,7 +615,7 @@ export async function sendVendorNotification(restaurantId, orderId, type, data =
             vendorOwners = vendor?.owners || [];
             if (isRedisReady() && vendorOwners.length > 0) {
                 try {
-                    // Cache for 30 minutes — vendor ownership changes are infrequent
+                    // Cache for 30 minutes â€” vendor ownership changes are infrequent
                     // IMPORTANT: When a vendor's profile is updated (ownership change), 
                     // the calling controller must invalidate this cache key:
                     // await redisClient.del(`vendor:${vendorId}:owners`);
