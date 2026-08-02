@@ -83,6 +83,7 @@ const orderItemSchema = new mongoose.Schema({
 
   price: { type: Number, required: true },
   note:  { type: String, default: "" },
+  meal_group_label: { type: String, default: "", trim: true, maxlength: 40 },
 
   // ─── Dietary & category metadata ──────────────
   // Stored explicitly for filtering and analytics
