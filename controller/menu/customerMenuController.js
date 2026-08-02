@@ -283,7 +283,7 @@ export const getFullVendorMenu = async (req, res) => {
                 vendor_id:   vendor._id,
                 is_available: { $ne: false },
                 is_archived:  { $ne: true },
-            }).sort({ sort_order: 1, createdAt: -1 }).lean(),
+            }).sort({ sort_order: 1, createdAt: 1 }).lean(),
 
             VendorMenuSection.find({ 
                 vendor_id: vendor._id,
@@ -298,7 +298,7 @@ export const getFullVendorMenu = async (req, res) => {
                 // is_available is the only "hard hide" flag
                 is_available: { $ne: false },
                 category_deactivated: { $ne: true },
-            }).sort({ sort_order: 1, createdAt: -1 }).lean(),
+            }).sort({ sort_order: 1, createdAt: 1 }).lean(),
         ]);
 
         // Step 3 — Fetch all portions and categories specifically for these items/combos
