@@ -1074,6 +1074,7 @@ export const createOrderV2 = async ({
 
         for (let i = 0; i < items.length; i++) {
           const cartItem = items[i];
+          const mealGroupLabel = String(cartItem.meal_group_label || "").trim().slice(0, 40);
 
           if (!cartItem.restaurantId) {
             throw new Error(`Item ${i}: restaurantId is required`);
@@ -1135,9 +1136,11 @@ export const createOrderV2 = async ({
               quantity: Number(cartItem.quantity),
               price:    unitPrice,
               note:     cartItem.note || "",
+              meal_group_label: mealGroupLabel,
 
               metadata: {
                 type:             "combo",
+                meal_group_label: mealGroupLabel,
                 selected_options: normalizedChoices,
                 pricing: {
                   base_naira:         combo.price / 100,
@@ -1215,10 +1218,12 @@ export const createOrderV2 = async ({
               quantity: Number(cartItem.quantity),
               price:    unitPrice,
               note:     cartItem.note || "",
+              meal_group_label: mealGroupLabel,
 
               // ── metadata retained for backward compatibility ──
               metadata: {
                 type:             "item",
+                meal_group_label: mealGroupLabel,
                 portionId:        portion._id,
                 portion_label:    portion.label,
                 selected_options: normalizedChoices,
@@ -1792,6 +1797,7 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
                       selected_options: item.selected_options || [],
 
                       note: item.note || "",
+                      meal_group_label: item.meal_group_label || "",
 
                       // ── Backward compatibility ──
                       metadata: item.metadata || {},

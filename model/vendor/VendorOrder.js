@@ -78,6 +78,7 @@ const vendorOrderSchema = new mongoose.Schema(
         metadata: { type: Object, default: {} },
 
         note: { type: String, default: "" },
+        meal_group_label: { type: String, default: "", trim: true, maxlength: 40 },
       },
     ],
 
