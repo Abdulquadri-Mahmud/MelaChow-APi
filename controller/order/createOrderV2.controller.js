@@ -30,7 +30,7 @@ import { generateOrderInvoice } from "../../services/invoice.service.js";
 import { usePostgresOrderWrites, usePostgresPaymentWrites } from "../../services/postgres/compat.js";
 import { postgresOrderCreationRepository } from "../../services/postgres/orderCreation.repository.js";
 import { postgresPaymentRepository } from "../../services/postgres/payment.repository.js";
-import { reserveOptionStockForOrder, restoreOptionStockForOrder } from "../../services/optionStock.service.js";
+import { reserveOptionStockForOrder, restoreOptionStockForOrder, reservePortionStockForOrder } from "../../services/optionStock.service.js";
 
 // Max number of claims allowed from the same IP address.
 // Set to 3 to allow legitimate students sharing campus/hostel WiFi
@@ -153,6 +153,7 @@ const validatePortionAndChoices = async (menuItem, cartItem, session) => {
     _id:          cartItem.portionId,
     menu_item_id: menuItem._id,
     is_available: true,
+    is_in_stock: true,
   }).session(session).lean();
 
   if (!portion) {
@@ -1569,6 +1570,7 @@ export const createOrderV2 = async ({
             );
             order = created;
             await reserveOptionStockForOrder(order, session);
+            await reservePortionStockForOrder(order, session);
         } catch (createErr) {
             if (
                 createErr.code === 11000 &&
@@ -2038,6 +2040,7 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
         }
 
         await reserveOptionStockForOrder(order, session);
+        await reservePortionStockForOrder(order, session);
 
         // 4. Create VendorOrders and update wallets
         const vendorOrderMapping = await createVendorOrdersAndUpdateWallets(order, session);

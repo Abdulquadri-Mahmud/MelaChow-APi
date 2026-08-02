@@ -28,6 +28,20 @@ const menuItemPortionSchema = new mongoose.Schema(
             type: Boolean,
             default: true,
         },
+        track_stock: {
+            type: Boolean,
+            default: false,
+        },
+        stock_quantity: {
+            type: Number,
+            default: 0,
+            min: 0,
+        },
+        low_stock_threshold: {
+            type: Number,
+            default: 5,
+            min: 0,
+        },
         max_quantity: {
             type: Number,
             default: null,

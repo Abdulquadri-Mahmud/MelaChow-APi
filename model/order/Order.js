@@ -291,6 +291,8 @@ const orderSchema = new mongoose.Schema(
     },
     optionStockReservedAt: { type: Date, default: null },
     optionStockRestoredAt: { type: Date, default: null },
+    portionStockReservedAt: { type: Date, default: null },
+    portionStockRestoredAt: { type: Date, default: null },
     riderId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Rider",

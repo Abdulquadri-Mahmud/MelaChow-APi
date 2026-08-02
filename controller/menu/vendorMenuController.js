@@ -348,7 +348,7 @@ export const moveItemToSection = async (req, res) => {
 export const addMenuItemPortion = async (req, res) => {
     try {
         const { itemId } = req.params;
-        const { label, price, is_default, max_quantity, sort_order } = req.body;
+        const { label, price, is_default, max_quantity, sort_order, track_stock, stock_quantity, low_stock_threshold } = req.body;
         const vendor_id = req.vendor._id;
 
         // Confirm item belongs to this vendor
@@ -360,9 +360,15 @@ export const addMenuItemPortion = async (req, res) => {
             await MenuItemPortion.updateMany({ menu_item_id: itemId }, { is_default: false });
         }
 
+        const tracksStock = track_stock === true;
+        const stockQuantity = Math.max(0, Number(stock_quantity) || 0);
         const portion = await MenuItemPortion.create({
             menu_item_id: itemId, label, price, is_default: !!is_default,
-            max_quantity, sort_order, is_available: true, is_in_stock: true,
+            max_quantity, sort_order, is_available: true,
+            track_stock: tracksStock,
+            stock_quantity: tracksStock ? stockQuantity : 0,
+            low_stock_threshold: Math.max(0, Number(low_stock_threshold) || 0),
+            is_in_stock: !tracksStock || stockQuantity > 0,
         });
 
         // Cascade: update parent item stock status after new portion is added
@@ -383,15 +389,31 @@ export const updateMenuItemPortion = async (req, res) => {
         const item = await MenuItem.findOne({ _id: itemId, vendor_id });
         if (!item) return res.status(404).json({ success: false, message: 'Item not found' });
 
+        const updateFields = { ...req.body };
+        if (updateFields.track_stock !== undefined) {
+            updateFields.track_stock = updateFields.track_stock === true;
+        }
+        if (updateFields.stock_quantity !== undefined) {
+            updateFields.stock_quantity = Math.max(0, Number(updateFields.stock_quantity) || 0);
+        }
+        if (updateFields.track_stock === false) {
+            updateFields.stock_quantity = 0;
+            updateFields.is_in_stock = true;
+        } else if (updateFields.track_stock === true || updateFields.stock_quantity !== undefined) {
+            const current = await MenuItemPortion.findOne({ _id: portionId, menu_item_id: itemId }).lean();
+            const quantity = updateFields.stock_quantity ?? current?.stock_quantity ?? 0;
+            updateFields.is_in_stock = Number(quantity) > 0;
+        }
+
         const portion = await MenuItemPortion.findOneAndUpdate(
             { _id: portionId, menu_item_id: itemId },
-            req.body,
+            updateFields,
             { new: true }
         );
         if (!portion) return res.status(404).json({ success: false, message: 'Portion not found' });
 
         // Cascade stock if is_in_stock changed
-        if (req.body.is_in_stock !== undefined) {
+        if (updateFields.is_in_stock !== undefined) {
             await MenuService.updateMenuItemStockStatus(itemId);
         }
 
