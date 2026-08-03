@@ -1,4 +1,4 @@
-import './config/env.js';   // ← MUST BE FIRST IMPORT
+import './config/env.js';   // Ã¢â€ Â MUST BE FIRST IMPORT
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
@@ -16,7 +16,7 @@ import vendorRoutes from './routes/vendor/vendor.routes.js';
 import foodRoutes from './routes/vendor/food.routes.js';
 import vendorAuthRoutes from './routes/vendor/vendor.auth.routes.js';
 import adminRoutes from './routes/Admin/admin.routes.js';
-import adminAuthRoutes from './routes/Admin/admin.auth.routes.js'; // ✅ NEW: Admin Auth Routes
+import adminAuthRoutes from './routes/Admin/admin.auth.routes.js'; // Ã¢Å“â€¦ NEW: Admin Auth Routes
 import userManagementRoutes from './routes/Admin/user_management_route/user.management.routes.js';
 import ReviewsRoutes from './routes/user/user.reviews.routes.js';
 import publicReviewsRoutes from './routes/user/public.reviews.routes.js';
@@ -45,6 +45,7 @@ import comboRoutes from "./routes/menu/comboRoutes.js";
 import socketHealthRoutes from './routes/socket.routes.js';
 import riderNotificationRoutes from './routes/riderNotification.routes.js';
 import publicPromoRoutes from "./routes/promo/publicPromo.routes.js";
+import bannerRoutes from "./routes/Admin/banner.routes.js";
 import platformConfigPublicRoutes from "./routes/public/platformConfig.public.routes.js";
 import supportTicketRoutes from "./routes/supportTicket.routes.js";
 import qrRoutes from "./routes/qr.routes.js";
@@ -66,7 +67,7 @@ import { releaseExpiredOptionStockReservations, releaseExpiredPortionStockReserv
 // Environment loaded via ./config/env.js import above
 
 // ----------------------------------------
-// Sentry — Must initialize before Express app
+// Sentry Ã¢â‚¬â€ Must initialize before Express app
 // ----------------------------------------
 Sentry.init({
   dsn: process.env.SENTRY_DSN,
@@ -112,16 +113,16 @@ const corsOptions = {
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
-      console.log('⚠️ Blocked by CORS:', origin);
+      console.log('Ã¢Å¡Â Ã¯Â¸Â Blocked by CORS:', origin);
       callback(new Error('Not allowed by CORS'));
     }
   },
-  credentials: true,               // ✅ CRITICAL: Allow cookies
+  credentials: true,               // Ã¢Å“â€¦ CRITICAL: Allow cookies
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
   optionsSuccessStatus: 200,
   maxAge: 86400,                   // 24 hours preflight cache
-  // ❌ NO exposedHeaders - Set-Cookie is automatically handled
+  // Ã¢ÂÅ’ NO exposedHeaders - Set-Cookie is automatically handled
 };
 
 app.use(cors(corsOptions));
@@ -170,7 +171,7 @@ app.use((req, res, next) => {
   res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
   next();
 });
-// Order payloads are legitimately large — multiple items with
+// Order payloads are legitimately large Ã¢â‚¬â€ multiple items with
 // portions, selected options, and metadata can exceed 10kb.
 // All other routes keep the strict 10kb limit.
 app.use((req, res, next) => {
@@ -188,7 +189,7 @@ app.use((req, res, next) => {
     express.urlencoded({ extended: true, limit: isOrderRoute ? '100kb' : '10kb' })(req, res, next);
 });
 app.use(cookieParser()); // Parse cookies
-// Manual sanitization — avoids express-mongo-sanitize's req.query getter conflict
+// Manual sanitization Ã¢â‚¬â€ avoids express-mongo-sanitize's req.query getter conflict
 // with newer router versions. Sanitizes req.body and req.params only.
 // req.query injection risk is minimal for Mongoose since queries are constructed
 // server-side, not passed raw from query strings.
@@ -245,7 +246,7 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 // ----------------------------------------
-// Rate Limiting — Tiered by sensitivity
+// Rate Limiting Ã¢â‚¬â€ Tiered by sensitivity
 // ----------------------------------------
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -396,6 +397,7 @@ app.use('/api/locations', publicLocationRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/socket', socketHealthRoutes);
 app.use("/api/promos", publicPromoRoutes);
+app.use("/api/banners", bannerRoutes);
 app.use("/api/public", platformConfigPublicRoutes);
 app.use("/api/support", supportTicketRoutes);
 app.use("/api/qr", qrRoutes);
@@ -414,7 +416,7 @@ app.use("/api/riders/notifications", riderNotificationRoutes);
 
 // Admin routes
 app.use('/api/admin', adminRoutes);
-app.use('/api/admin/auth', adminAuthRoutes); // ✅ NEW: Admin Auth
+app.use('/api/admin/auth', adminAuthRoutes); // Ã¢Å“â€¦ NEW: Admin Auth
 app.use('/api/admin/notifications', adminNotificationRoutes);
 app.use('/api/admin/discounts', adminDiscountRoutes); // Discount Management
 app.use('/api/admin/user', userManagementRoutes);
@@ -441,9 +443,9 @@ app.use("/v1/vendors", customerMenuRoutes);
 // Cart: /v1/cart/...
 app.use("/v1/cart", cartRoutes);
 
-// ✅ DEBUG: Log registered auth routes (dev only)
+// Ã¢Å“â€¦ DEBUG: Log registered auth routes (dev only)
 if (process.env.NODE_ENV !== 'production') {
-  console.log('\n🔍 Registered User Auth Routes (/api/user/auth):');
+  console.log('\nÃ°Å¸â€Â Registered User Auth Routes (/api/user/auth):');
   // Note: userRoutes is a router, so we can inspect its stack
   // Since it's mounted, we can only see paths relative to mount point
   userRoutes.stack.forEach(layer => {
@@ -466,7 +468,7 @@ app.use((err, req, res, next) => {
   const statusCode = err.statusCode || 500;
   const message = err.message || 'Internal Server Error!';
 
-  // Report to Sentry — only real 5xx errors, not client mistakes
+  // Report to Sentry Ã¢â‚¬â€ only real 5xx errors, not client mistakes
   if (statusCode >= 500) {
     Sentry.captureException(err, {
       extra: {
@@ -498,12 +500,12 @@ app.use((err, req, res, next) => {
   });
 });
 
-// ─────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 // SERVER STARTUP
 // Render runs node index.js directly as a persistent
-// process. Vercel serverless export removed —
+// process. Vercel serverless export removed Ã¢â‚¬â€
 // incompatible with persistent WebSocket connections.
-// ─────────────────────────────────────────────────────
+// Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 const startServer = async () => {
   try {
     // 1. Connect to MongoDB
@@ -516,7 +518,7 @@ const startServer = async () => {
     try {
       await seedCategories();
     } catch (seedErr) {
-      logger.warn({ err: seedErr.message }, "⚠️ Category seed skipped");
+      logger.warn({ err: seedErr.message }, "Ã¢Å¡Â Ã¯Â¸Â Category seed skipped");
     }
 
     // 2b. Connect Redis main client
@@ -525,14 +527,14 @@ const startServer = async () => {
     // requires its own explicit connect call because lazyConnect: true is set
     try {
       await redisClient.connect();
-      logger.info('✅ Redis main client connected and ready');
+      logger.info('Ã¢Å“â€¦ Redis main client connected and ready');
     } catch (redisErr) {
-      logger.warn({ err: redisErr.message }, '⚠️ Redis unavailable — caching disabled, falling back to MongoDB');
+      logger.warn({ err: redisErr.message }, 'Ã¢Å¡Â Ã¯Â¸Â Redis unavailable Ã¢â‚¬â€ caching disabled, falling back to MongoDB');
       // Non-fatal: platform continues without caching
     }
 
     // 3. Create HTTP server and attach Socket.IO
-    // Must use http.createServer — app.listen does not
+    // Must use http.createServer Ã¢â‚¬â€ app.listen does not
     // expose the underlying server to Socket.IO
     const server = http.createServer(app);
     const io     = await initializeSocket(server);
@@ -540,16 +542,16 @@ const startServer = async () => {
 
     // 4. Start listening
     server.listen(PORT, () => {
-      logger.info({ port: PORT, env: process.env.NODE_ENV || "development" }, '🚀 Server running');
-      logger.info('🔌 Socket.IO ready for connections');
+      logger.info({ port: PORT, env: process.env.NODE_ENV || "development" }, 'Ã°Å¸Å¡â‚¬ Server running');
+      logger.info('Ã°Å¸â€Å’ Socket.IO ready for connections');
     });
-    // ── Scheduled Payouts: T+1 settlement timing — both sweeps run the next
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Scheduled Payouts: T+1 settlement timing Ã¢â‚¬â€ both sweeps run the next
     // morning at 7:30 AM WAT (06:30 UTC), after Paystack has settled the
-    // previous day's collected payments into the platform balance ─────
+    // previous day's collected payments into the platform balance Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     cron.schedule(
         RIDER_SWEEP_CRON,
         async () => {
-            console.log("🕢 [CRON] Rider payout sweep triggered (06:30 UTC / 7:30 AM WAT)...");
+            console.log("Ã°Å¸â€¢Â¢ [CRON] Rider payout sweep triggered (06:30 UTC / 7:30 AM WAT)...");
             await triggerScheduledPayouts("rider");
         },
         { scheduled: true }
@@ -558,13 +560,13 @@ const startServer = async () => {
     cron.schedule(
         VENDOR_SWEEP_CRON,
         async () => {
-            console.log("🕗 [CRON] Vendor payout sweep triggered (06:30 UTC / 7:30 AM WAT)...");
+            console.log("Ã°Å¸â€¢â€” [CRON] Vendor payout sweep triggered (06:30 UTC / 7:30 AM WAT)...");
             await triggerScheduledPayouts("vendor");
         },
         { scheduled: true }
     );
 
-    console.log(`✅ Scheduled payout crons registered (RIDER_SWEEP_CRON: ${RIDER_SWEEP_CRON}, VENDOR_SWEEP_CRON: ${VENDOR_SWEEP_CRON})`);
+    console.log(`Ã¢Å“â€¦ Scheduled payout crons registered (RIDER_SWEEP_CRON: ${RIDER_SWEEP_CRON}, VENDOR_SWEEP_CRON: ${VENDOR_SWEEP_CRON})`);
 
     cron.schedule(
         "*/5 * * * *",
@@ -611,7 +613,7 @@ const startServer = async () => {
         { timezone: "Africa/Lagos" }
     );
 
-    // 🚀 NEW: Continuous Assignment Retry Loop (Every 30 seconds)
+    // Ã°Å¸Å¡â‚¬ NEW: Continuous Assignment Retry Loop (Every 30 seconds)
     cron.schedule(
         "*/30 * * * * *",
         async () => {
@@ -629,21 +631,21 @@ const startServer = async () => {
     // 5. Graceful shutdown
     // Render sends SIGTERM before stopping the instance
     process.on("SIGTERM", () => {
-      logger.info("SIGTERM received — shutting down gracefully...");
+      logger.info("SIGTERM received Ã¢â‚¬â€ shutting down gracefully...");
       server.close(async () => {
         try {
           await redisClient.quit();
-          logger.info("✅ Redis main client disconnected");
+          logger.info("Ã¢Å“â€¦ Redis main client disconnected");
         } catch (e) {
-          logger.warn({ err: e.message }, "⚠️ Redis quit error");
+          logger.warn({ err: e.message }, "Ã¢Å¡Â Ã¯Â¸Â Redis quit error");
         }
-        logger.info("✅ Server closed");
+        logger.info("Ã¢Å“â€¦ Server closed");
         process.exit(0);
       });
     });
 
     process.on("SIGINT", () => {
-      logger.info("SIGINT received — shutting down...");
+      logger.info("SIGINT received Ã¢â‚¬â€ shutting down...");
       server.close(async () => {
         try {
           await redisClient.quit();
@@ -653,7 +655,7 @@ const startServer = async () => {
     });
 
   } catch (error) {
-    logger.error({ err: error.message }, "❌ Failed to start server");
+    logger.error({ err: error.message }, "Ã¢ÂÅ’ Failed to start server");
     process.exit(1);
   }
 };
@@ -661,6 +663,6 @@ const startServer = async () => {
 startServer();
 
 // # Required for production error tracking
-// # Get DSN from: https://sentry.io → New Project → Node.js
+// # Get DSN from: https://sentry.io Ã¢â€ â€™ New Project Ã¢â€ â€™ Node.js
 // SENTRY_DSN=your_dsn_here
 
