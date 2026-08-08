@@ -41,8 +41,16 @@ export const approveVendor = async (req, res) => {
     const { vendorId } = req.query;
     const { state, city, createLocation = false } = req.body;
 
-    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails");
+    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails +password");
     if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
+
+    if (!vendor.verified) {
+      return res.status(400).json({ success: false, message: "Cannot approve this vendor until their email is verified." });
+    }
+
+    if (!vendor.password) {
+      return res.status(400).json({ success: false, message: "Cannot approve this vendor until they finish setting a password." });
+    }
 
     // ========================================
     // HANDLE LOCATION RESOLUTION (NEW)
@@ -93,7 +101,6 @@ export const approveVendor = async (req, res) => {
     // ========================================
     console.log("✅ [Approval Workflow] About to save vendor...");
     vendor.isApproved = true;
-    vendor.verified = true; // Ensure they are marked verified too
     await vendor.save();
     console.log("✅ [Approval Workflow] Vendor saved - firing background notification...");
 
@@ -135,7 +142,7 @@ export const updatePendingVendor = async (req, res) => {
     const { vendorId } = req.query;
     const { state, city, street, postalCode, createLocation = false } = req.body;
 
-    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails");
+    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails +password");
     if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
     if (vendor.isApproved) {
       return res.status(400).json({ success: false, message: "Approved vendors cannot be updated from pending review" });
@@ -211,7 +218,7 @@ export const updateVendorPayoutDetails = async (req, res) => {
       });
     }
 
-    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails");
+    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails +password");
     if (!vendor) {
       return res.status(404).json({ success: false, message: "Vendor not found" });
     }
@@ -272,7 +279,7 @@ export const rejectVendor = async (req, res) => {
   try {
     const { vendorId, reason } = req.query;
 
-    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails");
+    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails +password");
     if (!vendor)
       return res.status(404).json({ success: false, message: "Vendor not found" });
 
@@ -317,7 +324,7 @@ export const suspendVendor = async (req, res) => {
     const { vendorId, reason } = req.query;
 
     // Find vendor
-    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails");
+    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails +password");
     if (!vendor)
       return res.status(404).json({ success: false, message: "Vendor not found" });
 
@@ -370,7 +377,7 @@ export const reactivateVendor = async (req, res) => {
   try {
     const { vendorId } = req.query;
 
-    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails");
+    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails +password");
     if (!vendor)
       return res.status(404).json({ success: false, message: "Vendor not found" });
 
@@ -497,7 +504,7 @@ export const toggleVendorStatus = async (req, res) => {
     if (!vendorId)
       return res.status(400).json({ success: false, message: "vendorId is required" });
 
-    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails");
+    const vendor = await vendorModel.findById(vendorId).select("+payoutDetails +password");
     if (!vendor)
       return res.status(404).json({ success: false, message: "Vendor not found" });
 
