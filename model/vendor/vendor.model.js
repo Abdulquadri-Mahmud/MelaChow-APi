@@ -27,6 +27,8 @@ const vendorSchema = new Schema(
     // ✅ NEW: Password reset fields
     resetPasswordToken: { type: String, select: false },
     resetPasswordExpires: { type: Date, select: false },
+    passwordSetupToken: { type: String, select: false },
+    passwordSetupExpires: { type: Date, select: false },
 
     // ✅ NEW: Login security fields
     loginAttempts: { type: Number, default: 0 },

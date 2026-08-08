@@ -9,4 +9,8 @@ router.post("/auth/rider/logout", riderAuthController.logoutRider);
 router.get("/auth/rider/me", requireRiderAuth, riderAuthController.getMe);
 router.post("/auth/rider/subscribe", requireRiderAuth, riderAuthController.subscribeRider);
 
+router.post("/auth/rider/forgot-password", riderAuthController.forgotRiderPassword);
+router.post("/auth/rider/verify-reset-code", riderAuthController.verifyRiderResetCode);
+router.post("/auth/rider/reset-password", riderAuthController.resetRiderPassword);
+
 export default router;

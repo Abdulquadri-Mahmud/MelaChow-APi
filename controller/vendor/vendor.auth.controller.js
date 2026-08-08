@@ -282,7 +282,7 @@ export const verifyVendorRegistration = async (req, res) => {
     }
 
     // Find vendor with OTP
-    const vendor = await Vendor.findOne({ email }).select('+otp +otpExpires');
+    const vendor = await Vendor.findOne({ email }).select('+otp +otpExpires +passwordSetupToken +passwordSetupExpires');
 
     if (!vendor) {
       return res.status(404).json({ message: 'Vendor not found' });
@@ -297,16 +297,20 @@ export const verifyVendorRegistration = async (req, res) => {
       return res.status(400).json({ message: 'OTP expired. Please request a new one.' });
     }
 
-    // Mark as verified
+    // Email verification opens a short-lived, one-time password setup session.
+    const passwordSetupToken = generateResetToken();
     vendor.verified = true;
     vendor.otp = undefined;
     vendor.otpExpires = undefined;
+    vendor.passwordSetupToken = passwordSetupToken;
+    vendor.passwordSetupExpires = new Date(Date.now() + 30 * 60 * 1000);
     await vendor.save();
 
     res.status(200).json({
       message: 'Account verified successfully. Please set your password.',
       email: vendor.email,
-      requiresPassword: !vendor.password
+      requiresPassword: !vendor.password,
+      passwordSetupToken
     });
 
   } catch (error) {
@@ -562,7 +566,7 @@ export const verifyVendorResetCode = async (req, res) => {
       return res.status(400).json({ message: 'Email and code are required' });
     }
 
-    const vendor = await Vendor.findOne({ email }).select('+otp +otpExpires');
+    const vendor = await Vendor.findOne({ email }).select('+otp +otpExpires +passwordSetupToken +passwordSetupExpires');
 
     if (!vendor) {
       return res.status(404).json({ message: 'Vendor not found' });
