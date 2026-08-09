@@ -441,8 +441,7 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
                     tag: data.orderId ? `order-${data.orderId}` : `notification-${Date.now()}`,
                     requireInteraction: config.requireInteraction,
                     vibrate: config.vibrate || [200, 100, 200],
-                    timestamp: Date.now(),
-                    data: {
+                                        data: {
                         url: notificationData.url,
                         orderId: notificationData.orderId,
                         type: notificationData.type,
@@ -647,10 +646,6 @@ export async function sendVendorNotification(restaurantId, orderId, type, data =
             vendorOwners = vendor?.owners || [];
             if (isRedisReady() && vendorOwners.length > 0) {
                 try {
-                    // Cache for 30 minutes â€” vendor ownership changes are infrequent
-                    // IMPORTANT: When a vendor's profile is updated (ownership change), 
-                    // the calling controller must invalidate this cache key:
-                    // await redisClient.del(`vendor:${vendorId}:owners`);
                     await redisClient.set(ownerCacheKey, JSON.stringify(vendorOwners), 'EX', 1800);
                 } catch (err) {
                     console.warn('Redis vendor owner cache write failed');
@@ -676,6 +671,116 @@ export async function sendVendorNotification(restaurantId, orderId, type, data =
         console.error('Error in sendVendorNotification cascade:', err.message);
         await vendorMainPromise; // Ensure at least the main vendor gets it
     }
+
+    // 3. Send email notification to vendor on new order received
+    if (type === 'vendor_new_order') {
+        sendVendorOrderEmail(restaurantIdString, orderId, data).catch(err => {
+            console.error('Failed to send vendor order email:', err.message);
+        });
+    }
+}
+
+/**
+ * Send email notification to vendor when a new order is placed
+ */
+export async function sendVendorOrderEmail(restaurantId, orderId, data = {}) {
+    try {
+        const { sendMail } = await import('../config/mailer.js');
+        const Vendor = (await import('../model/vendor/vendor.model.js')).default;
+
+        const vendor = await Vendor.findById(restaurantId).select('email storeName phone');
+        if (!vendor || !vendor.email) {
+            console.warn(`[sendVendorOrderEmail] No valid email found for vendor ID ${restaurantId}`);
+            return;
+        }
+
+        const orderCode = data.orderId || orderId || 'N/A';
+        const customerName = data.customerName || 'A customer';
+        const location = data.location || 'Specified delivery location';
+        const totalAmount = data.totalAmount ? Number(data.totalAmount).toLocaleString() : null;
+
+        const itemsHtml = Array.isArray(data.items) && data.items.length > 0
+            ? data.items.map(item => {
+                const itemName = item.name || item.foodId?.name || item.variant?.name || 'Food Item';
+                const qty = item.quantity || 1;
+                const price = item.price ? Number(item.price).toLocaleString() : null;
+                return `<tr>
+                    <td style="padding: 10px 12px; border-bottom: 1px solid #f1f5f9; font-size: 13px; font-weight: 600; color: #1e293b;">${itemName}</td>
+                    <td style="padding: 10px 12px; border-bottom: 1px solid #f1f5f9; font-size: 13px; text-align: center; color: #64748b;">x${qty}</td>
+                    <td style="padding: 10px 12px; border-bottom: 1px solid #f1f5f9; font-size: 13px; text-align: right; font-weight: 700; color: #ea580c;">${price ? '₦' + price : '-'}</td>
+                </tr>`;
+            }).join('')
+            : '';
+
+        const vendorPortalUrl = `${process.env.VENDOR_URL || process.env.FRONTEND_URL || 'https://vendor.melachow.com'}/vendors/order/${data.orderDatabaseId || orderId}`;
+
+        const htmlContent = `
+        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8fafc; padding: 30px 15px;">
+            <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.06); border: 1px solid #e2e8f0;">
+                <div style="background-color: #ea580c; padding: 24px; text-align: center;">
+                    <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 900; letter-spacing: -0.5px; text-transform: uppercase;">🛍️ New Order Received!</h1>
+                    <p style="color: #ffedd5; margin: 6px 0 0; font-size: 14px; font-weight: 600;">${vendor.storeName || 'Merchant Partner'}</p>
+                </div>
+                <div style="padding: 28px; color: #334155;">
+                    <div style="background-color: #fff7ed; border-left: 4px solid #ea580c; padding: 14px 18px; border-radius: 8px; margin-bottom: 24px;">
+                        <span style="display: block; font-size: 11px; font-weight: 800; color: #c2410c; text-transform: uppercase; letter-spacing: 1px;">Order Reference</span>
+                        <span style="font-size: 20px; font-weight: 900; color: #0f172a;">#${orderCode}</span>
+                    </div>
+
+                    <table style="width: 100%; border-collapse: collapse; margin-bottom: 24px;">
+                        <tr>
+                            <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">Customer Name:</td>
+                            <td style="padding: 6px 0; font-size: 13px; font-weight: 700; color: #0f172a; text-align: right;">${customerName}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">Delivery Location:</td>
+                            <td style="padding: 6px 0; font-size: 13px; font-weight: 600; color: #475569; text-align: right;">${location}</td>
+                        </tr>
+                        ${totalAmount ? `
+                        <tr>
+                            <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">Order Total:</td>
+                            <td style="padding: 6px 0; font-size: 16px; font-weight: 900; color: #16a34a; text-align: right;">₦${totalAmount}</td>
+                        </tr>
+                        ` : ''}
+                    </table>
+
+                    ${itemsHtml ? `
+                    <h3 style="font-size: 14px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; color: #0f172a; margin-bottom: 12px;">Ordered Items</h3>
+                    <table style="width: 100%; border-collapse: collapse; margin-bottom: 28px; background-color: #f8fafc; border-radius: 8px; overflow: hidden;">
+                        <thead>
+                            <tr style="background-color: #f1f5f9; text-align: left;">
+                                <th style="padding: 8px 12px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase;">Item</th>
+                                <th style="padding: 8px 12px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; text-align: center;">Qty</th>
+                                <th style="padding: 8px 12px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; text-align: right;">Price</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${itemsHtml}
+                        </tbody>
+                    </table>
+                    ` : ''}
+
+                    <div style="text-align: center; margin-top: 24px;">
+                        <a href="${vendorPortalUrl}" style="display: inline-block; background-color: #ea580c; color: #ffffff; padding: 14px 28px; border-radius: 12px; font-size: 13px; font-weight: 800; text-decoration: none; text-transform: uppercase; letter-spacing: 1px; box-shadow: 0 4px 12px rgba(234,88,12,0.25);">Open Vendor Portal →</a>
+                    </div>
+                </div>
+                <div style="background-color: #f1f5f9; padding: 16px; text-align: center; font-size: 11px; color: #94a3b8; font-weight: 600;">
+                    © ${new Date().getFullYear()} MelaChow Vendor Portal. All rights reserved.
+                </div>
+            </div>
+        </div>
+        `;
+
+        await sendMail({
+            to: vendor.email,
+            subject: `🛍️ New Order Received! #${orderCode} — ${vendor.storeName || 'MelaChow'}`,
+            html: htmlContent
+        });
+
+        console.log(`[sendVendorOrderEmail] ✉️ Order notification email sent to vendor ${vendor.email}`);
+    } catch (err) {
+        console.error('[sendVendorOrderEmail] Error sending vendor order email:', err.message);
+    }
 }
 
 /**
@@ -698,7 +803,6 @@ export async function removeSubscription(endpoint) {
 
 /**
  * Sync unread count to Redis from MongoDB
- * Called during reconciliation or when resetting counts
  */
 export async function syncUnreadCountToRedis(userId) {
     try {
@@ -794,8 +898,8 @@ export async function sendSuperAdminOrderEmail(order, restaurantNames = '') {
                             <td style="padding: 6px 0; font-size: 13px; font-weight: 700; color: #0f172a; text-align: right;">${customerName} (${customerPhone})</td>
                         </tr>
                         <tr>
-                            <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">Restaurant(s):</td>
-                            <td style="padding: 6px 0; font-size: 13px; font-weight: 700; color: #ea580c; text-align: right;">${vendorContacts || restaurantNames || 'N/A'}</td>
+                            <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">Vendor(s):</td>
+                            <td style="padding: 6px 0; font-size: 13px; font-weight: 700; color: #0f172a; text-align: right;">${restaurantNames || vendorContacts || 'Vendor Partners'}</td>
                         </tr>
                         <tr>
                             <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">Total Paid:</td>
