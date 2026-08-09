@@ -1618,14 +1618,10 @@ export const createOrderV2 = async ({
         console.log(`✅ Order created successfully: ${finalOrderId} (status: pending)`);
 
         // 🔔 Send notifications AFTER transaction commits
-        if (order.paymentStatus === 'paid') {
-            await queueVendorOrderAutoCancelChecks(order, vendorOrderMapping);
-        }
-
         const restaurantIds = [...new Set(normalizedItems.map(item => String(item.restaurantId)))];
 
         try {
-            const { sendOrderNotification } = await import('../../services/notification.service.js');
+            const { sendOrderNotification, notifyAdmins, sendSuperAdminOrderEmail } = await import('../../services/notification.service.js');
 
             // 1. Notify Customer
             // Get restaurant names for the notification
@@ -1643,9 +1639,18 @@ export const createOrderV2 = async ({
                 }))
             });
 
-            // Vendor notifications are emitted after this block so customer failures cannot suppress them.
+            // 2. Notify Super-Admins via Push/Socket & Email
+            if (order.paymentStatus === 'paid') {
+                await notifyAdmins('admin_new_order', {
+                    orderId: finalOrderId,
+                    orderDatabaseId: order._id,
+                    restaurantName: restaurantNames,
+                    totalAmount: total
+                });
+                await sendSuperAdminOrderEmail(order, restaurantNames);
+            }
 
-            console.log(`Customer notification sent for order ${finalOrderId}`);
+            console.log(`Notifications sent for order ${finalOrderId}`);
         } catch (notifError) {
             console.error('❌ Failed to send notifications:', notifError.message);
             // Don't throw - notification failure shouldn't block order creation

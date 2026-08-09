@@ -4,6 +4,7 @@ import {
     getSingleOrder,
     getOrderStats,
     adminOverrideOrderStatus,
+    acceptOrderOnBehalfOfRestaurant,
     getPlatformManagedOrders,
     getCommissionLedger,
     assignRiderToOrder
@@ -20,6 +21,9 @@ router.get("/commission-ledger", adminAuth, getCommissionLedger);
 // List and single item routes
 router.get("/", adminAuth, getAllOrders);
 router.get("/:orderId", adminAuth, getSingleOrder);
+
+// Accept order on behalf of restaurant
+router.post("/:orderId/accept", adminAuth, acceptOrderOnBehalfOfRestaurant);
 
 // Status overrides
 router.patch("/:orderId/status", adminAuth, adminOverrideOrderStatus);

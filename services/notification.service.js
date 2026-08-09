@@ -174,7 +174,7 @@ const NOTIFICATION_CONFIGS = {
     },
     admin_insufficient_funds: {
         title: 'Financial Alert: Payout Blocked',
-        getBody: (data) => `CRITICAL: Admin wallet insufficient (â‚¦${data.adminBalance}) for Order #${data.orderId} payout (â‚¦${data.riderPayout}). Top up now!`,
+        getBody: (data) => `CRITICAL: Admin wallet insufficient (₦${data.adminBalance}) for Order #${data.orderId} payout (₦${data.riderPayout}). Top up now!`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: true,
         vibrate: [500, 200, 500, 200, 500]
@@ -188,6 +188,62 @@ const NOTIFICATION_CONFIGS = {
     system: {
         title: 'Platform System Alert',
         getBody: (data) => data.message || 'New system update or administrative message.',
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: false
+    },
+    delivery_nearby: {
+        title: 'Delivery Nearby',
+        getBody: (data) => `Your delivery rider is approaching with your order #${data.orderId}!`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: true,
+        vibrate: [200, 100, 200, 100, 200]
+    },
+    vendor_new_order: {
+        title: 'New Order Received!',
+        getBody: (data) => {
+            const customerPart = data.customerName ? ` from ${data.customerName}` : '';
+            const locationPart = data.location ? ` to ${data.location}` : '';
+            return `You have a new order #${data.orderId}${customerPart}${locationPart}. Check your dashboard to start preparing.`;
+        },
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: true,
+        vibrate: [300, 100, 300, 100, 300]
+    },
+    vendor_order_cancelled: {
+        title: 'Order Cancelled',
+        getBody: (data) => `Order #${data.orderId} has been cancelled by ${data.customerName || 'the customer'}.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: true
+    },
+    vendor_rider_offer: {
+        title: 'Rider Offer Sent',
+        getBody: (data) => `Rider assignment offer${data.riderName ? ` sent to ${data.riderName}` : ' has been sent'} for Order #${data.orderId}.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: false
+    },
+    vendor_order_timeout: {
+        title: 'Missed Order',
+        getBody: (data) => `Order #${data.orderId} was automatically cancelled because it was not accepted in time.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: true,
+        vibrate: [500, 100, 500, 100, 500]
+    },
+    order_assigned: {
+        title: 'New Job Assigned!',
+        getBody: (data) => `Head to ${data.restaurantName || 'the store'} for pickup. Earn ₦${data.payout || 600}. Order #${data.orderId}`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: true,
+        vibrate: [200, 100, 200, 100, 200]
+    },
+    rider_payout_credited: {
+        title: 'Earnings Credited! 💰',
+        getBody: (data) => `Order #${data.orderId} delivered. ₦${data.payout || 600} has been added to your wallet.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: false
+    },
+    vendor_order_delivered: {
+        title: 'Order Delivered & Earnings Credited',
+        getBody: (data) => `Order #${data.orderId || data._id?.slice(-6)} has been successfully delivered. Your earnings have been updated.`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
@@ -209,43 +265,19 @@ const NOTIFICATION_CONFIGS = {
         getBody: (data) => data.message || 'Your MelaChow support ticket has been updated.',
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
-    },    support_ticket: {
-        title: 'New Customer Complaint',
-        getBody: (data) => data.message || `Support ticket ${data.ticketNumber || ''} needs review.`,
-        icon: '/icons/icon-192x192.png',
-        requireInteraction: true,
-        vibrate: [400, 100, 400, 100, 400]
     }
 };
 
 /**
- * Create and send notification
- * 
- * @param {String} recipientId - Recipient ID (User, Vendor, or Admin ID)
- * @param {String} type - Notification type
- * @param {Object} data - Notification data
- * @param {String} role - Recipient role ('user', 'vendor', 'admin')
+ * Send notification to a recipient
  */
 export async function sendNotification(recipientId, type, data = {}, role = 'user') {
     try {
-        // Validate recipientId (Required unless role is admin OR restaurantId is provided)
-        if (!recipientId && role !== 'admin' && !data.restaurantId) {
-            console.error('Missing recipient: neither recipientId nor restaurantId provided');
-            throw new Error('Notification must have a recipient');
-        }
+        const config = NOTIFICATION_CONFIGS[type] || NOTIFICATION_CONFIGS.system;
 
-        console.log(`Preparing notification for ${role} ${recipientId || '(Broadcast)'}, type: ${type}`);
-
-        const config = NOTIFICATION_CONFIGS[type] || {
-            title: data.title || 'System Notification',
-            getBody: () => data.message || 'New update regarding your order',
-            icon: '/icons/icon-192x192.png'
-        };
-
-        // Build notification payload
         const notificationData = {
-            userId: role === 'user' ? recipientId : (data.userId || null),
-            restaurantId: role === 'vendor' ? recipientId : (data.restaurantId || null),
+            userId: role === 'user' ? recipientId : null,
+            vendorId: role === 'vendor' ? recipientId : null,
             riderId: role === 'rider' ? recipientId : (data.riderId || null),
             adminId: role === 'admin' ? recipientId : null,
             role: role, // Store the role explicitly in the DB for easier filtering
@@ -692,3 +724,125 @@ export async function notifyAdmins(type, data = {}) {
     return sendNotification(null, type, data, 'admin');
 }
 
+/**
+ * Send email notification to Super-Admin(s) on successful order creation
+ */
+export async function sendSuperAdminOrderEmail(order, restaurantNames = '') {
+    try {
+        const { sendMail } = await import('../config/mailer.js');
+        const Admin = (await import('../model/Admin/admin.model.js')).default;
+        const Vendor = (await import('../model/vendor/vendor.model.js')).default;
+
+        // Query active super-admins specifically
+        const superAdmins = await Admin.find({
+            role: { $in: ["super-admin", "super_admin"] },
+            isActive: true
+        }).select('email name');
+
+        const adminEmails = superAdmins.map(a => a.email).filter(Boolean);
+
+        // Fallback configured email if env set
+        const fallbackEmail = process.env.SUPER_ADMIN_EMAIL || process.env.ADMIN_NOTIFY_EMAIL || process.env.ADMIN_EMAIL;
+        if (fallbackEmail && !adminEmails.includes(fallbackEmail)) {
+            adminEmails.push(fallbackEmail);
+        }
+
+        if (adminEmails.length === 0) {
+            console.warn('[sendSuperAdminOrderEmail] No super-admin emails found to receive order notification');
+            return;
+        }
+
+        // Get restaurant details for phone numbers
+        const restaurantIds = [...new Set((order.items || []).map(item => String(item.restaurantId || item.restaurant)))].filter(Boolean);
+        const vendors = await Vendor.find({ _id: { $in: restaurantIds } }).select('storeName phone email');
+        const vendorContacts = vendors.map(v => `${v.storeName} (${v.phone || 'No phone'})`).join(', ');
+
+        const orderCode = order.orderId || String(order._id).slice(-8);
+        const customerName = order.deliveryAddress?.name || order.userId?.firstname || 'Customer';
+        const customerPhone = order.deliveryAddress?.phone || order.phone || order.userId?.phone || 'N/A';
+        const totalAmount = Number(order.total || 0).toLocaleString();
+        const addressText = order.deliveryAddress ? `${order.deliveryAddress.address || ''}, ${order.deliveryAddress.city || ''}` : 'Standard Delivery';
+
+        const itemsHtml = (order.items || []).map(item => {
+            const itemName = item.name || item.foodId?.name || item.variant?.name || 'Food Item';
+            const qty = item.quantity || 1;
+            const price = Number(item.price || item.unitPrice || 0).toLocaleString();
+            return `<tr>
+                <td style="padding: 8px 12px; border-bottom: 1px solid #f1f5f9; font-size: 13px; font-weight: 600; color: #1e293b;">${itemName}</td>
+                <td style="padding: 8px 12px; border-bottom: 1px solid #f1f5f9; font-size: 13px; text-align: center; color: #64748b;">x${qty}</td>
+                <td style="padding: 8px 12px; border-bottom: 1px solid #f1f5f9; font-size: 13px; text-align: right; font-weight: 700; color: #ea580c;">₦${price}</td>
+            </tr>`;
+        }).join('');
+
+        const adminOrderUrl = `${process.env.ADMIN_URL || 'https://admin.melachow.com'}/admin/orders/${order._id}`;
+
+        const htmlContent = `
+        <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f8fafc; padding: 30px 15px;">
+            <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 10px 25px rgba(0,0,0,0.06); border: 1px solid #e2e8f0;">
+                <div style="background-color: #ea580c; padding: 24px; text-align: center;">
+                    <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: 900; letter-spacing: -0.5px; text-transform: uppercase;">🛒 New Order Placed — Super Admin Alert</h1>
+                </div>
+                <div style="padding: 28px; color: #334155;">
+                    <div style="background-color: #fff7ed; border-left: 4px solid #ea580c; padding: 14px 18px; border-radius: 8px; margin-bottom: 24px;">
+                        <span style="display: block; font-size: 11px; font-weight: 800; color: #c2410c; text-transform: uppercase; letter-spacing: 1px;">Order Reference</span>
+                        <span style="font-size: 20px; font-weight: 900; color: #0f172a;">#${orderCode}</span>
+                    </div>
+
+                    <table style="width: 100%; border-collapse: collapse; margin-bottom: 24px;">
+                        <tr>
+                            <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">Customer:</td>
+                            <td style="padding: 6px 0; font-size: 13px; font-weight: 700; color: #0f172a; text-align: right;">${customerName} (${customerPhone})</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">Restaurant(s):</td>
+                            <td style="padding: 6px 0; font-size: 13px; font-weight: 700; color: #ea580c; text-align: right;">${vendorContacts || restaurantNames || 'N/A'}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">Total Paid:</td>
+                            <td style="padding: 6px 0; font-size: 16px; font-weight: 900; color: #16a34a; text-align: right;">₦${totalAmount}</td>
+                        </tr>
+                        <tr>
+                            <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">Delivery Address:</td>
+                            <td style="padding: 6px 0; font-size: 13px; font-weight: 600; color: #475569; text-align: right;">${addressText}</td>
+                        </tr>
+                    </table>
+
+                    <h3 style="font-size: 14px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.5px; color: #0f172a; margin-bottom: 12px;">Order Summary</h3>
+                    <table style="width: 100%; border-collapse: collapse; margin-bottom: 28px; background-color: #f8fafc; border-radius: 8px; overflow: hidden;">
+                        <thead>
+                            <tr style="background-color: #f1f5f9; text-align: left;">
+                                <th style="padding: 8px 12px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase;">Item</th>
+                                <th style="padding: 8px 12px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; text-align: center;">Qty</th>
+                                <th style="padding: 8px 12px; font-size: 11px; font-weight: 800; color: #475569; text-transform: uppercase; text-align: right;">Price</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${itemsHtml}
+                        </tbody>
+                    </table>
+
+                    <div style="text-align: center;">
+                        <a href="${adminOrderUrl}" style="display: inline-block; background-color: #0f172a; color: #ffffff; padding: 14px 28px; border-radius: 12px; font-size: 13px; font-weight: 800; text-decoration: none; text-transform: uppercase; letter-spacing: 1px; box-shadow: 0 4px 12px rgba(15,23,42,0.15);">Open Live Order Desk →</a>
+                    </div>
+                </div>
+                <div style="background-color: #f1f5f9; padding: 16px; text-align: center; font-size: 11px; color: #94a3b8; font-weight: 600;">
+                    © ${new Date().getFullYear()} MelaChow Platform Administration.
+                </div>
+            </div>
+        </div>
+        `;
+
+        for (const recipient of adminEmails) {
+            sendMail({
+                to: recipient,
+                subject: `🛒 New Order #${orderCode} — ₦${totalAmount} (${restaurantNames || 'MelaChow'})`,
+                html: htmlContent
+            }).catch(e => console.error(`[sendSuperAdminOrderEmail] Failed sending to ${recipient}:`, e.message));
+        }
+
+        console.log(`[sendSuperAdminOrderEmail] ✉️ Order notification email queued for ${adminEmails.length} super-admin email(s)`);
+
+    } catch (err) {
+        console.error('[sendSuperAdminOrderEmail] Error sending super-admin email:', err.message);
+    }
+}
