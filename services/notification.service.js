@@ -76,7 +76,8 @@ const NOTIFICATION_CONFIGS = {
         icon: '/icons/icon-192x192.png',
         requireInteraction: true,
         vibrate: [200, 100, 200, 100, 200]
-    },    delivery_nearby: {
+    },
+    delivery_nearby: {
         title: 'Delivery Nearby',
         getBody: (data) => `Your delivery rider is approaching with your order #${data.orderId}!`,
         icon: '/icons/icon-192x192.png',
