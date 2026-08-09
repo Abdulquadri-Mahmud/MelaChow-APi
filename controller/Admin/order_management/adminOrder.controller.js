@@ -121,11 +121,134 @@ export const getSingleOrder = async (req, res) => {
         const query = String(orderId).match(/^[0-9a-fA-F]{24}$/) 
             ? { _id: orderId } 
             : { orderId: orderId };
+import Order from "../../../model/order/Order.js";
+import VendorOrder from "../../../model/vendor/VendorOrder.js";
+import Vendor from "../../../model/vendor/vendor.model.js";
+import Wallet from "../../../model/wallet/wallet.mode.js";
+import Withdrawal from "../../../model/wallet/Withdrawal.model.js";
+import User from "../../../model/user.model.js";
+import Rider from "../../../model/rider.model.js";
+import RiderAssignment from "../../../model/riderAssignment.model.js";
+import OrderTermination from "../../../model/OrderTermination.js";
+import "../../../model/menu/MenuItem.js";
+import mongoose from "mongoose";
+import { getPlatformConfig } from "../../../services/platformConfig.service.js";
+import { expireStaleRiderAssignmentOffers } from "../../../services/riderAssignment.service.js";
+import { usePostgresAdminOrderReads, usePostgresOrderStatusWrites } from "../../../services/postgres/compat.js";
+import { adminOrdersRepository } from "../../../services/postgres/adminOrders.repository.js";
+
+/**
+ * GET ALL ORDERS
+ * Route: GET /api/admin/orders
+ */
+export const getAllOrders = async (req, res) => {
+    try {
+        if (usePostgresAdminOrderReads()) {
+            const response = await adminOrdersRepository.listOrders(req.query);
+            return res.status(200).json(response);
+        }
+
+        const {
+            status,
+            paymentStatus,
+            vendorId,
+            deliveryType,
+            startDate,
+            endDate,
+            search,
+            page = 1,
+            limit = 20
+        } = req.query;
+
+        const skip = (parseInt(page) - 1) * parseInt(limit);
+        const filters = {};
+
+        if (status) {
+            if (status.includes(',')) {
+                filters.orderStatus = { $in: status.split(',') };
+            } else {
+                filters.orderStatus = status;
+            }
+        }
+        if (paymentStatus) filters.paymentStatus = paymentStatus;
+        if (vendorId) filters["items.restaurantId"] = vendorId;
+        if (startDate || endDate) {
+            filters.createdAt = {};
+            if (startDate) filters.createdAt.$gte = new Date(startDate);
+            if (endDate) filters.createdAt.$lte = new Date(endDate);
+        }
+
+        if (search) {
+            filters.$or = [
+                { orderId: { $regex: search, $options: "i" } },
+                { "deliveryAddress.name": { $regex: search, $options: "i" } },
+                { "phone": { $regex: search, $options: "i" } }
+            ];
+        }
+
+        const orders = await Order.find(filters)
+            .populate("userId", "firstname lastname email phone")
+            .populate("riderId", "name phone avatar status")
+            .populate("items.restaurantId", "storeName logo deliveryManagedBy")
+            .populate("items.foodId", "name image_url item_type")
+            .sort({ createdAt: -1 })
+            .skip(skip)
+            .limit(parseInt(limit))
+            .lean();
+
+        // 🚀 NEW: Populate active assignments for logistics monitoring
+        const ordersWithAssignments = await Promise.all(orders.map(async (order) => {
+            const activeAssignments = await RiderAssignment.find({
+                orderId: order._id,
+                status: "assigned"
+            }).populate("riderId", "name phone status").lean();
+            return { ...order, activeAssignments };
+        }));
+
+        const total = await Order.countDocuments(filters);
+
+        res.status(200).json({
+            success: true,
+            data: {
+                orders: ordersWithAssignments,
+                pagination: {
+                    total,
+                    page: parseInt(page),
+                    limit: parseInt(limit),
+                    totalPages: Math.ceil(total / limit)
+                }
+            }
+        });
+
+    } catch (error) {
+        res.status(500).json({ success: false, message: error.message });
+    }
+};
+
+/**
+ * GET SINGLE ORDER (FULL DETAIL)
+ * Route: GET /api/admin/orders/:orderId
+ */
+export const getSingleOrder = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+
+        if (usePostgresAdminOrderReads()) {
+            const response = await adminOrdersRepository.getOrder(orderId);
+            if (!response) {
+                return res.status(404).json({ success: false, message: "Order not found" });
+            }
+            return res.status(200).json(response);
+        }
+
+        const query = String(orderId).match(/^[0-9a-fA-F]{24}$/) 
+            ? { _id: orderId } 
+            : { orderId: orderId };
 
         let order = await Order.findOne(query)
             .populate("userId", "firstname lastname email phone")
             .populate("riderId", "name phone avatar status")
-            .populate("items.restaurantId", "storeName logo deliveryManagedBy")
+            .populate("items.restaurantId", "storeName logo deliveryManagedBy phone email address")
             .populate("items.foodId", "name image_url item_type")
             .lean();
 
@@ -137,7 +260,7 @@ export const getSingleOrder = async (req, res) => {
                 order = await Order.findById(vendorOrderFallback.userOrderId)
                     .populate("userId", "firstname lastname email phone")
                     .populate("riderId", "name phone avatar status")
-                    .populate("items.restaurantId", "storeName logo deliveryManagedBy")
+                    .populate("items.restaurantId", "storeName logo deliveryManagedBy phone email address")
                     .populate("items.foodId", "name image_url item_type")
                     .lean();
             }
@@ -148,7 +271,7 @@ export const getSingleOrder = async (req, res) => {
         }
 
         const vendorOrders = await VendorOrder.find({ userOrderId: order._id })
-            .populate("restaurantId", "storeName logo")
+            .populate("restaurantId", "storeName logo phone email address")
             .lean();
 
         // Fetch wallets for each vendor
@@ -1029,5 +1152,126 @@ export const assignRiderToOrder = async (req, res) => {
             message: 'Failed to assign rider to order',
             error: error.message
         });
+    }
+};
+
+/**
+ * ACCEPT ORDER ON BEHALF OF RESTAURANT
+ * Route: POST /api/admin/orders/:orderId/accept
+ */
+export const acceptOrderOnBehalfOfRestaurant = async (req, res) => {
+    try {
+        const { orderId } = req.params;
+        const { vendorOrderId } = req.body || {};
+
+        // Find main order by ID or orderId string
+        const mainOrderQuery = String(orderId).match(/^[0-9a-fA-F]{24}$/)
+            ? { _id: orderId }
+            : { orderId };
+
+        let order = await Order.findOne(mainOrderQuery);
+
+        // Resiliency check: if orderId is actually a VendorOrder ID
+        let vendorOrder = null;
+        if (vendorOrderId && String(vendorOrderId).match(/^[0-9a-fA-F]{24}$/)) {
+            vendorOrder = await VendorOrder.findById(vendorOrderId);
+        }
+
+        if (!order && String(orderId).match(/^[0-9a-fA-F]{24}$/)) {
+            vendorOrder = await VendorOrder.findById(orderId);
+            if (vendorOrder && vendorOrder.userOrderId) {
+                order = await Order.findById(vendorOrder.userOrderId);
+            }
+        }
+
+        if (!order) {
+            return res.status(404).json({ success: false, message: "Order not found" });
+        }
+
+        const adminId = req.admin?._id || "unknown";
+
+        // Update Parent Order status if currently pending
+        const previousOrderStatus = order.orderStatus;
+        if (['pending', 'accepted'].includes(order.orderStatus)) {
+            order.orderStatus = 'accepted';
+            order.statusLog.push({
+                status: 'accepted',
+                changedBy: `admin:${adminId}:on_behalf_of_restaurant`,
+                timestamp: new Date()
+            });
+            await order.save();
+        }
+
+        // Find/Update VendorOrder(s)
+        const vendorOrderQuery = vendorOrder
+            ? { _id: vendorOrder._id }
+            : { userOrderId: order._id };
+
+        const targetVendorOrders = await VendorOrder.find(vendorOrderQuery);
+        for (const vo of targetVendorOrders) {
+            vo.orderStatus = 'accepted';
+            vo.acceptedAt = new Date();
+            vo.vendorAcceptance = {
+                accepted: true,
+                acceptedAt: new Date(),
+                acceptedBy: `admin:${adminId}`
+            };
+            await vo.save();
+        }
+
+        // Send notifications (Customer, Vendor)
+        try {
+            const { sendOrderNotification, sendVendorNotification } = await import("../../../services/notification.service.js");
+            const Vendor = (await import("../../../model/vendor/vendor.model.js")).default;
+
+            const restaurantIds = [...new Set(targetVendorOrders.map(v => String(v.restaurantId)))];
+            const vendors = await Vendor.find({ _id: { $in: restaurantIds } }).select('storeName');
+            const restaurantNames = vendors.map(v => v.storeName).join(', ');
+
+            // 1. Customer Notification
+            await sendOrderNotification(order.userId, order.orderId, 'accepted', {
+                orderDatabaseId: order._id,
+                restaurantName: restaurantNames,
+                totalAmount: order.total
+            });
+
+            // 2. Vendor Notification
+            for (const vo of targetVendorOrders) {
+                await sendVendorNotification(vo.restaurantId, order.orderId, 'system', {
+                    orderId: order.orderId,
+                    title: 'Order Accepted by Platform Admin',
+                    message: `Admin has accepted Order #${order.orderId} on behalf of your restaurant. Please begin food preparation.`
+                });
+            }
+        } catch (notifErr) {
+            console.warn('⚠️ Notifications after accept-on-behalf failed:', notifErr.message);
+        }
+
+        // 🚀 Trigger automatic rider assignment
+        for (const vo of targetVendorOrders) {
+            try {
+                const { offerOrderToAvailableRiders } = await import("../../../services/riderAssignment.service.js");
+                await offerOrderToAvailableRiders({
+                    vendorOrderId: vo._id,
+                    assignedBy: `admin:${adminId}:on_behalf`
+                });
+            } catch (assignErr) {
+                console.warn(`⚠️ Rider assignment trigger failed for vendorOrder ${vo._id}:`, assignErr.message);
+            }
+        }
+
+        return res.status(200).json({
+            success: true,
+            message: "Order accepted on behalf of restaurant",
+            data: {
+                orderId: order.orderId,
+                previousStatus: previousOrderStatus,
+                newStatus: 'accepted'
+            }
+        });
+
+    } catch (error) {
+        console.error("acceptOrderOnBehalfOfRestaurant error:", error);
+        return res.status(500).json({ success: false, message: error.message });
     }
 };
