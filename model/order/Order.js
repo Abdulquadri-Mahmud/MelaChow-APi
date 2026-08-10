@@ -200,6 +200,9 @@ const orderSchema = new mongoose.Schema(
 
     phone: { type: String, required: true },
 
+    // A customer can leave a separate preparation note for each restaurant.
+    restaurantNotes: { type: Map, of: String, default: {} },
+
     subtotal: { type: Number, required: true },
 
     deliveryFee: {

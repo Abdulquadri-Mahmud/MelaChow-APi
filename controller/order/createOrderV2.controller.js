@@ -978,6 +978,7 @@ export const createOrderV2 = async ({
     vendorDeliveryFees,
     deliveryAddress,
     phone,
+    notes = {},
     discountCode = null, // Optional discount code
     useWallet = false,   // Optional wallet payment
     paymentReference = null,
@@ -1510,6 +1511,10 @@ export const createOrderV2 = async ({
           city:  deliveryAddress.cityName  || deliveryAddress.city  || "",
           state: deliveryAddress.stateName || deliveryAddress.state || "",
         };
+        const restaurantNotes = Object.entries(notes && typeof notes === "object" ? notes : {}).reduce((result, [key, value]) => {
+            result[String(key).slice(0, 120)] = String(value || "").trim().slice(0, 500);
+            return result;
+        }, {});
         // Keep cityName/stateName as well for forwards
         // compatibility — they are stored but not required
 
@@ -1533,6 +1538,7 @@ export const createOrderV2 = async ({
                         vendorDeliveryFees: resolvedVendorDeliveryFees, // ← use resolved
                         deliveryAddress: normalizedDeliveryAddress,
                         phone,
+                        restaurantNotes,
                         subtotal: Number(subtotal.toFixed(2)),
                         deliveryFee: Number(totalDeliveryFee.toFixed(2)),
                         serviceFee: serviceFee,
@@ -1733,6 +1739,10 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
     for (const vendorId of vendorIds) {
         // ... (lines 611-631)
         const vendorItems = vendorItemsMap[vendorId];
+        const vendorStoreName = vendorItems[0]?.storeName || "";
+        const orderNotes = order.restaurantNotes || {};
+        const getOrderNote = (key) => orderNotes instanceof Map ? orderNotes.get(key) : orderNotes[key];
+        const customerNote = String(getOrderNote(vendorId) || getOrderNote(vendorStoreName) || "").trim().slice(0, 500);
         const vendorSubtotal = vendorItems.reduce(
             (sum, item) => sum + item.price * item.quantity,
             0
@@ -1809,6 +1819,7 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
                     })),
                     commission,
                     vendorTotal,
+                    customerNote,
                     // Platform handles all deliveries. Vendor earns food revenue only.
                     deliveryShare: 0,
                     escrowAmount,
@@ -2165,7 +2176,7 @@ export const createOrderController = async (req, res) => {
     let order = null;
     let reference = null;
     try {
-        const { items, vendorDeliveryFees, deliveryAddress, phone, discountCode, useWallet, idempotencyKey, deviceId } = req.body;
+        const { items, vendorDeliveryFees, deliveryAddress, phone, discountCode, useWallet, idempotencyKey, deviceId, notes = {} } = req.body;
         const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip || "unknown";
         const userId = req.userId; // From auth middleware
 
@@ -2287,6 +2298,7 @@ export const createOrderController = async (req, res) => {
             vendorDeliveryFees,
             deliveryAddress,
             phone,
+            notes,
             discountCode,
             useWallet, // Pass wallet flag
             paymentStatus: "pending", // Will be updated if wallet used
