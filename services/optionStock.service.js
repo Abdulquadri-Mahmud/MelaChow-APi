@@ -4,9 +4,32 @@ import { MenuItemChoiceOption } from "../model/menu/MenuItemChoice.js";
 import Order from "../model/order/Order.js";
 import MenuItem from "../model/menu/MenuItem.js";
 import MenuItemPortion from "../model/menu/MenuItemPortion.js";
+import ChoiceGroupTemplate from "../model/menu/ChoiceGroupTemplate.js";
+import { MenuItemChoiceGroup } from "../model/menu/MenuItemChoice.js";
+import { syncChoiceGroupTemplateUsages } from "./choiceGroupTemplateSync.service.js";
 
 const requiredUnits = (item, choice) =>
   Math.max(1, Number(item.quantity) || 1) * Math.max(1, Number(choice.quantity) || 1);
+
+const changeSharedFoodOptionStock = async (choice, units, session, { requireAvailable = false } = {}) => {
+  const [option, group] = await Promise.all([
+    MenuItemChoiceOption.findById(choice.option_id).session(session).lean(),
+    MenuItemChoiceGroup.findById(choice.group_id).session(session).lean(),
+  ]);
+  if (!option || !group?.source_template_id || !option.source_template_option_id) return false;
+
+  const filter = { _id: group.source_template_id, "options._id": option.source_template_option_id };
+  const arrayFilter = { "option._id": option.source_template_option_id, "option.track_stock": true };
+  if (requireAvailable) {
+    arrayFilter["option.is_available"] = { $ne: false };
+    arrayFilter["option.stock_quantity"] = { $gte: Math.abs(units) };
+  }
+  const result = await ChoiceGroupTemplate.updateOne(filter, { $inc: { "options.$[option].stock_quantity": units } }, { session, arrayFilters: [arrayFilter] });
+  if (result.modifiedCount !== 1) throw new Error(`${choice.label} is out of stock`);
+  const template = await ChoiceGroupTemplate.findById(group.source_template_id).session(session);
+  if (template) await syncChoiceGroupTemplateUsages(template);
+  return true;
+};
 
 export const reserveOptionStockForOrder = async (order, session) => {
   if (!order || (order.optionStockReservedAt && !order.optionStockRestoredAt)) return order;
@@ -35,6 +58,7 @@ export const reserveOptionStockForOrder = async (order, session) => {
         );
         if (result.modifiedCount !== 1) throw new Error(`${choice.label} is out of stock`);
       } else {
+        if (await changeSharedFoodOptionStock(choice, -units, session, { requireAvailable: true })) continue;
         const result = await MenuItemChoiceOption.updateOne(
           {
             _id: choice.option_id,
@@ -78,6 +102,7 @@ export const restoreOptionStockForOrder = async (order, session) => {
           }
         );
       } else {
+        if (await changeSharedFoodOptionStock(choice, units, session)) continue;
         await MenuItemChoiceOption.updateOne(
           { _id: choice.option_id, group_id: choice.group_id, track_stock: true },
           { $inc: { stock_quantity: units } },

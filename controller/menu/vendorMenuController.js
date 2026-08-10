@@ -787,7 +787,7 @@ export const updateMenuItemChoiceGroup = async (req, res) => {
 export const addMenuItemChoiceOption = async (req, res) => {
     try {
         const { groupId } = req.params;
-        const { label, price_modifier_naira, image_url, is_available, sort_order, track_stock, stock_quantity, low_stock_threshold } = req.body;
+        const { label, price_modifier_naira, image_url, is_available, sort_order, track_stock, stock_quantity, low_stock_threshold, source_template_option_id } = req.body;
 
         const group = await MenuItemChoiceGroup.findById(groupId).lean();
         if (!group) return res.status(404).json({ success: false, message: 'Choice group not found' });
@@ -796,6 +796,9 @@ export const addMenuItemChoiceOption = async (req, res) => {
             vendor_id: req.vendor._id,
         }).select('_id').lean();
         if (!ownedItem) return res.status(403).json({ success: false, message: 'Access denied' });
+        if (group.source_template_id && !source_template_option_id) {
+            return res.status(400).json({ success: false, message: 'This shared group is managed in the Options Library.' });
+        }
 
         if (!label || !label.trim()) {
             return res.status(400).json({ success: false, message: 'label is required' });
@@ -820,6 +823,7 @@ export const addMenuItemChoiceOption = async (req, res) => {
 
         const option = await MenuItemChoiceOption.create({
             group_id: groupId,
+            source_template_option_id: source_template_option_id || null,
             label: label.trim(),
             price_modifier: Math.round(Number(price_modifier_naira || 0) * 100), // Naira → kobo
             image_url: image_url?.trim() || null,
@@ -856,6 +860,15 @@ export const updateMenuItemChoiceOption = async (req, res) => {
             vendor_id: req.vendor._id,
         }).select('_id').lean();
         if (!ownedItem) return res.status(403).json({ success: false, message: 'Access denied' });
+        if (group.source_template_id) {
+            return res.status(400).json({ success: false, message: 'This shared option is managed in the Options Library.' });
+        }
+
+        const currentGroup = await MenuItemChoiceGroup.findOne({ _id: groupId, menu_item_id: itemId })
+            .select("source_template_id").lean();
+        if (currentGroup?.source_template_id) {
+            return res.status(400).json({ success: false, message: "This shared group is managed in the Options Library." });
+        }
 
         const updateFields = {};
 
