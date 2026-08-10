@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 const { ObjectId } = mongoose.Schema.Types;
 
 const comboChoiceOptionSchema = new mongoose.Schema({
+    source_template_option_id: { type: ObjectId, default: null },
     label:          { type: String, required: true, trim: true },
     price_modifier: { type: Number, default: 0 },
     image_url:      { type: String, default: null },

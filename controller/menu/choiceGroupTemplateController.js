@@ -6,6 +6,7 @@ import {
     normalizeChoiceGroupTemplateInput,
     serializeChoiceGroupTemplate,
 } from "../../services/choiceGroupTemplate.service.js";
+import { syncChoiceGroupTemplateUsages } from "../../services/choiceGroupTemplateSync.service.js";
 
 const escapeRegex = (value) => String(value).replace(/[.*+?^$()|[]\{}]/g, "\$&");
 
@@ -106,10 +107,11 @@ export const updateChoiceGroupTemplate = async (req, res) => {
         const normalized = normalizeChoiceGroupTemplateInput(req.body);
         Object.assign(template, normalized);
         await template.save();
+        await syncChoiceGroupTemplateUsages(template);
 
         return res.status(200).json({
             success: true,
-            message: "Template updated. Existing menu items were not changed.",
+            message: "Template updated everywhere it is used.",
             template: serializeChoiceGroupTemplate(template),
         });
     } catch (error) {

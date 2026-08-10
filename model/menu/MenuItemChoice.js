@@ -48,6 +48,13 @@ const menuItemChoiceOptionSchema = new mongoose.Schema(
             required: true,
             index: true,
         },
+        // Present only for an option supplied by the vendor's Options Library.
+        // This is what lets every menu item share one inventory record.
+        source_template_option_id: {
+            type: mongoose.Schema.Types.ObjectId,
+            default: null,
+            index: true,
+        },
         label: {
             type: String, // e.g. "Eba", "Amala"
             required: true,
