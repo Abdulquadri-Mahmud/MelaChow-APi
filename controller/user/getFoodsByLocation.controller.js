@@ -41,6 +41,8 @@ export const getFoodsByLocation = async (req, res) => {
     let vendorQuery = {
       active: true,
       suspended: false,
+      isApproved: true,
+      isLive: true,
       deletedAt: null,
     };
 

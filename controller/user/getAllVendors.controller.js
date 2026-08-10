@@ -13,7 +13,9 @@ export const getAllVendors = async (req, res) => {
         // Removed kyc.verifiedAt check to allow unverified vendors (for dev/testing)
         const filter = {
             active: true,
-            suspended: false
+            suspended: false,
+            isApproved: true,
+            isLive: true,
         };
 
         console.log("🔍 Fetching vendors with filters:", filter);
