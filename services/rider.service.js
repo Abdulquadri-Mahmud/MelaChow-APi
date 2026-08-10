@@ -1229,7 +1229,12 @@ export const terminateOrder = async (orderId, riderId, note = "") => {
 
     let vendorOrder = await VendorOrder.findById(orderId).populate("userOrderId");
     let order = vendorOrder?.userOrderId;
-    if (!order) order = await Order.findById(orderId).populate("userOrderId");
+    // userOrderId belongs to VendorOrder, not Order. A rider can hold either
+    // identifier, so the master-order fallback must not populate that path.
+    if (!order) {
+        order = await Order.findById(orderId);
+        if (order) vendorOrder = await VendorOrder.findOne({ userOrderId: order._id });
+    }
     if (!order) throw new Error("Order not found");
 
     const isAssigned =
@@ -1364,7 +1369,12 @@ export const reportUndeliverable = async (orderId, riderId, reason = "") => {
     const { VENDOR_REMAKE_WINDOW_MS } = await import("../config/payouts.js");
 
     let vendorOrder = await VendorOrder.findById(orderId).populate("userOrderId");
-    const order = vendorOrder?.userOrderId;
+    // Match the termination flow: a rider may submit the master Order ID.
+    let order = vendorOrder?.userOrderId;
+    if (!order) {
+        order = await Order.findById(orderId);
+        if (order) vendorOrder = await VendorOrder.findOne({ userOrderId: order._id });
+    }
     if (!order) throw new Error("Order not found");
 
     const isAssigned =
