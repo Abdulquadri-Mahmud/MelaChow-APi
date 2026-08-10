@@ -34,6 +34,23 @@ const getPostgresSearchRepository = async () => {
 
 const escapeRegex = (value = "") => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+// Conservative, local-food spelling support. Keep this small and reviewed so
+// a typo helps the customer without widening results to unrelated dishes.
+const FOOD_SEARCH_ALIASES = new Map([
+  ["jellof", "jollof"],
+  ["jollof", "jollof rice"],
+  ["shawama", "shawarma"],
+  ["sharwama", "shawarma"],
+  ["suyya", "suya"],
+  ["semo", "semovita"],
+]);
+
+const expandFoodSearchTerms = (query) => {
+  const normalized = String(query || "").trim().toLowerCase();
+  const alias = FOOD_SEARCH_ALIASES.get(normalized);
+  return alias ? `${normalized} ${alias}` : normalized;
+};
+
 const getActiveVendorPromoMap = async (vendorIds) => {
   if (!vendorIds.length) return new Map();
 
@@ -336,9 +353,9 @@ export const autocompleteFoods = async (req, res) => {
       is_in_stock: true,
       is_archived: false,
       $or: [
-        { name: { $regex: q, $options: "i" } },
-        { description: { $regex: q, $options: "i" } },
-        { tags: { $regex: q, $options: "i" } },
+        { name: { $regex: escapeRegex(q), $options: "i" } },
+        { description: { $regex: escapeRegex(q), $options: "i" } },
+        { tags: { $regex: escapeRegex(q), $options: "i" } },
       ],
     };
 
@@ -349,7 +366,7 @@ export const autocompleteFoods = async (req, res) => {
 
     // Also match vendors by store name within location
     const vendorNameQuery = {
-      storeName: { $regex: q, $options: "i" },
+      storeName: { $regex: escapeRegex(q), $options: "i" },
       active: true,
       suspended: false,
       deletedAt: null,
@@ -570,7 +587,7 @@ export const searchFoods = async (req, res) => {
       const existingVendorFilter = itemQuery.vendor_id;
 
       itemQuery.$or = [
-        { $text: { $search: normalizedQuery } },
+        { $text: { $search: expandFoodSearchTerms(normalizedQuery) } },
         // Items from vendors whose name matched the query
         ...(vendorMatches.length > 0
           ? [{ vendor_id: { $in: vendorMatches.map((v) => v._id) } }]
