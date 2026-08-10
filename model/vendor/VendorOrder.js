@@ -84,6 +84,7 @@ const vendorOrderSchema = new mongoose.Schema(
 
     commission: Number,
     vendorTotal: Number,
+    customerNote: { type: String, default: "", trim: true, maxlength: 500 },
     deliveryShare: Number,
     escrowAmount: { type: Number, default: 0 }, // food revenue held pending delivery
     escrowReleased: { type: Boolean, default: false }, // true after payout to vendor
