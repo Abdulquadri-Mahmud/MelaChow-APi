@@ -25,6 +25,12 @@ const throwClientError = (msg) => {
     throw err;
 };
 
+const throwHttpError = (message, statusCode) => {
+    const err = new Error(message);
+    err.statusCode = statusCode;
+    throw err;
+};
+
 /**
  * Create a new rider
  * Auto-creates a wallet for every new rider on account creation
@@ -481,14 +487,18 @@ export const markPickedUp = async (orderId, riderId) => {
         } else {
             order = await Order.findById(orderId).session(session);
         }
-        if (!order) throw new Error("Order not found");
+        if (!order) throwHttpError("This delivery could not be found. Refresh your dashboard.", 404);
 
         const isAssigned = (order.riderId?.toString() === riderId) ||
                            (vendorOrder && vendorOrder.riderId?.toString() === riderId);
-        if (!isAssigned) throw new Error("Rider not assigned to this order");
+        if (!isAssigned) throwHttpError("This delivery is no longer assigned to you. Refresh your dashboard.", 409);
 
         const rider = await Rider.findById(riderId).session(session);
-        if (!rider) throw new Error("Rider not found");
+        if (!rider) throwHttpError("Rider account not found", 404);
+
+        if (!["ready_for_pickup", "rider_assigned"].includes(order.orderStatus)) {
+            throwHttpError(`This delivery cannot be picked up at its current stage (${order.orderStatus}). Refresh your dashboard.`, 409);
+        }
 
         order.orderStatus = "out_for_delivery";
         order.riderAssignment = {
@@ -1076,6 +1086,7 @@ export const adminForceRiderAvailable = async (riderId, adminId) => {
     await rider.save();
     return rider.getPublicProfile();
 };
+
 export const adminSetRiderSuspension = async (riderId, { suspended, reason = "" }, adminId) => {
     const rider = await Rider.findById(riderId);
     if (!rider) throw new Error("Rider not found");
