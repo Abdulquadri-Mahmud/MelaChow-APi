@@ -16,6 +16,8 @@ import { usePostgresVendorOrderReads } from "../../services/postgres/compat.js";
 import { vendorOrdersRepository } from "../../services/postgres/vendorOrders.repository.js";
 import { usePostgresWalletReads } from "../../services/postgres/compat.js";
 import { walletRepository } from "../../services/postgres/wallet.repository.js";
+import MenuItem from "../../model/menu/MenuItem.js";
+import MenuItemPortion from "../../model/menu/MenuItemPortion.js";
 
 const stripRecipientCode = (value) => {
   if (!value || typeof value !== "object") return value;
@@ -241,6 +243,25 @@ export const getVendorById = async (req, res) => {
     vendor.wallet = wallet || null;
     vendor.vendorOrders = vendorOrders || [];
 
+    // This drives the dashboard button state. Publishing is still revalidated
+    // in setVendorLiveStatus to protect against stale client data.
+    const readyItems = await MenuItem.find({
+      vendor_id: vendor._id,
+      is_available: true,
+      is_in_stock: true,
+      is_archived: false,
+      category_deactivated: false,
+    }).select("_id").lean();
+    const hasPricedItem = readyItems.length > 0 && await MenuItemPortion.exists({
+      menu_item_id: { $in: readyItems.map((item) => item._id) },
+      price: { $gt: 0 },
+      is_available: true,
+      is_in_stock: true,
+    });
+    vendor.liveReadiness = {
+      isReady: Boolean(vendor.verified && vendor.isApproved && vendor.active && !vendor.suspended && hasPricedItem),
+    };
+
     res.status(200).json({
       success: true,
       data: stripRecipientCode(vendor),
@@ -253,6 +274,64 @@ export const getVendorById = async (req, res) => {
       message: "Error retrieving vendor",
       error: error.message,
     });
+  }
+};
+
+// Vendor-controlled publication. The server, rather than the UI, decides
+// whether the store is eligible so the rule cannot be bypassed by an API call.
+export const setVendorLiveStatus = async (req, res) => {
+  try {
+    const vendorId = req.vendor?._id;
+    const { isLive } = req.body;
+
+    if (!vendorId || typeof isLive !== "boolean") {
+      return res.status(400).json({ success: false, message: "A live status is required." });
+    }
+
+    const vendor = await vendorModel.findById(vendorId);
+    if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found." });
+
+    if (isLive) {
+      if (!vendor.verified || !vendor.isApproved || vendor.suspended || !vendor.active) {
+        return res.status(403).json({ success: false, message: "Your account must be verified and approved before going live." });
+      }
+
+      const activeItems = await MenuItem.find({
+        vendor_id: vendorId,
+        is_available: true,
+        is_in_stock: true,
+        is_archived: false,
+        category_deactivated: false,
+      }).select("_id").lean();
+
+      if (!activeItems.length) {
+        return res.status(400).json({ success: false, message: "Add at least one available, in-stock menu item before going live." });
+      }
+
+      const portion = await MenuItemPortion.findOne({
+        menu_item_id: { $in: activeItems.map((item) => item._id) },
+        price: { $gt: 0 },
+        is_available: true,
+        is_in_stock: true,
+      }).select("_id").lean();
+
+      if (!portion) {
+        return res.status(400).json({ success: false, message: "At least one available menu item needs an in-stock portion with a price." });
+      }
+    }
+
+    vendor.isLive = isLive;
+    vendor.publishedAt = isLive ? (vendor.publishedAt || new Date()) : null;
+    await vendor.save();
+
+    return res.json({
+      success: true,
+      message: isLive ? "Your store is now live and visible to customers." : "Your store is paused and no longer accepting new orders.",
+      data: { isLive: vendor.isLive, publishedAt: vendor.publishedAt },
+    });
+  } catch (error) {
+    console.error("Failed to update vendor live status:", error);
+    return res.status(500).json({ success: false, message: "Unable to update store status." });
   }
 };
 

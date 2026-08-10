@@ -153,6 +153,10 @@ const vendorSchema = new Schema(
     },
     suspended: { type: Boolean, default: false },
     active: { type: Boolean, default: true },
+    // Store publication is controlled by the vendor, after platform readiness
+    // checks have passed. This is deliberately separate from account approval.
+    isLive: { type: Boolean, default: false, index: true },
+    publishedAt: { type: Date, default: null },
     // Denormalized promo flag — flipped by admin when activating/deactivating
     // a VendorDeliveryPromo. Used by frontend for badge display without
     // an extra DB lookup per vendor card.

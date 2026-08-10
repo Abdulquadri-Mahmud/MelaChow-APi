@@ -443,8 +443,9 @@ export const loginVendorWithPassword = async (req, res) => {
     // Check if password is set
     if (!vendor.password) {
       return res.status(400).json({
-        message: 'Password not set. Please complete verification process.',
-        requiresPasswordSetup: true
+        message: 'Your account is approved, but no password has been created yet. Use Forgot Password to receive a secure code and create one.',
+        requiresPasswordSetup: true,
+        passwordRecoveryUrl: '/vendors/auth/forgot-password'
       });
     }
 
