@@ -32,6 +32,8 @@ const getPostgresSearchRepository = async () => {
   return searchRepository;
 };
 
+const escapeRegex = (value = "") => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 const getActiveVendorPromoMap = async (vendorIds) => {
   if (!vendorIds.length) return new Map();
 
@@ -450,6 +452,10 @@ export const searchFoods = async (req, res) => {
       // will be re-added post-launch via aggregation
     } = req.query;
 
+    const normalizedQuery = String(q || "").trim().slice(0, 100);
+    const currentPage = Math.max(1, Number(page) || 1);
+    const pageSize = Math.min(30, Math.max(1, Number(limit) || 10));
+
     // ── Location resolution ──────────────────────────
     // Explicit city/state query params take priority
     // over the user's saved address
@@ -527,10 +533,10 @@ export const searchFoods = async (req, res) => {
     let vendorMatches = [];
     let useTextScore = false;
 
-    if (q?.trim()) {
+    if (normalizedQuery) {
       // Track search trend
       await SearchTrend.updateOne(
-        { keyword: q.toLowerCase().trim() },
+        { keyword: normalizedQuery.toLowerCase() },
         {
           $inc: { count: 1 },
           $set: {
@@ -549,9 +555,9 @@ export const searchFoods = async (req, res) => {
         suspended: false,
         deletedAt: null,
         $or: [
-          { storeName: { $regex: q, $options: "i" } },
-          { storeSlug: { $regex: q, $options: "i" } },
-          { storeDescription: { $regex: q, $options: "i" } },
+          { storeName: { $regex: escapeRegex(normalizedQuery), $options: "i" } },
+          { storeSlug: { $regex: escapeRegex(normalizedQuery), $options: "i" } },
+          { storeDescription: { $regex: escapeRegex(normalizedQuery), $options: "i" } },
         ],
         // Scope vendor name search to location vendors
         ...(vendorIds !== null ? { _id: { $in: vendorIds } } : {}),
@@ -564,7 +570,7 @@ export const searchFoods = async (req, res) => {
       const existingVendorFilter = itemQuery.vendor_id;
 
       itemQuery.$or = [
-        { $text: { $search: q } },
+        { $text: { $search: normalizedQuery } },
         // Items from vendors whose name matched the query
         ...(vendorMatches.length > 0
           ? [{ vendor_id: { $in: vendorMatches.map((v) => v._id) } }]
@@ -588,7 +594,7 @@ export const searchFoods = async (req, res) => {
     if (usePostgresSearchReads()) {
       const searchRepository = await getPostgresSearchRepository();
       const response = await searchRepository.search({
-        q,
+        q: normalizedQuery,
         category,
         available,
         sort,
@@ -617,23 +623,22 @@ export const searchFoods = async (req, res) => {
     }
 
     // ── Pagination ───────────────────────────────────
-    const skip = (Number(page) - 1) * Number(limit);
+    const skip = (currentPage - 1) * pageSize;
+    const searchWindow = Math.min(currentPage * pageSize, 200);
 
     // ── Execute queries ──────────────────────────────
     const projection = useTextScore ? { score: { $meta: "textScore" } } : {};
 
     const [menus, combos, menusTotal, combosTotal] = await Promise.all([
       MenuItem.find(itemQuery, projection)
-        .select("_id name image_url item_type is_available is_in_stock dietary_type tags rating ratingCount vendor_id choice_groups platform_category_id prep_time_minutes")
+        .select("_id name image_url item_type is_available is_in_stock dietary_type tags rating ratingCount vendor_id choice_groups platform_category_id prep_time_minutes createdAt")
         .sort(sortOption)
-        .skip(skip)
-        .limit(Number(limit))
+        .limit(searchWindow)
         .lean(),
       ComboItem.find(itemQuery, projection)
-        .select("_id name image_url is_available is_in_stock dietary_type tags rating ratingCount vendor_id choice_groups platform_category_id price prep_time_minutes")
+        .select("_id name image_url is_available is_in_stock dietary_type tags rating ratingCount vendor_id choice_groups platform_category_id price prep_time_minutes createdAt")
         .sort(sortOption)
-        .skip(skip)
-        .limit(Number(limit))
+        .limit(searchWindow)
         .lean(),
       MenuItem.countDocuments(itemQuery),
       ComboItem.countDocuments(itemQuery),
@@ -649,7 +654,7 @@ export const searchFoods = async (req, res) => {
         if (sort === "newest") return new Date(b.createdAt) - new Date(a.createdAt);
         if (sort === "rating_desc") return (b.ratingCount || 0) - (a.ratingCount || 0);
         return 0;
-    }).slice(0, Number(limit));
+    }).slice(skip, skip + pageSize);
 
     // ── Bulk fetch support data ──────────────────────
     const { vendorMap, priceMap, portionsMap, categoryMap } = await bulkFetchItemSupport(combinedResults);
@@ -679,10 +684,17 @@ export const searchFoods = async (req, res) => {
       state: userState || "Unknown",
       count: data.length,
       total,
-      currentPage: Number(page),
-      totalPages: Math.ceil(total / Number(limit)),
+      currentPage,
+      totalPages: Math.ceil(total / pageSize),
       data,
-      vendors: vendorMatches,
+      vendors: vendorMatches.map((vendor) => ({
+        _id: vendor._id,
+        storeName: vendor.storeName,
+        logo: vendor.logo || "",
+        storeSlug: vendor.storeSlug || "",
+        rating: vendor.rating || 0,
+        address: vendor.address || {},
+      })),
     });
   } catch (err) {
     console.error("Search Error:", err);
