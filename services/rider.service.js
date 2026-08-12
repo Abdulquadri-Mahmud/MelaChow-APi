@@ -1326,59 +1326,7 @@ export const reportUndeliverable = async (orderId, riderId, reason = "") => {
         { sort: { terminatedAt: -1 } }
     );
 
-    // Notify vendor ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â can they remake?
-    // Vendor has 15 minutes to respond via their app.
-    // If no response, escalate to admin automatically.
-    try {
-        const { sendNotification } = await import("./notification.service.js");
-        await sendNotification(vendorOrder.restaurantId, "order_remake_request", {
-            orderId:      order.orderId,
-            orderDbId:    order._id,
-            reason:       reason || "Previous rider could not deliver",
-            message:      "Can you remake this order? Respond YES within 15 minutes.",
-            remakeWindow: VENDOR_REMAKE_WINDOW_MS,
-        }, "vendor");
-    } catch (e) {
-        logger.warn({ error: e.message }, "Vendor remake notify failed");
-    }
-
-    // Schedule admin escalation if vendor does not respond
-    try {
-        await disputeEscalationQueue.add(
-            "escalate-dispute",
-            { orderId: order._id.toString(), vendorOrderId: vendorOrder._id.toString() },
-            {
-                jobId:            `dispute-escalation:${order._id}`,
-                delay:            VENDOR_REMAKE_WINDOW_MS,
-                attempts:         2,
-                removeOnComplete: true,
-                removeOnFail:     false,
-            }
-    if (!order) throw new Error("Order not found");
-
-    const isAssigned =
-        order.riderId?.toString() === riderId ||
-        vendorOrder?.riderId?.toString() === riderId;
-    if (!isAssigned) throw new Error("You are not assigned to this order");
-
-    // Update order to disputed state
-    await Order.findByIdAndUpdate(order._id, {
-        $set: { orderStatus: "disputed_delivery" },
-        $push: { statusLog: {
-            status: "disputed_delivery",
-            changedBy: `rider:${riderId}`,
-            timestamp: new Date(),
-        }},
-    });
-
-    // Update termination record to disputed
-    await OrderTermination.findOneAndUpdate(
-        { orderId: order._id, status: "pending" },
-        { $set: { status: "disputed" } },
-        { sort: { terminatedAt: -1 } }
-    );
-
-    // Notify vendor ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â  can they remake?
+    // Notify vendor — can they remake?
     // Vendor has 15 minutes to respond via their app.
     // If no response, escalate to admin automatically.
     try {
@@ -1408,7 +1356,7 @@ export const reportUndeliverable = async (orderId, riderId, reason = "") => {
             }
         );
     } catch (e) {
-        logger.error({ error: e.message }, "ÃƒÂ¢Ã‚Â Ã…â€™ Dispute escalation queue failed");
+        logger.error({ error: e.message }, "Dispute escalation queue failed");
     }
 
     return { success: true, message: "Order flagged as disputed. Vendor has been notified." };
