@@ -61,6 +61,19 @@ const vendorDeliveryFeeShape = (fee) => ({
   deliveryFee: fee.deliveryFee,
 });
 
+const riderShape = (rider) => {
+  if (!rider) return null;
+  return compactObject({
+    _id: legacyId(rider),
+    name: rider.name,
+    phone: rider.phone,
+    vehicleType: rider.vehicleType,
+    vehicleOwnership: rider.vehicleOwnership,
+    avatar: rider.avatar,
+    status: rider.status,
+  });
+};
+
 const userOrderShape = (order) => {
   if (!order) return null;
   return {
@@ -82,7 +95,7 @@ const userOrderShape = (order) => {
     paymentReference: order.paymentReference,
     idempotencyKey: order.idempotencyKey,
     orderStatus: order.orderStatus,
-    riderId: order.riderId,
+    riderId: riderShape(order.rider) || order.riderId,
     riderAssignment: order.riderAssignment,
     riderEarnings: order.riderEarnings,
     statusLog: order.statusLog,
@@ -103,7 +116,7 @@ const vendorOrderShape = (vendorOrder) => ({
   escrowAmount: vendorOrder.escrowAmount,
   escrowReleased: vendorOrder.escrowReleased,
   orderStatus: vendorOrder.orderStatus,
-  riderId: vendorOrder.riderId,
+  riderId: riderShape(vendorOrder.rider) || vendorOrder.riderId,
   createdAt: vendorOrder.createdAt,
   updatedAt: vendorOrder.updatedAt,
   __v: 0,

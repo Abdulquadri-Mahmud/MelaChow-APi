@@ -776,10 +776,20 @@ export const getVendorOrders = async (req, res) => {
     const vendorOrders = await VendorOrder.find({ restaurantId: id })
       .populate({
         path: "userOrderId",
-        populate: {
-          path: "userId",
-          select: "fullName firstname lastname phone email avatar",
-        },
+        populate: [
+          {
+            path: "userId",
+            select: "fullName firstname lastname phone email avatar",
+          },
+          {
+            path: "riderId",
+            select: "name phone vehicleType vehicleOwnership avatar status location",
+          }
+        ]
+      })
+      .populate({
+        path: "riderId",
+        select: "name phone vehicleType vehicleOwnership avatar status location",
       })
       .sort({ createdAt: -1 }) // Newest first
       .lean();
@@ -861,10 +871,20 @@ export const getVendorOrderById = async (req, res) => {
     const vendorOrder = await VendorOrder.findById(vendorOrderId)
       .populate({
         path: "userOrderId",
-        populate: {
-          path: "userId",
-          select: "fullName firstname lastname phone email avatar",
-        },
+        populate: [
+          {
+            path: "userId",
+            select: "fullName firstname lastname phone email avatar",
+          },
+          {
+            path: "riderId",
+            select: "name phone vehicleType vehicleOwnership avatar status location",
+          }
+        ]
+      })
+      .populate({
+        path: "riderId",
+        select: "name phone vehicleType vehicleOwnership avatar status location",
       })
       .lean();
 
