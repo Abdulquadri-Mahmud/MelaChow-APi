@@ -11,6 +11,9 @@ import { resolveVendorLocation } from "../../../services/locationService.js";
 import { resolveBankAccount, createTransferRecipient } from "../../../services/bank.service.js";
 import ActivityLog from "../../../model/ActivityLog.js";
 import { getVendorOpenStatus } from "../../../utils/vendorOpenStatus.js";
+import VendorOrder from "../../../model/vendor/VendorOrder.js";
+import Withdrawal from "../../../model/wallet/Withdrawal.model.js";
+import Order from "../../../model/order/Order.js";
 
 const stripRecipientCode = (value) => {
   if (!value || typeof value !== "object") return value;
@@ -479,13 +482,94 @@ export const getVendor = async (req, res) => {
     if (!vendor)
       return res.status(404).json({ success: false, message: "Vendor not found" });
 
-    const menuItems = await MenuItem.find({ vendor_id: vendorId }).lean();
-    const comboItems = await ComboItem.find({ vendor_id: vendorId }).lean();
+    const [menuItems, comboItems, orderMetrics, withdrawals, recentOrders] = await Promise.all([
+      MenuItem.find({ vendor_id: vendorId }).lean(),
+      ComboItem.find({ vendor_id: vendorId }).lean(),
+      VendorOrder.aggregate([
+        { $match: { restaurantId: vendor._id } },
+        { $group: {
+          _id: null,
+          totalOrders: { $sum: 1 },
+          completedOrders: { $sum: { $cond: [{ $in: ["$orderStatus", ["delivered", "completed"]] }, 1, 0] } },
+          activeOrders: { $sum: { $cond: [{ $in: ["$orderStatus", ["accepted", "preparing", "ready_for_pickup", "rider_assigned", "out_for_delivery"]] }, 1, 0] } },
+          cancelledOrders: { $sum: { $cond: [{ $eq: ["$orderStatus", "cancelled"] }, 1, 0] } },
+          grossSales: { $sum: { $add: [{ $ifNull: ["$vendorTotal", 0] }, { $ifNull: ["$commission", 0] }] } },
+          commission: { $sum: { $ifNull: ["$commission", 0] } },
+          escrowHeld: { $sum: { $cond: [{ $eq: ["$escrowReleased", false] }, { $ifNull: ["$escrowAmount", 0] }, 0] } },
+          escrowReleased: { $sum: { $cond: [{ $eq: ["$escrowReleased", true] }, { $ifNull: ["$escrowAmount", 0] }, 0] } },
+        } },
+      ]),
+      Withdrawal.aggregate([
+        { $match: { vendorId: vendor._id } },
+        { $group: {
+          _id: null,
+          paidOut: { $sum: { $cond: [{ $eq: ["$status", "completed"] }, { $ifNull: ["$netAmount", 0] }, 0] } },
+          pendingPayout: { $sum: { $cond: [{ $in: ["$status", ["pending", "processing"]] }, { $ifNull: ["$requestedAmount", 0] }, 0] } },
+          payoutCount: { $sum: { $cond: [{ $eq: ["$status", "completed"] }, 1, 0] } },
+        } },
+      ]),
+      VendorOrder.find({ restaurantId: vendor._id })
+        .sort({ updatedAt: -1 }).limit(5)
+        .populate("userOrderId", "orderId paymentStatus total createdAt")
+        .select("orderStatus vendorTotal escrowAmount escrowReleased updatedAt userOrderId").lean(),
+    ]);
     
     // We convert to plain object to attach new arrays
     const vendorObj = stripRecipientCode(vendor);
     vendorObj.menuItems = menuItems;
     vendorObj.comboItems = comboItems;
+    let metrics = orderMetrics[0] || {};
+    const payout = withdrawals[0] || {};
+    let recentOrderHistory = recentOrders;
+    let historySource = "vendor_orders";
+
+    // Some older orders incremented vendor.totalOrders/totalSales before the
+    // VendorOrder settlement record was introduced. Retain their operational
+    // history instead of showing an incorrect all-zero profile. Escrow and
+    // payout values remain unavailable for these legacy records because there
+    // is no settlement trail to audit.
+    if (!metrics.totalOrders && vendor.totalOrders > 0) {
+      const legacyOrders = await Order.find({ "items.restaurantId": vendor._id })
+        .sort({ updatedAt: -1 }).limit(5)
+        .select("orderId orderStatus paymentStatus total createdAt updatedAt").lean();
+      const statuses = legacyOrders.reduce((count, order) => {
+        count[order.orderStatus] = (count[order.orderStatus] || 0) + 1;
+        return count;
+      }, {});
+      metrics = {
+        totalOrders: vendor.totalOrders,
+        completedOrders: (statuses.delivered || 0) + (statuses.completed || 0),
+        activeOrders: (statuses.accepted || 0) + (statuses.preparing || 0) + (statuses.ready_for_pickup || 0) + (statuses.rider_assigned || 0) + (statuses.out_for_delivery || 0),
+        cancelledOrders: statuses.cancelled || 0,
+        grossSales: vendor.totalSales || 0,
+      };
+      recentOrderHistory = legacyOrders.map((order) => ({
+        _id: order._id,
+        orderStatus: order.orderStatus,
+        vendorTotal: null,
+        escrowAmount: null,
+        escrowReleased: null,
+        updatedAt: order.updatedAt,
+        userOrderId: { orderId: order.orderId, paymentStatus: order.paymentStatus, total: order.total },
+      }));
+      historySource = "legacy_orders";
+    }
+    vendorObj.adminOverview = {
+      totalOrders: metrics.totalOrders || 0,
+      completedOrders: metrics.completedOrders || 0,
+      activeOrders: metrics.activeOrders || 0,
+      cancelledOrders: metrics.cancelledOrders || 0,
+      grossSales: metrics.grossSales || 0,
+      commission: metrics.commission || 0,
+      escrowHeld: metrics.escrowHeld || 0,
+      escrowReleased: metrics.escrowReleased || 0,
+      walletBalance: vendor.wallet?.balance || 0,
+      paidOut: payout.paidOut || 0,
+      pendingPayout: payout.pendingPayout || 0,
+      payoutCount: payout.payoutCount || 0,
+      recentOrders: recentOrderHistory,
+      historySource,
+    };
 
     res.json({ success: true, vendor: vendorObj });
   } catch (err) {

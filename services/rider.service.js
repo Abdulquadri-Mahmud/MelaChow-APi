@@ -606,7 +606,10 @@ export const markDelivered = async (orderId, riderId) => {
         }
 
         const platformConfig = await getPlatformConfig();
-        const deliveryFee = platformConfig.riderFixedPayout ?? RIDER_FIXED_PAYOUT;
+        // The spread is based on what the customer was charged for delivery,
+        // not on the rider's fixed payout. Using the payout here made a ₦1,000
+        // delivery with an ₦800 rider payout report ₦0 instead of ₦200.
+        const deliveryFee = Number(order.deliveryFee || 0);
 
         let riderEarningsToRecord = 0;
         let riderPayout = 0;
