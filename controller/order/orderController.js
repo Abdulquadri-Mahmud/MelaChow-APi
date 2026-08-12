@@ -1400,10 +1400,20 @@ export const getVendorOrders = async (req, res) => {
       .sort({ createdAt: -1 })
       .populate({
         path: "userOrderId",
-        populate: {
-          path: "userId",
-          select: "firstname lastname email phone"
-        }
+        populate: [
+          {
+            path: "userId",
+            select: "firstname lastname email phone"
+          },
+          {
+            path: "riderId",
+            select: "name phone vehicleType vehicleOwnership avatar status location"
+          }
+        ]
+      })
+      .populate({
+        path: "riderId",
+        select: "name phone vehicleType vehicleOwnership avatar status location"
       })
       // Populate food item details for regular items
       .populate({
@@ -1433,10 +1443,20 @@ export const getVendorOrdersByStatus = async (req, res) => {
       .sort({ createdAt: -1 })
       .populate({
         path: "userOrderId",
-        populate: {
-          path: "userId",
-          select: "firstname lastname email phone"
-        }
+        populate: [
+          {
+            path: "userId",
+            select: "firstname lastname email phone"
+          },
+          {
+            path: "riderId",
+            select: "name phone vehicleType vehicleOwnership avatar status location"
+          }
+        ]
+      })
+      .populate({
+        path: "riderId",
+        select: "name phone vehicleType vehicleOwnership avatar status location"
       })
       // Populate food item details for regular items
       .populate({

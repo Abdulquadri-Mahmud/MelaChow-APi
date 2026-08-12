@@ -1115,82 +1115,6 @@ export const adminApproveRider = async (riderId, adminId) => {
     if (!rider.isActive || rider.deletedAt) throw new Error("Cannot approve an inactive rider");
     if (!rider.cityId || !rider.stateId) throw new Error("Assign the rider's state and city before approval");
 
-    rider.isVerified = true;
-    rider.locationStatus = "approved";
-    rider.requestedState = "";
-    rider.requestedCity = "";
-    rider.approvedAt = new Date();
-    rider.approvedBy = adminId || null;
-    await rider.save();
-    return rider.getPublicProfile();
-};
-
-export const getAssignmentHistory = async (filters = {}) => {
-    const query = {};
-    if (filters.riderId) query.riderId = filters.riderId;
-    if (filters.orderId) query.orderId = filters.orderId;
-    if (filters.status) query.status = filters.status;
-    if (filters.cityId) query.cityId = filters.cityId;
-    return RiderAssignment.find(query)
-        .populate("riderId", "name phone status cityId stateId")
-        .populate("vendorId", "storeName")
-        .populate("cityId", "name")
-        .populate("stateId", "name")
-        .sort({ createdAt: -1 })
-        .limit(Number(filters.limit || 100));
-};
-
-export const adminDeactivateRider = async (riderId) => {
-    const rider = await Rider.findById(riderId);
-    if (!rider) throw new Error("Rider not found");
-    if (rider.currentOrderId) throw new Error("Cannot deactivate rider mid-delivery");
-    rider.isActive = false;
-    rider.deletedAt = new Date();
-    return rider.save();
-};
-
-export const getRiderWallet = async (riderId) => {
-    let wallet = await Wallet.findOne({ ownerId: riderId, ownerModel: "Rider" });
-    if (!wallet) {
-        wallet = await Wallet.create({
-            ownerId: riderId,
-            ownerModel: "Rider",
-            balance: 0,
-            transactions: []
-        });
-    }
-    return wallet;
-};
-
-export const getRiderHistorySummary = async (riderId, filters = {}) => {
-    const rider = await Rider.findById(riderId).populate('cityId stateId');
-    if (!rider) throw new Error('Rider not found');
-
-    const config = await getPlatformConfig();
-    // payoutHour must always come from platform config ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never from caller input.
-    // A rider passing ?payoutHour=0 must not be able to shift financial window calculations.
-    const payoutHour = Number(config.riderPayoutHour ?? 10);
-    const now = new Date();
-    const todayStart = new Date(now);
-    todayStart.setHours(0, 0, 0, 0);
-
-    const payoutCutoff = new Date(todayStart);
-    payoutCutoff.setHours(payoutHour, 0, 0, 0);
-
-    const nextPayout = new Date(payoutCutoff);
-    if (now >= payoutCutoff) {
-        nextPayout.setDate(nextPayout.getDate() + 1);
-    }
-
-    const wallet = await Wallet.findOne({ ownerId: riderId, ownerModel: 'Rider' }).lean();
-    const transactions = wallet?.transactions || [];
-
-    const payoutsToday = transactions.filter((tx) =>
-        tx.transactionType === 'rider_payout' &&
-        new Date(tx.date) >= todayStart &&
-        new Date(tx.date) <= now
-    );
-
     const payoutsBeforeCutoff = payoutsToday.filter((tx) => new Date(tx.date) < payoutCutoff);
     const ridesBeforePayout = new Set(payoutsBeforeCutoff.map((tx) => tx.orderId?.toString())).size;
     const earningsBeforePayout = payoutsBeforeCutoff.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
@@ -1430,10 +1354,258 @@ export const reportUndeliverable = async (orderId, riderId, reason = "") => {
                 removeOnComplete: true,
                 removeOnFail:     false,
             }
+    if (!order) throw new Error("Order not found");
+
+    const isAssigned =
+        order.riderId?.toString() === riderId ||
+        vendorOrder?.riderId?.toString() === riderId;
+    if (!isAssigned) throw new Error("You are not assigned to this order");
+
+    // Update order to disputed state
+    await Order.findByIdAndUpdate(order._id, {
+        $set: { orderStatus: "disputed_delivery" },
+        $push: { statusLog: {
+            status: "disputed_delivery",
+            changedBy: `rider:${riderId}`,
+            timestamp: new Date(),
+        }},
+    });
+
+    // Update termination record to disputed
+    await OrderTermination.findOneAndUpdate(
+        { orderId: order._id, status: "pending" },
+        { $set: { status: "disputed" } },
+        { sort: { terminatedAt: -1 } }
+    );
+
+    // Notify vendor ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â  can they remake?
+    // Vendor has 15 minutes to respond via their app.
+    // If no response, escalate to admin automatically.
+    try {
+        const { sendNotification } = await import("./notification.service.js");
+        await sendNotification(vendorOrder.restaurantId, "order_remake_request", {
+            orderId:      order.orderId,
+            orderDbId:    order._id,
+            reason:       reason || "Previous rider could not deliver",
+            message:      "Can you remake this order? Respond YES within 15 minutes.",
+            remakeWindow: VENDOR_REMAKE_WINDOW_MS,
+        }, "vendor");
+    } catch (e) {
+        logger.warn({ error: e.message }, "Vendor remake notify failed");
+    }
+
+    // Schedule admin escalation if vendor does not respond
+    try {
+        await disputeEscalationQueue.add(
+            "escalate-dispute",
+            { orderId: order._id.toString(), vendorOrderId: vendorOrder._id.toString() },
+            {
+                jobId:            `dispute-escalation:${order._id}`,
+                delay:            VENDOR_REMAKE_WINDOW_MS,
+                attempts:         2,
+                removeOnComplete: true,
+                removeOnFail:     false,
+            }
         );
     } catch (e) {
-        logger.error({ error: e.message }, "ÃƒÂ¢Ã‚ÂÃ…â€™ Dispute escalation queue failed");
+        logger.error({ error: e.message }, "ÃƒÂ¢Ã‚Â Ã…â€™ Dispute escalation queue failed");
     }
 
     return { success: true, message: "Order flagged as disputed. Vendor has been notified." };
+};
+
+function calculateHaversineDistanceKm(lat1, lon1, lat2, lon2) {
+    if (!lat1 || !lon1 || !lat2 || !lon2) return 2.4; // Fallback default estimate in km
+    const R = 6371; // Earth radius in km
+    const dLat = ((lat2 - lat1) * Math.PI) / 180;
+    const dLon = ((lon2 - lon1) * Math.PI) / 180;
+    const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos((lat1 * Math.PI) / 180) *
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return Number((R * c).toFixed(2));
+}
+
+function calculateDeliveryDurationMins(order) {
+    const statusLog = order.statusLog || [];
+    const pickedUpLog = statusLog.find((l) => ["out_for_delivery", "picked_up", "preparing"].includes(l.status));
+    const deliveredLog = statusLog.find((l) => ["delivered", "completed"].includes(l.status));
+
+    const startTime = pickedUpLog?.timestamp || order.riderAssignment?.acceptedAt || order.riderAssignment?.assignedAt || order.createdAt;
+    const endTime = deliveredLog?.timestamp || order.updatedAt;
+
+    if (startTime && endTime && new Date(endTime) > new Date(startTime)) {
+        const diffMs = new Date(endTime) - new Date(startTime);
+        return Math.max(1, Math.round(diffMs / 60000));
+    }
+    return 14; // Default fallback estimation
+}
+
+export const getRiderHistorySummary = async (riderId, filters = {}) => {
+    const isAllRiders = !riderId || riderId === "all" || riderId === "overview";
+    let rider = null;
+
+    if (!isAllRiders) {
+        rider = await Rider.findById(riderId).populate('cityId stateId');
+        if (!rider) throw new Error('Rider not found');
+    }
+
+    const config = await getPlatformConfig();
+    const payoutHour = Number(config.riderPayoutHour ?? 10);
+    const now = new Date();
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
+
+    const payoutCutoff = new Date(todayStart);
+    payoutCutoff.setHours(payoutHour, 0, 0, 0);
+
+    const nextPayout = new Date(payoutCutoff);
+    if (now >= payoutCutoff) {
+        nextPayout.setDate(nextPayout.getDate() + 1);
+    }
+
+    // Query orders for this rider or all riders
+    const orderQuery = isAllRiders ? { riderId: { $ne: null } } : { riderId };
+    
+    // Optional date filtering
+    if (filters.startDate || filters.endDate) {
+        orderQuery.createdAt = {};
+        if (filters.startDate) orderQuery.createdAt.$gte = new Date(filters.startDate);
+        if (filters.endDate) orderQuery.createdAt.$lte = new Date(filters.endDate);
+    }
+
+    const orders = await Order.find(orderQuery)
+        .populate('riderId', 'name phone vehicleType vehicleOwnership')
+        .populate('items.restaurantId', 'storeName address location')
+        .sort({ createdAt: -1 })
+        .limit(200)
+        .lean();
+
+    // Map each order with calculated distance (km) and delivery duration (mins)
+    const deliveries = orders.map((order) => {
+        const vendor = order.items?.[0]?.restaurantId || {};
+        const vendorLat = vendor.location?.coordinates?.[1] || vendor.location?.lat;
+        const vendorLng = vendor.location?.coordinates?.[0] || vendor.location?.lng;
+        
+        const destLat = order.deliveryAddress?.coordinates?.lat;
+        const destLng = order.deliveryAddress?.coordinates?.lng;
+
+        const distanceKm = calculateHaversineDistanceKm(vendorLat, vendorLng, destLat, destLng);
+        const durationMins = calculateDeliveryDurationMins(order);
+
+        const statusLog = order.statusLog || [];
+        const assignedLog = statusLog.find((l) => l.status === "rider_assigned") || order.riderAssignment;
+        const pickedUpLog = statusLog.find((l) => ["out_for_delivery", "picked_up"].includes(l.status));
+        const deliveredLog = statusLog.find((l) => ["delivered", "completed"].includes(l.status));
+
+        const orderRider = order.riderId || rider;
+
+        return {
+            _id: order._id,
+            orderId: order.orderId,
+            orderStatus: order.orderStatus,
+            distanceKm,
+            durationMins,
+            earningsNaira: order.riderEarnings || order.deliveryFee || 600,
+            customer: {
+                name: order.deliveryAddress?.name || order.phone || "Customer",
+                phone: order.phone || "N/A",
+                address: order.deliveryAddress?.addressLine || order.deliveryAddress?.address || "Address unavailable",
+                city: order.deliveryAddress?.cityName || order.city || "",
+            },
+            vendor: {
+                id: vendor._id,
+                storeName: vendor.storeName || order.items?.[0]?.storeName || "Restaurant Vendor",
+                address: vendor.address?.addressLine || vendor.address || "Restaurant Address",
+            },
+            rider: {
+                id: orderRider?._id || orderRider,
+                name: orderRider?.name || "Unassigned Rider",
+                phone: orderRider?.phone || "N/A",
+                vehicleType: orderRider?.vehicleType || "motorbike",
+            },
+            timestamps: {
+                created: order.createdAt,
+                assigned: assignedLog?.timestamp || order.riderAssignment?.assignedAt || order.createdAt,
+                pickedUp: pickedUpLog?.timestamp || order.riderAssignment?.acceptedAt || null,
+                delivered: deliveredLog?.timestamp || order.updatedAt,
+            },
+        };
+    });
+
+    const completedDeliveries = deliveries.filter((d) => ["delivered", "completed"].includes(d.orderStatus));
+    
+    // Aggregated performance statistics
+    const totalDistanceKm = Number(
+        completedDeliveries.reduce((sum, d) => sum + d.distanceKm, 0).toFixed(2)
+    );
+    const totalDurationMins = completedDeliveries.reduce((sum, d) => sum + d.durationMins, 0);
+    const avgDurationMins = completedDeliveries.length > 0
+        ? Math.round(totalDurationMins / completedDeliveries.length)
+        : 0;
+    const avgDistanceKm = completedDeliveries.length > 0
+        ? Number((totalDistanceKm / completedDeliveries.length).toFixed(2))
+        : 0;
+    const fastestDeliveryMins = completedDeliveries.length > 0
+        ? Math.min(...completedDeliveries.map((d) => d.durationMins))
+        : 0;
+    const slowestDeliveryMins = completedDeliveries.length > 0
+        ? Math.max(...completedDeliveries.map((d) => d.durationMins))
+        : 0;
+    const totalEarningsNaira = completedDeliveries.reduce((sum, d) => sum + d.earningsNaira, 0);
+    const completionRatePct = deliveries.length > 0
+        ? Math.round((completedDeliveries.length / deliveries.length) * 100)
+        : 100;
+
+    // Financial Wallet & Payout transactions
+    let walletTransactions = [];
+    if (rider?._id) {
+        const wallet = await Wallet.findOne({ ownerId: rider._id, ownerModel: 'Rider' }).lean();
+        walletTransactions = (wallet?.transactions || []).filter((tx) =>
+            tx.transactionType === 'rider_payout' &&
+            new Date(tx.date) >= todayStart &&
+            new Date(tx.date) <= now
+        );
+    }
+
+    const payoutsBeforeCutoff = walletTransactions.filter((tx) => new Date(tx.date) < payoutCutoff);
+    const ridesBeforePayout = new Set(payoutsBeforeCutoff.map((tx) => tx.orderId?.toString())).size;
+    const earningsBeforePayout = payoutsBeforeCutoff.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
+
+    const payoutsAfterCutoff = walletTransactions.filter((tx) => new Date(tx.date) >= payoutCutoff);
+    const ridesAfterCutoff = new Set(payoutsAfterCutoff.map((tx) => tx.orderId?.toString())).size;
+    const earningsAfterCutoff = payoutsAfterCutoff.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
+
+    return {
+        rider: rider ? (rider.getPublicProfile ? rider.getPublicProfile() : rider) : { _id: "all", name: "All Fleet Personnel" },
+        payoutHour,
+        payoutCutoff,
+        nextPayout,
+        analytics: {
+            totalOrders: deliveries.length,
+            completedOrders: completedDeliveries.length,
+            totalDistanceKm,
+            avgDistanceKm,
+            avgDurationMins,
+            fastestDeliveryMins,
+            slowestDeliveryMins,
+            completionRatePct,
+            totalEarningsNaira,
+        },
+        deliveries,
+        earnings: {
+            totalToday: walletTransactions.reduce((sum, tx) => sum + Number(tx.amount || 0), 0),
+            beforePayout: earningsBeforePayout,
+            afterPayout: earningsAfterCutoff,
+        },
+        rides: {
+            today: new Set(walletTransactions.map((tx) => tx.orderId?.toString())).size,
+            beforePayout: ridesBeforePayout,
+            afterPayout: ridesAfterCutoff,
+        },
+        transactions: walletTransactions.sort((a, b) => new Date(b.date) - new Date(a.date)),
+    };
 };
