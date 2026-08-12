@@ -56,6 +56,10 @@ const getEstimatedRiderTransferFeeCost = async (dayStart, dayEnd) => {
 
 const getPaymentRecoveryState = (order, vendorOrderCount = 0) => {
     if (!order) return "missing_order";
+    // A successful provider charge that was subsequently refunded is settled,
+    // not fulfilled. VendorOrder documents are retained as an audit trail, so
+    // their mere existence must never reclassify a cancelled/refunded order.
+    if (order.paymentStatus === "refunded" || order.orderStatus === "cancelled") return "refunded";
     if (order.paymentStatus === "paid" && vendorOrderCount > 0) return "fulfilled";
     if (order.paymentStatus === "paid" && vendorOrderCount === 0) return "fulfillment_missing";
     if (order.paymentStatus === "pending" && order.paymentReference) return "awaiting_verification";
@@ -712,6 +716,8 @@ export const getUnreleasedEscrowList = async (req, res) => {
 
         const matchStage = {
             "parentOrder.paymentStatus": "paid",
+            "parentOrder.orderStatus": { $nin: ["cancelled", "failed"] },
+            orderStatus: { $nin: ["cancelled", "failed", "refunded"] },
             escrowReleased: false
         };
 
@@ -1133,6 +1139,19 @@ export const reconcilePaymentReference = async (req, res) => {
         }
 
         let recovered = { order, createdVendorOrders: false, vendorOrderCount: await VendorOrder.countDocuments({ userOrderId: order._id }) };
+
+        // A charge can be valid at Paystack but already refunded locally after
+        // an automatic cancellation. Never resurrect it during reconciliation.
+        if (order.paymentStatus === "refunded" || order.orderStatus === "cancelled") {
+            return res.status(200).json({
+                success: true,
+                message: "Payment was already refunded after cancellation. No fulfillment recovery was performed.",
+                order,
+                paystack: paystack ? { status: paystack.status, reference: paystack.reference, paid_at: paystack.paid_at, amount: paystack.amount ? paystack.amount / 100 : null } : null,
+                vendorOrderCount: recovered.vendorOrderCount,
+                recoveryState: "refunded",
+            });
+        }
 
         if (paystack?.status === "success" && order.paymentStatus !== "paid") {
             try {
