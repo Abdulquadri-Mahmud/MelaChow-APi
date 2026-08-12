@@ -1451,6 +1451,21 @@ export const getRiderHistorySummary = async (riderId, filters = {}) => {
 
         const orderRider = order.riderId || rider;
 
+        const formatAddressString = (addr) => {
+            if (!addr) return "Address unavailable";
+            if (typeof addr === "string") return addr;
+            if (typeof addr === "object") {
+                const parts = [
+                    addr.addressLine || addr.street || addr.line1 || addr.address,
+                    addr.city || addr.cityName,
+                    addr.state || addr.stateName,
+                    addr.postalCode
+                ].filter(Boolean);
+                return parts.length > 0 ? parts.join(", ") : "Address unavailable";
+            }
+            return String(addr);
+        };
+
         return {
             _id: order._id,
             orderId: order.orderId,
@@ -1461,13 +1476,13 @@ export const getRiderHistorySummary = async (riderId, filters = {}) => {
             customer: {
                 name: order.deliveryAddress?.name || order.phone || "Customer",
                 phone: order.phone || "N/A",
-                address: order.deliveryAddress?.addressLine || order.deliveryAddress?.address || "Address unavailable",
+                address: formatAddressString(order.deliveryAddress?.addressLine || order.deliveryAddress),
                 city: order.deliveryAddress?.cityName || order.city || "",
             },
             vendor: {
                 id: vendor._id,
                 storeName: vendor.storeName || order.items?.[0]?.storeName || "Restaurant Vendor",
-                address: vendor.address?.addressLine || vendor.address || "Restaurant Address",
+                address: formatAddressString(vendor.address?.addressLine || vendor.address),
             },
             rider: {
                 id: orderRider?._id || orderRider,
