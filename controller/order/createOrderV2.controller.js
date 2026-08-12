@@ -125,6 +125,31 @@ async function notifyPaidOrderVendors({ order, restaurantIds, vendorOrderMapping
   }
 }
 
+// Called only after a Paystack payment has been atomically fulfilled. Keeping
+// this beside the vendor notification flow ensures browser verification and the
+// Paystack webhook produce the same super-admin alert.
+async function notifyPaidOrderAdmins({ order, restaurantIds, totalAmount }) {
+  try {
+    const { notifyAdmins, sendSuperAdminOrderEmail } = await import("../../services/notification.service.js");
+    const vendors = await Vendor.find({ _id: { $in: restaurantIds } }).select("storeName");
+    const restaurantNames = vendors.map((vendor) => vendor.storeName).join(", ");
+
+    await notifyAdmins("admin_new_order", {
+      orderId: order.orderId,
+      orderDatabaseId: order._id,
+      restaurantName: restaurantNames,
+      totalAmount,
+      paymentMethod: "paystack",
+      paymentStatus: "paid",
+    });
+    await sendSuperAdminOrderEmail(order, restaurantNames);
+    logger.info({ orderId: order.orderId }, "Super-admin notification queued after Paystack verification");
+  } catch (error) {
+    // An email or push outage must never roll back a verified payment.
+    logger.error({ orderId: order.orderId, error: error.message }, "Super-admin payment notification failed");
+  }
+}
+
 /**
  * ========================================
  * HELPER: Validate MenuItem Availability
@@ -2153,6 +2178,12 @@ export const updateOrderAfterPayment = async (orderId, paymentReference) => {
             vendorOrderMapping,
             items: order.items,
             totalAmount: order.total
+        });
+
+        await notifyPaidOrderAdmins({
+            order,
+            restaurantIds: [...new Set(order.items.map(item => String(item.restaurantId)))],
+            totalAmount: order.total,
         });
 
         return order;

@@ -483,7 +483,13 @@ export const getCommissionLedger = async (req, res) => {
         const skip = (parseInt(page) - 1) * parseInt(limit);
         const platformConfig = await getPlatformConfig();
 
-        const dateFilter = { paymentStatus: "paid" };
+        // Delivery spread is earned only after a delivery has been completed. A paid
+        // order can still be cancelled and refunded, so it must never appear in this
+        // revenue ledger merely because payment was initially successful.
+        const dateFilter = {
+            paymentStatus: "paid",
+            orderStatus: { $in: ["delivered", "completed"] }
+        };
         if (startDate || endDate) {
             dateFilter.createdAt = {};
             if (startDate) dateFilter.createdAt.$gte = new Date(startDate);

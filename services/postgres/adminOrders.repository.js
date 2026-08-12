@@ -399,7 +399,13 @@ const buildPlatformOrderWhere = ({ status, statusGroup } = {}) => {
 };
 
 const buildCommissionLedgerWhere = ({ startDate, endDate } = {}) => {
-  const where = { paymentStatus: "paid" };
+  // Keep parity with the Mongo ledger: revenue from delivery can only be
+  // recognised once the delivery itself is complete. This also keeps paid but
+  // later-cancelled/refunded orders out of delivery-profit reporting.
+  const where = {
+    paymentStatus: "paid",
+    orderStatus: { in: ["delivered", "completed"] },
+  };
 
   if (startDate || endDate) {
     where.createdAt = {};
