@@ -103,4 +103,13 @@ describe('OTP Delivery Confirmation', () => {
         expect(updatedRider.status).toBe('available');
         expect(updatedRider.currentOrderId).toBeNull();
     });
+
+    it('should retrieve rider wallet via getRiderWallet service', async () => {
+        const { getRiderWallet } = await import('../../services/rider.service.js');
+        const wallet = await getRiderWallet(rider._id.toString());
+        expect(wallet).toBeDefined();
+        expect(wallet.ownerId.toString()).toBe(rider._id.toString());
+        expect(wallet.ownerModel).toBe('Rider');
+    });
 });
+
