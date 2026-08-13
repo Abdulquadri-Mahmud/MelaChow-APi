@@ -1572,3 +1572,48 @@ export const getRiderHistorySummary = async (riderId, filters = {}) => {
         transactions: walletTransactions.sort((a, b) => new Date(b.date) - new Date(a.date)),
     };
 };
+
+/**
+ * Get or initialize a rider's financial wallet
+ */
+export const getRiderWallet = async (riderId) => {
+    let wallet = await Wallet.findOne({ ownerId: riderId, ownerModel: "Rider" });
+    if (!wallet) {
+        wallet = await Wallet.create({
+            ownerId: riderId,
+            ownerModel: "Rider",
+            balance: 0,
+            transactions: [],
+        });
+    }
+    return wallet;
+};
+
+/**
+ * Get rider assignment history
+ */
+export const getAssignmentHistory = async (filters = {}) => {
+    const query = {};
+    if (filters.riderId) query.riderId = filters.riderId;
+    if (filters.status) query.status = filters.status;
+    return await RiderAssignment.find(query)
+        .sort({ createdAt: -1 })
+        .populate("orderId", "orderId status deliveryAddress totalAmount")
+        .populate("riderId", "name phone vehicleType")
+        .populate("vendorId", "restaurantName address");
+};
+
+/**
+ * Admin deactivates a rider
+ */
+export const adminDeactivateRider = async (riderId) => {
+    const rider = await Rider.findById(riderId);
+    if (!rider) {
+        throwHttpError("Rider not found", 404);
+    }
+    rider.isActive = false;
+    rider.status = "off-duty";
+    await rider.save();
+    return rider;
+};
+
