@@ -29,6 +29,12 @@ const adminSchema = new mongoose.Schema(
     otp: { type: String, select: false },
     otpExpires: { type: Date, select: false },
 
+    // Separate from password-recovery OTPs so login MFA cannot interfere with
+    // the reset-password flow. Only a SHA-256 digest is stored.
+    loginOtpHash: { type: String, select: false },
+    loginOtpExpires: { type: Date, select: false },
+    loginOtpAttempts: { type: Number, default: 0, select: false },
+
     wallet: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Wallet",
