@@ -5,6 +5,7 @@ import { sendAuthCookies } from '../../utils/sendTokenCookie.js';
 import jwt from "jsonwebtoken";
 import { blockToken } from "../../middleware/tokenBlocklist.js";
 import crypto from "crypto";
+import ActivityLog from "../../model/ActivityLog.js";
 
 const hashLoginOtp = (otp) => crypto.createHash("sha256").update(String(otp)).digest("hex");
 const signMfaChallenge = (admin) => jwt.sign(
@@ -12,6 +13,41 @@ const signMfaChallenge = (admin) => jwt.sign(
     process.env.JWT_SECRET,
     { expiresIn: "10m" }
 );
+
+const headerValue = (req, name) => String(req.get(name) || '').trim();
+const decodeHeader = (value) => {
+    try { return decodeURIComponent(value); } catch { return value; }
+};
+const describeDevice = (userAgent = '') => {
+    const os = /Android/i.test(userAgent) ? 'Android' : /iPhone|iPad|iPod/i.test(userAgent) ? 'iOS' : /Windows/i.test(userAgent) ? 'Windows' : /Mac OS X/i.test(userAgent) ? 'macOS' : /Linux/i.test(userAgent) ? 'Linux' : 'Unknown OS';
+    const browser = /Edg\//i.test(userAgent) ? 'Edge' : /CriOS|Chrome\//i.test(userAgent) ? 'Chrome' : /FxiOS|Firefox\//i.test(userAgent) ? 'Firefox' : /Safari\//i.test(userAgent) ? 'Safari' : 'Unknown browser';
+    const type = /Mobile|Android|iPhone|iPad/i.test(userAgent) ? 'Mobile' : 'Desktop';
+    return { type, os, browser, label: `${type} · ${os} · ${browser}` };
+};
+const getLoginContext = (req) => {
+    const forwarded = headerValue(req, 'x-forwarded-for').split(',')[0]?.trim();
+    const userAgent = headerValue(req, 'user-agent').slice(0, 500);
+    const city = decodeHeader(headerValue(req, 'x-vercel-ip-city') || headerValue(req, 'cf-ipcity'));
+    const region = decodeHeader(headerValue(req, 'x-vercel-ip-country-region') || headerValue(req, 'cf-region'));
+    const country = headerValue(req, 'x-vercel-ip-country') || headerValue(req, 'cf-ipcountry');
+    const latitude = headerValue(req, 'x-vercel-ip-latitude');
+    const longitude = headerValue(req, 'x-vercel-ip-longitude');
+    const locationParts = [city, region, country].filter(Boolean);
+    return {
+        ipAddress: forwarded || req.ip || req.socket?.remoteAddress || 'unknown',
+        userAgent,
+        device: describeDevice(userAgent),
+        location: {
+            city: city || null,
+            region: region || null,
+            country: country || null,
+            latitude: latitude || null,
+            longitude: longitude || null,
+            label: locationParts.join(', ') || 'Location unavailable',
+            source: locationParts.length ? 'trusted-edge-headers' : 'unavailable',
+        },
+    };
+};
 
 // ============================================
 // ADMIN LOGIN (Email + Password)
@@ -138,6 +174,25 @@ export const verifyAdminLoginOtp = async (req, res) => {
         admin.loginOtpAttempts = 0;
         admin.lastLogin = new Date();
         await admin.save();
+
+        const loginContext = getLoginContext(req);
+        // Fail closed: a super-admin session must never be issued without its
+        // permanent security audit record being written successfully.
+        await ActivityLog.create({
+            adminId: admin._id,
+            action: 'LOGIN',
+            targetType: 'Admin',
+            targetId: admin._id,
+            details: `Super-admin login verified from ${loginContext.device.label}; ${loginContext.location.label}`,
+            ipAddress: loginContext.ipAddress,
+            userAgent: loginContext.userAgent,
+            metadata: {
+                authentication: 'password+email-otp',
+                device: loginContext.device,
+                location: loginContext.location,
+                requestId: req.id || req.headers['x-request-id'] || null,
+            },
+        });
 
         const accessToken = generateAccessToken(admin._id, admin.role);
         const refreshToken = generateRefreshToken(admin._id, admin.role);
