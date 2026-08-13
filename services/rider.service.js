@@ -1523,22 +1523,26 @@ export const getRiderHistorySummary = async (riderId, filters = {}) => {
         ? Math.round((completedDeliveries.length / deliveries.length) * 100)
         : 100;
 
-    // Financial Wallet & Payout transactions
+    // Complete wallet ledger: earnings, adjustments, and bank disbursements.
     let walletTransactions = [];
     if (rider?._id) {
         const wallet = await Wallet.findOne({ ownerId: rider._id, ownerModel: 'Rider' }).lean();
-        walletTransactions = (wallet?.transactions || []).filter((tx) =>
-            tx.transactionType === 'rider_payout' &&
-            new Date(tx.date) >= todayStart &&
-            new Date(tx.date) <= now
-        );
+        walletTransactions = (wallet?.transactions || []).map((tx) => ({ ...tx, riderId: rider._id, riderName: rider.name }));
+    } else {
+        const wallets = await Wallet.find({ ownerModel: 'Rider' }).populate('ownerId', 'name phone').select('ownerId transactions').lean();
+        walletTransactions = wallets.flatMap((wallet) => (wallet.transactions || []).map((tx) => ({
+            ...tx,
+            riderId: wallet.ownerId?._id || wallet.ownerId,
+            riderName: wallet.ownerId?.name || 'Rider',
+        })));
     }
 
-    const payoutsBeforeCutoff = walletTransactions.filter((tx) => new Date(tx.date) < payoutCutoff);
+    const todayEarnings = walletTransactions.filter((tx) => tx.transactionType === 'rider_payout' && new Date(tx.date) >= todayStart && new Date(tx.date) <= now);
+    const payoutsBeforeCutoff = todayEarnings.filter((tx) => new Date(tx.date) < payoutCutoff);
     const ridesBeforePayout = new Set(payoutsBeforeCutoff.map((tx) => tx.orderId?.toString())).size;
     const earningsBeforePayout = payoutsBeforeCutoff.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
 
-    const payoutsAfterCutoff = walletTransactions.filter((tx) => new Date(tx.date) >= payoutCutoff);
+    const payoutsAfterCutoff = todayEarnings.filter((tx) => new Date(tx.date) >= payoutCutoff);
     const ridesAfterCutoff = new Set(payoutsAfterCutoff.map((tx) => tx.orderId?.toString())).size;
     const earningsAfterCutoff = payoutsAfterCutoff.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
 
@@ -1560,16 +1564,16 @@ export const getRiderHistorySummary = async (riderId, filters = {}) => {
         },
         deliveries,
         earnings: {
-            totalToday: walletTransactions.reduce((sum, tx) => sum + Number(tx.amount || 0), 0),
+            totalToday: todayEarnings.reduce((sum, tx) => sum + Number(tx.amount || 0), 0),
             beforePayout: earningsBeforePayout,
             afterPayout: earningsAfterCutoff,
         },
         rides: {
-            today: new Set(walletTransactions.map((tx) => tx.orderId?.toString())).size,
+            today: new Set(todayEarnings.map((tx) => tx.orderId?.toString())).size,
             beforePayout: ridesBeforePayout,
             afterPayout: ridesAfterCutoff,
         },
-        transactions: walletTransactions.sort((a, b) => new Date(b.date) - new Date(a.date)),
+        transactions: walletTransactions.sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 500),
     };
 };
 
@@ -1616,4 +1620,3 @@ export const adminDeactivateRider = async (riderId) => {
     await rider.save();
     return rider;
 };
-

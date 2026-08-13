@@ -132,11 +132,15 @@ router.post("/payouts/trigger", adminAuth, async (req, res) => {
         return res.status(400).json({ success: false, message: "type must be rider, vendor, or all" });
     }
     const { triggerScheduledPayouts } = await import("../../jobs/scheduledPayout.job.js");
-    // Fire and forget — sweep runs in background, respond immediately
-    triggerScheduledPayouts(type).catch(err =>
-        console.error("❌ Manual payout trigger error:", err.message)
-    );
-    return res.json({ success: true, message: `${type} payout sweep triggered. Check Render logs for progress.` });
+    const result = await triggerScheduledPayouts(type);
+    if (!result) return res.status(500).json({ success: false, message: "Payout sweep failed before wallets could be queued" });
+    return res.json({
+        success: true,
+        data: result,
+        message: result.totalEnqueued
+            ? `${result.totalEnqueued} eligible payout(s) queued (${result.vendorCount} vendor, ${result.riderCount} rider).`
+            : `No eligible ${type} wallets were queued. Check thresholds, payout details, or existing in-flight payouts.`,
+    });
 });
 
 export default router;

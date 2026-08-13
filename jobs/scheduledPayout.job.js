@@ -355,9 +355,12 @@ export const triggerScheduledPayouts = async (actorType = "all") => {
             riderCount = await enqueueRiderPayouts(today);
         }
 
+        const result = { actorType, vendorCount, riderCount, totalEnqueued: vendorCount + riderCount };
+
         console.log(
             `✅ [ScheduledPayout] Sweep complete — ${vendorCount} vendor(s), ${riderCount} rider(s) enqueued`
         );
+        return result;
     } catch (err) {
         console.error("❌ [ScheduledPayout] Critical sweep error:", err.message);
     }
