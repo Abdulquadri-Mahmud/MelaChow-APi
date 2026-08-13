@@ -233,12 +233,10 @@ export const adminFinanceRepository = {
     const adminTransactions = (adminWallet?.transactions || []).map(transactionShape).filter((tx) => dateInRange(tx.date, startDate, endDate));
     const totalEscrowHeld = vendorOrders.filter((order) => !order.escrowReleased).reduce((sum, order) => sum + numberValue(order.escrowAmount), 0);
     const totalCommissionEarned = vendorOrders.reduce((sum, order) => sum + numberValue(order.commission), 0);
-    const totalPlatformDeliveryRevenue = adminTransactions
-      .filter((tx) => tx.transactionType === "delivery_spread")
-      .reduce((sum, tx) => sum + numberValue(tx.reportingAmount), 0);
-    const totalServiceFeeRevenue = adminTransactions
-      .filter((tx) => tx.transactionType === "service_fee" && tx.type === "credit")
-      .reduce((sum, tx) => sum + numberValue(tx.amount), 0);
+    const totalPlatformDeliveryRevenue = paidOrders
+      .filter((order) => ["delivered", "completed"].includes(order.orderStatus))
+      .reduce((sum, order) => sum + Math.max(0, numberValue(order.deliveryFee) - numberValue(order.riderEarnings ?? platformConfig.riderFixedPayout)), 0);
+    const totalServiceFeeRevenue = paidOrders.reduce((sum, order) => sum + numberValue(order.serviceFee), 0);
     const totalCredits = adminTransactions.filter((tx) => tx.type === "credit").reduce((sum, tx) => sum + numberValue(tx.amount), 0);
     const totalDebits = adminTransactions.filter((tx) => tx.type === "debit").reduce((sum, tx) => sum + numberValue(tx.amount), 0);
     const currentPlatformBalance = adminWallet?.balance || 0;

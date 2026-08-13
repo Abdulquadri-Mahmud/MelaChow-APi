@@ -229,7 +229,39 @@ export const getRevenueSummary = async (req, res) => {
                     _id: null,
                     totalOrderRevenue: { $sum: "$total" },
                     totalDeliveryFeesCollected: { $sum: "$deliveryFee" },
-                    totalServiceFeesCollected: { $sum: "$serviceFee" }
+                    totalServiceFeesCollected: { $sum: "$serviceFee" },
+                    totalServiceFeeRevenue: { $sum: "$serviceFee" }
+                }
+            }
+        ]);
+
+        // Delivery margin is an order-level earning. Deriving it from delivered
+        // orders covers historical orders that pre-date delivery_spread ledger
+        // markers and avoids counting a multi-vendor parent order more than once.
+        const deliveryRevenuePromise = Order.aggregate([
+            {
+                $match: {
+                    paymentStatus: "paid",
+                    orderStatus: { $in: ["delivered", "completed"] },
+                    ...dateFilter,
+                }
+            },
+            {
+                $group: {
+                    _id: null,
+                    total: {
+                        $sum: {
+                            $max: [
+                                0,
+                                {
+                                    $subtract: [
+                                        { $ifNull: ["$deliveryFee", 0] },
+                                        { $ifNull: ["$riderEarnings", platformConfig.riderFixedPayout] }
+                                    ]
+                                }
+                            ]
+                        }
+                    }
                 }
             }
         ]);
@@ -262,20 +294,22 @@ export const getRevenueSummary = async (req, res) => {
         const [
             commissionStats,
             orderStats,
+            deliveryRevenueStats,
             activeEscrowStats,
             currentPlatformBalance,
             walletTxnStats,
         ] = await Promise.all([
             commissionPromise,
             orderStatsPromise,
+            deliveryRevenuePromise,
             activeEscrowPromise,
             getAdminWalletBalance(),
             getAdminWalletTransactionStats({ startDate, endDate }),
         ]);
 
         const commEarned = commissionStats[0]?.totalCommissionEarned || 0;
-        const delivRevenue = walletTxnStats.totalPlatformDeliveryRevenue || 0;
-        const totalServiceFeeRevenue = walletTxnStats.totalServiceFeeRevenue || 0;
+        const delivRevenue = deliveryRevenueStats[0]?.total || 0;
+        const totalServiceFeeRevenue = orderStats[0]?.totalServiceFeeRevenue || 0;
         const totalEscrowHeld = activeEscrowStats[0]?.totalEscrowHeld || 0;
         const availableBalance = Math.max(0, currentPlatformBalance - totalEscrowHeld);
         const totalDeliverySpreadEarned = delivRevenue;
