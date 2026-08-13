@@ -41,6 +41,7 @@ import {
     updatePendingVendor,
     updateVendorPayoutDetails,
     updateVendorDeliveryMode,
+    setVendorOpenOverride,
 } from "../../controller/Admin/vendors_management/vendor.controller.js";
 import vendorPromoRoutes from "./vendorPromo.routes.js";
 import platformPromoRoutes from "./platformPromo.routes.js";
@@ -101,6 +102,7 @@ router.patch('/vendors/commission', superAdminOnly, updateCommission);
 
 // Switch vendor delivery management mode
 router.patch('/vendors/:vendorId/delivery-mode', superAdminOnly, updateVendorDeliveryMode);
+router.patch('/vendors/:vendorId/open-status', superAdminOnly, setVendorOpenOverride);
 
 // Vendor performance metrics
 // GET /api/vendors/performance?vendorId=123

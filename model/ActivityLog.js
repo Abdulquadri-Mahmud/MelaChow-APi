@@ -26,6 +26,7 @@ const activityLogSchema = new mongoose.Schema(
                 "UPDATE_CITY_FEE",
                 "CREATE_LOCATION",
                 "DELETE_ADMIN",
+                "UPDATE_VENDOR_HOURS",
             ],
         },
         targetType: {

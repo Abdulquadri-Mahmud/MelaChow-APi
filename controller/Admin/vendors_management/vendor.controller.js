@@ -277,6 +277,49 @@ export const updateVendorPayoutDetails = async (req, res) => {
   }
 };
 
+export const setVendorOpenOverride = async (req, res) => {
+  try {
+    const { vendorId } = req.params;
+    const { status } = req.body;
+    if (!["schedule", "open", "closed"].includes(status)) {
+      return res.status(400).json({ success: false, message: "status must be schedule, open, or closed" });
+    }
+
+    const vendor = await vendorModel.findById(vendorId);
+    if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
+    if (status === "open" && (!vendor.active || vendor.suspended || !vendor.verified || !vendor.isApproved)) {
+      return res.status(409).json({ success: false, message: "A suspended, inactive, or unapproved vendor cannot be forced open" });
+    }
+
+    vendor.openingHours.adminOverride = {
+      status,
+      changedAt: new Date(),
+      changedBy: req.admin._id,
+    };
+    await vendor.save();
+    const openStatus = getVendorOpenStatus(vendor.openingHours);
+
+    await ActivityLog.create({
+      adminId: req.admin._id,
+      action: "UPDATE_VENDOR_HOURS",
+      targetType: "Vendor",
+      targetId: vendor._id,
+      details: `${vendor.storeName} operating status changed to ${status === "schedule" ? "normal schedule" : status}`,
+      ipAddress: req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip,
+      userAgent: req.headers["user-agent"] || "",
+      metadata: { status, openStatus },
+    });
+
+    return res.json({
+      success: true,
+      message: status === "schedule" ? "Vendor returned to its normal schedule" : `Vendor is now forced ${status}`,
+      data: { openingHours: vendor.openingHours, openStatus },
+    });
+  } catch (error) {
+    return res.status(500).json({ success: false, message: error.message || "Failed to update vendor operating status" });
+  }
+};
+
 // REJECT VENDOR
 export const rejectVendor = async (req, res) => {
   try {
@@ -516,6 +559,7 @@ export const getVendor = async (req, res) => {
     
     // We convert to plain object to attach new arrays
     const vendorObj = stripRecipientCode(vendor);
+    vendorObj.openStatus = getVendorOpenStatus(vendor.openingHours);
     vendorObj.menuItems = menuItems;
     vendorObj.comboItems = comboItems;
     let metrics = orderMetrics[0] || {};

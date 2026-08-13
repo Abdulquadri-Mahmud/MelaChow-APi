@@ -85,6 +85,11 @@ const vendorSchema = new Schema(
       friday: { open: String, close: String, closed: { type: Boolean, default: false } },
       saturday: { open: String, close: String, closed: { type: Boolean, default: false } },
       sunday: { open: String, close: String, closed: { type: Boolean, default: false } },
+      adminOverride: {
+        status: { type: String, enum: ["schedule", "open", "closed"], default: "schedule" },
+        changedAt: Date,
+        changedBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin" },
+      },
     },
 
     // Wallet & bank payout info
