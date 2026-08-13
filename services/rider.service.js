@@ -260,7 +260,13 @@ export const getActiveOrder = async (riderId) => {
 
         // Address resolution
         const addr = order.deliveryAddress;
-        orderObj.deliveryFullAddress = addr?.address || addr?.addressLine || (addr ? `${addr.addressLine || ""}, ${addr.cityName || addr.city || ""}`.trim() : null);
+        orderObj.deliveryFullAddress = addr ? [addr.address || addr.addressLine, addr.cityName || addr.city, addr.stateName || addr.state].filter(Boolean).join(", ") : null;
+        orderObj.deliveryCoordinates = addr?.coordinates || null;
+        orderObj.restaurantCoordinates = restaurant?.location?.coordinates?.length === 2
+            ? { lat: restaurant.location.coordinates[1], lng: restaurant.location.coordinates[0] }
+            : restaurant?.location?.lat != null && restaurant?.location?.lng != null
+                ? { lat: restaurant.location.lat, lng: restaurant.location.lng }
+                : null;
 
         // Limit items if we have a specific vendor order
         if (vendorOrder) {
@@ -336,7 +342,8 @@ export const getPendingOffers = async (riderId) => {
             orderObj.userPhone = user?.phone || order.phone || null;
 
             const addr = order.deliveryAddress;
-            orderObj.deliveryFullAddress = addr?.address || addr?.addressLine || (addr ? `${addr.addressLine || ""}, ${addr.cityName || addr.city || ""}`.trim() : null);
+            orderObj.deliveryFullAddress = addr ? [addr.address || addr.addressLine, addr.cityName || addr.city, addr.stateName || addr.state].filter(Boolean).join(", ") : null;
+            orderObj.deliveryCoordinates = addr?.coordinates || null;
 
             // Filter items to only show the ones belonging to this specific vendorOrder!
             orderObj.items = vendorOrder.items;
@@ -416,7 +423,8 @@ export const getRiderOrderDetails = async (riderId, orderId) => {
         orderObj.userPhone = user?.phone || order.phone || null;
 
         const addr = order.deliveryAddress;
-        orderObj.deliveryFullAddress = addr?.address || addr?.addressLine || (addr ? `${addr.addressLine || ""}, ${addr.cityName || addr.city || ""}`.trim() : null);
+        orderObj.deliveryFullAddress = addr ? [addr.address || addr.addressLine, addr.cityName || addr.city, addr.stateName || addr.state].filter(Boolean).join(", ") : null;
+        orderObj.deliveryCoordinates = addr?.coordinates || null;
 
         if (vendorOrder) {
             orderObj.items = vendorOrder.items;

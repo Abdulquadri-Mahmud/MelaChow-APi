@@ -449,6 +449,7 @@ export const addAddress = async (req, res) => {
       state,
       cityId,
       stateId,
+      coordinates,
       isDefault = false,
       label = "Home"
     } = req.body;
@@ -470,6 +471,15 @@ export const addAddress = async (req, res) => {
       addressLine,
       isDefault,
     };
+
+    if (coordinates !== undefined) {
+      const lat = Number(coordinates?.lat);
+      const lng = Number(coordinates?.lng);
+      if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180) {
+        return res.status(400).json({ status: false, message: "Invalid delivery pin coordinates" });
+      }
+      newAddress.coordinates = { lat, lng };
+    }
 
     // Validate and set City
     if (cityId) {
@@ -562,6 +572,7 @@ export const updateAddress = async (req, res) => {
       isDefault,
       cityId,
       stateId,
+      coordinates,
       label
     } = req.body;
 
@@ -583,6 +594,14 @@ export const updateAddress = async (req, res) => {
     // Update fields
     if (label !== undefined) addr.label = label;
     if (addressLine !== undefined) addr.addressLine = addressLine;
+    if (coordinates !== undefined) {
+      const lat = Number(coordinates?.lat);
+      const lng = Number(coordinates?.lng);
+      if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180) {
+        return res.status(400).json({ status: false, message: "Invalid delivery pin coordinates" });
+      }
+      addr.coordinates = { lat, lng };
+    }
 
     // Validate and set City
     if (cityId !== undefined) {
