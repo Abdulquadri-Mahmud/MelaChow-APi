@@ -216,6 +216,20 @@ export const getActiveOrder = async (riderId) => {
             return null;
         }
 
+        const stillAssigned =
+            order.riderId?.toString() === riderId ||
+            vendorOrder?.riderId?.toString() === riderId;
+        const activeStatuses = ["accepted", "ready_for_pickup", "rider_assigned", "out_for_delivery", "picked_up"];
+        const lifecycleStatus = vendorOrder?.orderStatus || order.orderStatus;
+        if (!stillAssigned || !activeStatuses.includes(lifecycleStatus)) {
+            console.warn(`[getActiveOrder] Clearing stale currentOrderId ${activeOrderId} for rider ${riderId}; assigned=${stillAssigned}, status=${lifecycleStatus}`);
+            await Rider.updateOne(
+                { _id: rider._id, currentOrderId: activeOrderId },
+                { $set: { currentOrderId: null, assignmentExpiresAt: null } }
+            );
+            return null;
+        }
+
         // Enrich the order object with flattened fields for the Rider UI
         const orderObj = order.toObject();
         
@@ -1066,15 +1080,26 @@ export const adminUpdateRider = async (riderId, updateData) => {
 };
 
 /**
- * Emergency dispatch override. This deliberately leaves currentOrderId intact:
- * changing an agent's availability must never silently cancel or detach the
- * active order. Route-level super-admin authorization protects this action.
+ * Emergency dispatch override. It clears a stale order pointer only when the
+ * referenced order is no longer assigned to this rider. A genuinely active
+ * assignment must be handled through the explicit admin-unassign workflow.
  */
 export const adminForceRiderAvailable = async (riderId, adminId) => {
     const rider = await Rider.findById(riderId);
     if (!rider) throw new Error("Rider not found");
 
     const previousStatus = rider.status;
+    if (rider.currentOrderId) {
+        const vendorOrder = await VendorOrder.findById(rider.currentOrderId).select("riderId userOrderId orderStatus").lean();
+        const order = vendorOrder?.userOrderId
+            ? await Order.findById(vendorOrder.userOrderId).select("riderId orderStatus").lean()
+            : await Order.findById(rider.currentOrderId).select("riderId orderStatus").lean();
+        const stillAssigned = order?.riderId?.toString() === riderId || vendorOrder?.riderId?.toString() === riderId;
+        if (stillAssigned) {
+            throw new Error("Rider still has an active assigned order. Use Unassign Rider so the order and assignment are safely reset.");
+        }
+        rider.currentOrderId = null;
+    }
     rider.status = "available";
     rider.assignmentExpiresAt = null;
     rider.metadata = {
