@@ -414,6 +414,16 @@ export const updateVendor = async (req, res) => {
       delete updates.payoutDetails;
     }
 
+    // Vendors may edit their weekly schedule, but only a super-admin may
+    // create or remove the live operating-status override.
+    if (updates.openingHours) {
+      const allowedDays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+      allowedDays.forEach((day) => {
+        if (updates.openingHours[day]) updates[`openingHours.${day}`] = updates.openingHours[day];
+      });
+      delete updates.openingHours;
+    }
+
     const vendor = await vendorModel.findByIdAndUpdate(
       id,
       { $set: updates }, 

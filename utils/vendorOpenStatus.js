@@ -91,6 +91,13 @@ function getNextOpening(openingHours, currentDayIndex, currentMinutes) {
 }
 
 export function getVendorOpenStatus(openingHours, options = {}) {
+  const override = openingHours?.adminOverride;
+  if (override?.status === "open") {
+    return { isOpen: true, message: "Open now by administrator override.", reason: "admin_forced_open", override: true };
+  }
+  if (override?.status === "closed") {
+    return { isOpen: false, message: "Temporarily closed by administrator.", reason: "admin_forced_closed", override: true };
+  }
   if (!openingHours) {
     return {
       isOpen: false,
