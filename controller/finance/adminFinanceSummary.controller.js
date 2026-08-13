@@ -1,6 +1,7 @@
 import Wallet from "../../model/wallet/wallet.mode.js";
 import Withdrawal from "../../model/wallet/Withdrawal.model.js";
 import RiderWithdrawal from "../../model/wallet/RiderWithdrawal.model.js";
+import { RIDER_PAYOUT_THRESHOLD, VENDOR_PAYOUT_THRESHOLD } from "../../config/payouts.js";
 
 const toNumber = (value) => Number(value || 0);
 
@@ -137,6 +138,20 @@ const sumPendingPayouts = (Model) =>
         { $group: { _id: null, total: { $sum: "$requestedAmount" } } },
     ]).then(([row]) => toNumber(row?.total));
 
+const getPartnerWalletStats = async (ownerModel, threshold) => {
+    const [row = {}] = await Wallet.aggregate([
+        { $match: { ownerModel } },
+        { $group: {
+            _id: null,
+            totalBalance: { $sum: "$balance" },
+            walletCount: { $sum: 1 },
+            eligibleBalance: { $sum: { $cond: [{ $gte: ["$balance", threshold] }, "$balance", 0] } },
+            eligibleCount: { $sum: { $cond: [{ $gte: ["$balance", threshold] }, 1, 0] } },
+        } },
+    ]);
+    return { totalBalance: toNumber(row.totalBalance), walletCount: toNumber(row.walletCount), eligibleBalance: toNumber(row.eligibleBalance), eligibleCount: toNumber(row.eligibleCount), threshold };
+};
+
 const countPayouts = (Model, filter) => Model.countDocuments(filter);
 
 const fetchPayouts = (Model, filter, actorType, take) =>
@@ -165,11 +180,15 @@ export const getAdminWalletBreakdown = async (req, res) => {
             walletStats,
             pendingVendorTotal,
             pendingRiderTotal,
+            vendorWallets,
+            riderWallets,
         ] = await Promise.all([
             getAdminWalletBalance(),
             getAdminWalletStats(),
             sumPendingPayouts(Withdrawal),
             sumPendingPayouts(RiderWithdrawal),
+            getPartnerWalletStats("Vendor", VENDOR_PAYOUT_THRESHOLD),
+            getPartnerWalletStats("Rider", RIDER_PAYOUT_THRESHOLD),
         ]);
 
         const platformRevenue = walletStats.deliverySpreadEarned - walletStats.totalRefundsIssued;
@@ -189,6 +208,8 @@ export const getAdminWalletBreakdown = async (req, res) => {
                     rider: pendingRiderTotal,
                     total: pendingTotal,
                 },
+                vendors: { ...vendorWallets, pendingPayout: pendingVendorTotal },
+                riders: { ...riderWallets, pendingPayout: pendingRiderTotal },
                 freeCash: Math.max(0, totalBalance - walletStats.escrowHeld),
             },
         });

@@ -4,6 +4,14 @@ import { sendMail } from '../../config/mailer.js';
 import { sendAuthCookies } from '../../utils/sendTokenCookie.js';
 import jwt from "jsonwebtoken";
 import { blockToken } from "../../middleware/tokenBlocklist.js";
+import crypto from "crypto";
+
+const hashLoginOtp = (otp) => crypto.createHash("sha256").update(String(otp)).digest("hex");
+const signMfaChallenge = (admin) => jwt.sign(
+    { id: admin._id.toString(), role: admin.role, type: "admin_mfa" },
+    process.env.JWT_SECRET,
+    { expiresIn: "10m" }
+);
 
 // ============================================
 // ADMIN LOGIN (Email + Password)
@@ -55,8 +63,29 @@ export const loginAdmin = async (req, res) => {
             }
         }
 
-        // Reset login attempts
+        // Reset password attempts after the password has been proven.
         await admin.resetLoginAttempts();
+
+        if (admin.role === 'super-admin') {
+            const otp = generateOTP();
+            admin.loginOtpHash = hashLoginOtp(otp);
+            admin.loginOtpExpires = new Date(Date.now() + 10 * 60 * 1000);
+            admin.loginOtpAttempts = 0;
+            await admin.save();
+
+            await sendMail({
+                to: admin.email,
+                subject: 'Your MelaChow Super-Admin Login Code',
+                html: `<div style="font-family:Arial,sans-serif;padding:24px"><h2>Super-admin sign-in verification</h2><p>Enter this one-time code to finish signing in:</p><p style="font-size:32px;font-weight:800;letter-spacing:8px">${otp}</p><p>This code expires in 10 minutes. If this was not you, change your password immediately.</p></div>`,
+            });
+
+            return res.status(200).json({
+                success: true,
+                requiresMfa: true,
+                challengeToken: signMfaChallenge(admin),
+                message: 'A verification code was sent to your super-admin email.',
+            });
+        }
 
         // Generate tokens
         const accessToken = generateAccessToken(admin._id, admin.role || 'admin');
@@ -68,13 +97,54 @@ export const loginAdmin = async (req, res) => {
         res.status(200).json({
             success: true,
             message: 'Login successful',
-            admin: admin.getPublicProfile(),
-            accessToken
+            admin: admin.getPublicProfile()
         });
 
     } catch (error) {
         console.error('Admin login error:', error);
         res.status(500).json({ message: 'Login failed', error: error.message });
+    }
+};
+
+export const verifyAdminLoginOtp = async (req, res) => {
+    try {
+        const { challengeToken, otp } = req.body;
+        if (!challengeToken || !otp) return res.status(400).json({ message: 'Challenge token and verification code are required' });
+
+        const challenge = jwt.verify(challengeToken, process.env.JWT_SECRET);
+        if (challenge.type !== 'admin_mfa' || challenge.role !== 'super-admin') {
+            return res.status(401).json({ message: 'Invalid login challenge' });
+        }
+
+        const admin = await Admin.findById(challenge.id).select('+loginOtpHash +loginOtpExpires +loginOtpAttempts');
+        if (!admin || !admin.isActive || admin.role !== 'super-admin') return res.status(401).json({ message: 'Invalid login challenge' });
+        if (!admin.loginOtpHash || !admin.loginOtpExpires || admin.loginOtpExpires < new Date()) {
+            return res.status(401).json({ message: 'Verification code expired. Sign in again.' });
+        }
+        if ((admin.loginOtpAttempts || 0) >= 5) {
+            return res.status(423).json({ message: 'Too many verification attempts. Sign in again.' });
+        }
+
+        const submitted = Buffer.from(hashLoginOtp(otp), 'hex');
+        const expected = Buffer.from(admin.loginOtpHash, 'hex');
+        if (submitted.length !== expected.length || !crypto.timingSafeEqual(submitted, expected)) {
+            admin.loginOtpAttempts = (admin.loginOtpAttempts || 0) + 1;
+            await admin.save();
+            return res.status(401).json({ message: 'Invalid verification code' });
+        }
+
+        admin.loginOtpHash = undefined;
+        admin.loginOtpExpires = undefined;
+        admin.loginOtpAttempts = 0;
+        admin.lastLogin = new Date();
+        await admin.save();
+
+        const accessToken = generateAccessToken(admin._id, admin.role);
+        const refreshToken = generateRefreshToken(admin._id, admin.role);
+        sendAuthCookies(res, accessToken, refreshToken, 'admin');
+        return res.status(200).json({ success: true, message: 'Login verified', admin: admin.getPublicProfile() });
+    } catch (error) {
+        return res.status(401).json({ message: error.name === 'TokenExpiredError' ? 'Login challenge expired. Sign in again.' : 'Login verification failed' });
     }
 };
 
@@ -222,6 +292,15 @@ export const resetAdminPassword = async (req, res) => {
         admin.lockUntil = undefined;
         admin.lastLogin = Date.now();
         await admin.save();
+
+        // A password reset must not silently bypass super-admin MFA.
+        if (admin.role === 'super-admin') {
+            return res.status(200).json({
+                success: true,
+                requiresLogin: true,
+                message: 'Password reset successful. Sign in with your new password and verification code.',
+            });
+        }
 
         // Generate tokens
         const accessToken = generateAccessToken(admin._id, admin.role || 'admin');

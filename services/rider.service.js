@@ -216,6 +216,20 @@ export const getActiveOrder = async (riderId) => {
             return null;
         }
 
+        const stillAssigned =
+            order.riderId?.toString() === riderId ||
+            vendorOrder?.riderId?.toString() === riderId;
+        const activeStatuses = ["accepted", "ready_for_pickup", "rider_assigned", "out_for_delivery", "picked_up"];
+        const lifecycleStatus = vendorOrder?.orderStatus || order.orderStatus;
+        if (!stillAssigned || !activeStatuses.includes(lifecycleStatus)) {
+            console.warn(`[getActiveOrder] Clearing stale currentOrderId ${activeOrderId} for rider ${riderId}; assigned=${stillAssigned}, status=${lifecycleStatus}`);
+            await Rider.updateOne(
+                { _id: rider._id, currentOrderId: activeOrderId },
+                { $set: { currentOrderId: null, assignmentExpiresAt: null } }
+            );
+            return null;
+        }
+
         // Enrich the order object with flattened fields for the Rider UI
         const orderObj = order.toObject();
         
@@ -1066,15 +1080,26 @@ export const adminUpdateRider = async (riderId, updateData) => {
 };
 
 /**
- * Emergency dispatch override. This deliberately leaves currentOrderId intact:
- * changing an agent's availability must never silently cancel or detach the
- * active order. Route-level super-admin authorization protects this action.
+ * Emergency dispatch override. It clears a stale order pointer only when the
+ * referenced order is no longer assigned to this rider. A genuinely active
+ * assignment must be handled through the explicit admin-unassign workflow.
  */
 export const adminForceRiderAvailable = async (riderId, adminId) => {
     const rider = await Rider.findById(riderId);
     if (!rider) throw new Error("Rider not found");
 
     const previousStatus = rider.status;
+    if (rider.currentOrderId) {
+        const vendorOrder = await VendorOrder.findById(rider.currentOrderId).select("riderId userOrderId orderStatus").lean();
+        const order = vendorOrder?.userOrderId
+            ? await Order.findById(vendorOrder.userOrderId).select("riderId orderStatus").lean()
+            : await Order.findById(rider.currentOrderId).select("riderId orderStatus").lean();
+        const stillAssigned = order?.riderId?.toString() === riderId || vendorOrder?.riderId?.toString() === riderId;
+        if (stillAssigned) {
+            throw new Error("Rider still has an active assigned order. Use Unassign Rider so the order and assignment are safely reset.");
+        }
+        rider.currentOrderId = null;
+    }
     rider.status = "available";
     rider.assignmentExpiresAt = null;
     rider.metadata = {
@@ -1523,22 +1548,26 @@ export const getRiderHistorySummary = async (riderId, filters = {}) => {
         ? Math.round((completedDeliveries.length / deliveries.length) * 100)
         : 100;
 
-    // Financial Wallet & Payout transactions
+    // Complete wallet ledger: earnings, adjustments, and bank disbursements.
     let walletTransactions = [];
     if (rider?._id) {
         const wallet = await Wallet.findOne({ ownerId: rider._id, ownerModel: 'Rider' }).lean();
-        walletTransactions = (wallet?.transactions || []).filter((tx) =>
-            tx.transactionType === 'rider_payout' &&
-            new Date(tx.date) >= todayStart &&
-            new Date(tx.date) <= now
-        );
+        walletTransactions = (wallet?.transactions || []).map((tx) => ({ ...tx, riderId: rider._id, riderName: rider.name }));
+    } else {
+        const wallets = await Wallet.find({ ownerModel: 'Rider' }).populate('ownerId', 'name phone').select('ownerId transactions').lean();
+        walletTransactions = wallets.flatMap((wallet) => (wallet.transactions || []).map((tx) => ({
+            ...tx,
+            riderId: wallet.ownerId?._id || wallet.ownerId,
+            riderName: wallet.ownerId?.name || 'Rider',
+        })));
     }
 
-    const payoutsBeforeCutoff = walletTransactions.filter((tx) => new Date(tx.date) < payoutCutoff);
+    const todayEarnings = walletTransactions.filter((tx) => tx.transactionType === 'rider_payout' && new Date(tx.date) >= todayStart && new Date(tx.date) <= now);
+    const payoutsBeforeCutoff = todayEarnings.filter((tx) => new Date(tx.date) < payoutCutoff);
     const ridesBeforePayout = new Set(payoutsBeforeCutoff.map((tx) => tx.orderId?.toString())).size;
     const earningsBeforePayout = payoutsBeforeCutoff.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
 
-    const payoutsAfterCutoff = walletTransactions.filter((tx) => new Date(tx.date) >= payoutCutoff);
+    const payoutsAfterCutoff = todayEarnings.filter((tx) => new Date(tx.date) >= payoutCutoff);
     const ridesAfterCutoff = new Set(payoutsAfterCutoff.map((tx) => tx.orderId?.toString())).size;
     const earningsAfterCutoff = payoutsAfterCutoff.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
 
@@ -1560,16 +1589,16 @@ export const getRiderHistorySummary = async (riderId, filters = {}) => {
         },
         deliveries,
         earnings: {
-            totalToday: walletTransactions.reduce((sum, tx) => sum + Number(tx.amount || 0), 0),
+            totalToday: todayEarnings.reduce((sum, tx) => sum + Number(tx.amount || 0), 0),
             beforePayout: earningsBeforePayout,
             afterPayout: earningsAfterCutoff,
         },
         rides: {
-            today: new Set(walletTransactions.map((tx) => tx.orderId?.toString())).size,
+            today: new Set(todayEarnings.map((tx) => tx.orderId?.toString())).size,
             beforePayout: ridesBeforePayout,
             afterPayout: ridesAfterCutoff,
         },
-        transactions: walletTransactions.sort((a, b) => new Date(b.date) - new Date(a.date)),
+        transactions: walletTransactions.sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 500),
     };
 };
 
@@ -1616,4 +1645,3 @@ export const adminDeactivateRider = async (riderId) => {
     await rider.save();
     return rider;
 };
-

@@ -5,7 +5,8 @@ import {
     verifyAdminResetCode,
     resetAdminPassword,
     refreshAdminToken,
-    logoutAdmin
+    logoutAdmin,
+    verifyAdminLoginOtp
 } from "../../controller/Admin/admin.auth.controller.js";
 
 const router = express.Router();
@@ -16,6 +17,7 @@ const router = express.Router();
 
 // Login
 router.post("/login", loginAdmin);
+router.post("/login/verify", verifyAdminLoginOtp);
 
 // Password Reset Flow
 router.post("/forgot-password", forgotAdminPassword);
