@@ -3,6 +3,9 @@ import { sendUserReactivationEmail } from "../../../config/Admin/user_mailer/sen
 import { sendUserSuspensionEmail } from "../../../config/Admin/user_mailer/sendUser.suspension.email.js";
 import User from "../../../model/user.model.js";
 import ActivityLog from "../../../model/ActivityLog.js";
+import Order from "../../../model/order/Order.js";
+
+const escapeRegex = (value = "") => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 
 /**
@@ -11,28 +14,69 @@ import ActivityLog from "../../../model/ActivityLog.js";
  */
 export const getAllUsers = async (req, res) => {
   try {
-    const { verified, suspended, banned, search } = req.query;
+    const { verified, suspended, banned, search, customerAge, sort = "newest" } = req.query;
+    const page = Math.max(Number.parseInt(req.query.page, 10) || 1, 1);
+    const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 20, 5), 100);
+    const skip = (page - 1) * limit;
     const filters = {};
 
     if (verified !== undefined) filters.isVerified = verified === "true";
     if (suspended !== undefined) filters.suspended = suspended === "true";
     if (banned !== undefined) filters.banned = banned === "true";
-    if (search)
+    if (customerAge === "today") {
+      const startOfToday = new Date();
+      startOfToday.setHours(0, 0, 0, 0);
+      filters.createdAt = { $gte: startOfToday };
+    } else if (customerAge === "new") {
+      filters.createdAt = { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) };
+    } else if (customerAge === "existing") {
+      filters.createdAt = { $lt: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) };
+    }
+    if (search) {
+      const safeSearch = escapeRegex(String(search).trim());
       filters.$or = [
-        { firstname: new RegExp(search, "i") },
-        { lastname: new RegExp(search, "i") },
-        { email: new RegExp(search, "i") },
+        { firstname: new RegExp(safeSearch, "i") },
+        { lastname: new RegExp(safeSearch, "i") },
+        { fullName: new RegExp(safeSearch, "i") },
+        { email: new RegExp(safeSearch, "i") },
+        { phone: new RegExp(safeSearch, "i") },
       ];
+    }
 
-    const users = await User.find(filters)
-      .populate("wallet")
-      .sort({ createdAt: -1 })
-      .lean();
+    const [users, total] = await Promise.all([
+      User.find(filters)
+        .populate("wallet")
+        .sort(sort === "oldest" ? { createdAt: 1, _id: 1 } : { createdAt: -1, _id: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      User.countDocuments(filters),
+    ]);
+
+    const userIds = users.map((user) => user._id);
+    const orderCounts = userIds.length
+      ? await Order.aggregate([
+          { $match: { userId: { $in: userIds } } },
+          { $group: { _id: "$userId", count: { $sum: 1 } } },
+        ])
+      : [];
+    const orderCountByUser = new Map(orderCounts.map(({ _id, count }) => [String(_id), count]));
+    const usersWithOrderCounts = users.map((user) => ({
+      ...user,
+      orderCount: orderCountByUser.get(String(user._id)) || 0,
+    }));
+    const totalPages = Math.max(Math.ceil(total / limit), 1);
 
     res.status(200).json({
       success: true,
-      count: users.length,
-      users,
+      count: usersWithOrderCounts.length,
+      total,
+      page,
+      limit,
+      totalPages,
+      hasNextPage: page < totalPages,
+      hasPreviousPage: page > 1,
+      users: usersWithOrderCounts,
     });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -52,7 +96,8 @@ export const getUserDetails = async (req, res) => {
     if (!user)
       return res.status(404).json({ success: false, message: "User not found" });
 
-    res.status(200).json({ success: true, user });
+    const orderCount = await Order.countDocuments({ userId: user._id });
+    res.status(200).json({ success: true, user: { ...user, orderCount } });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
