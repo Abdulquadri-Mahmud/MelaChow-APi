@@ -42,6 +42,7 @@ import {
     updateVendorPayoutDetails,
     updateVendorDeliveryMode,
     setVendorOpenOverride,
+    sendVendorOnboardingReminder,
 } from "../../controller/Admin/vendors_management/vendor.controller.js";
 import vendorPromoRoutes from "./vendorPromo.routes.js";
 import platformPromoRoutes from "./platformPromo.routes.js";
@@ -80,6 +81,7 @@ router.get("/users/metrics", adminAuth, getUserMetrics);
 router.get("/vendors/metrics", adminAuth, getVendorMetrics);
 router.patch("/vendors/approve", adminAuth, approveVendor);
 router.patch("/vendors/pending/update", adminAuth, updatePendingVendor);
+router.post("/vendors/onboarding-reminder", adminAuth, sendVendorOnboardingReminder);
 router.patch("/vendors/reject", adminAuth, rejectVendor);
 router.patch("/vendors/suspend", adminAuth, suspendVendor);
 router.patch("/vendors/reactivate", adminAuth, reactivateVendor);

@@ -324,10 +324,10 @@ export const verifyVendorRegistration = async (req, res) => {
 
 export const setVendorPassword = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, passwordSetupToken } = req.body;
 
-    if (!email || !password) {
-      return res.status(400).json({ message: 'Email and password are required' });
+    if (!email || !password || !passwordSetupToken) {
+      return res.status(400).json({ message: 'Email, password, and a valid setup link are required' });
     }
 
     // Validate password strength
@@ -335,10 +335,15 @@ export const setVendorPassword = async (req, res) => {
       return res.status(400).json({ message: 'Password must be at least 8 characters' });
     }
 
-    const vendor = await Vendor.findOne({ email, verified: true }).select('+password');
+    const vendor = await Vendor.findOne({
+      email,
+      verified: true,
+      passwordSetupToken,
+      passwordSetupExpires: { $gt: Date.now() },
+    }).select('+password +passwordSetupToken +passwordSetupExpires');
 
     if (!vendor) {
-      return res.status(404).json({ message: 'Verified vendor not found' });
+      return res.status(400).json({ message: 'This password setup link is invalid or has expired. Please request a new link.' });
     }
 
     if (vendor.password) {
@@ -347,6 +352,8 @@ export const setVendorPassword = async (req, res) => {
 
     // Set password (will be hashed by pre-save hook)
     vendor.password = password;
+    vendor.passwordSetupToken = undefined;
+    vendor.passwordSetupExpires = undefined;
     vendor.lastLogin = Date.now();
     await vendor.save();
 
