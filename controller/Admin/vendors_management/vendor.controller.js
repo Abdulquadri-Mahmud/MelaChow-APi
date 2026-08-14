@@ -14,6 +14,9 @@ import { getVendorOpenStatus } from "../../../utils/vendorOpenStatus.js";
 import VendorOrder from "../../../model/vendor/VendorOrder.js";
 import Withdrawal from "../../../model/wallet/Withdrawal.model.js";
 import Order from "../../../model/order/Order.js";
+import { sendMail } from "../../../config/mailer.js";
+import { wrapLayout } from "../../../services/emailTemplate.service.js";
+import { generateOTP, generateResetToken } from "../../../utils/jwt.js";
 
 const stripRecipientCode = (value) => {
   if (!value || typeof value !== "object") return value;
@@ -277,6 +280,84 @@ export const updateVendorPayoutDetails = async (req, res) => {
   }
 };
 
+export const sendVendorOnboardingReminder = async (req, res) => {
+  try {
+    const { vendorId } = req.query;
+    if (!vendorId) {
+      return res.status(400).json({ success: false, message: "vendorId is required" });
+    }
+
+    const vendor = await vendorModel.findById(vendorId)
+      .select("+password +otp +otpExpires +passwordSetupToken +passwordSetupExpires");
+
+    if (!vendor) {
+      return res.status(404).json({ success: false, message: "Vendor not found" });
+    }
+
+    if (vendor.password) {
+      return res.status(400).json({ success: false, message: "This vendor has already completed password setup." });
+    }
+
+    const vendorPortalUrl = (process.env.VENDOR_URL || "https://vendors.melachow.com").replace(/\/$/, "");
+    const encodedEmail = encodeURIComponent(vendor.email);
+    let subject;
+    let content;
+    let reminderType;
+
+    if (!vendor.verified) {
+      const otp = generateOTP();
+      vendor.otp = otp;
+      vendor.otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+      reminderType = "email_verification";
+      subject = "Complete Your MelaChow Vendor Registration";
+      content = `
+        <p class="p">Hello ${vendor.name || "Vendor"},</p>
+        <p class="p">Your restaurant application is awaiting email verification. Use the code below within 10 minutes, then create your password.</p>
+        <div style="font-size: 30px; font-weight: 900; letter-spacing: 6px; text-align: center; margin: 28px 0; color: #F97316;">${otp}</div>
+        <div style="text-align: center; margin: 32px 0;">
+          <a href="${vendorPortalUrl}/vendors/auth/verify-registration?email=${encodedEmail}" class="button">Verify Email</a>
+        </div>`;
+    } else {
+      const passwordSetupToken = generateResetToken();
+      vendor.passwordSetupToken = passwordSetupToken;
+      vendor.passwordSetupExpires = new Date(Date.now() + 30 * 60 * 1000);
+      reminderType = "password_setup";
+      subject = "Create Your MelaChow Vendor Password";
+      const setupUrl = `${vendorPortalUrl}/vendors/auth/set-password?email=${encodedEmail}&token=${encodeURIComponent(passwordSetupToken)}`;
+      content = `
+        <p class="p">Hello ${vendor.name || "Vendor"},</p>
+        <p class="p">Your email is verified, but your restaurant application still needs a password. Use the secure link below within 30 minutes.</p>
+        <div style="text-align: center; margin: 32px 0;">
+          <a href="${setupUrl}" class="button">Create Password</a>
+        </div>`;
+    }
+
+    await vendor.save();
+    await sendMail({
+      to: vendor.email,
+      subject,
+      html: wrapLayout("Complete Account Setup", content, "Vendor onboarding"),
+    });
+
+    await ActivityLog.create({
+      adminId: req.admin._id,
+      action: "SEND_VENDOR_ONBOARDING_REMINDER",
+      targetType: "Vendor",
+      targetId: vendor._id,
+      details: `Sent ${reminderType.replace("_", " ")} reminder to ${vendor.storeName}`,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: reminderType === "email_verification"
+        ? "A fresh verification code and link were sent to the vendor."
+        : "A secure password setup link was sent to the vendor.",
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message || "Failed to send onboarding reminder" });
+  }
+};
+
 export const setVendorOpenOverride = async (req, res) => {
   try {
     const { vendorId } = req.params;
@@ -511,7 +592,7 @@ export const getVendor = async (req, res) => {
       return res.status(400).json({ success: false, message: "vendorId is required" });
 
     const vendor = await vendorModel.findById(vendorId)
-      .select("+payoutDetails")
+      .select("+payoutDetails +password")
       .populate("wallet")
       .populate({
         path: "foods",
@@ -558,7 +639,12 @@ export const getVendor = async (req, res) => {
     ]);
     
     // We convert to plain object to attach new arrays
+    // Admins only need to know whether onboarding is complete. Never expose
+    // the vendor's password hash in an API response.
+    const hasPassword = Boolean(vendor.password);
     const vendorObj = stripRecipientCode(vendor);
+    delete vendorObj.password;
+    vendorObj.hasPassword = hasPassword;
     vendorObj.openStatus = getVendorOpenStatus(vendor.openingHours);
     vendorObj.menuItems = menuItems;
     vendorObj.comboItems = comboItems;
