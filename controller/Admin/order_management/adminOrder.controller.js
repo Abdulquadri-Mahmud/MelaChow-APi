@@ -6,7 +6,6 @@ import Withdrawal from "../../../model/wallet/Withdrawal.model.js";
 import User from "../../../model/user.model.js";
 import Rider from "../../../model/rider.model.js";
 import RiderAssignment from "../../../model/riderAssignment.model.js";
-import OrderTermination from "../../../model/OrderTermination.js";
 import "../../../model/menu/MenuItem.js";
 import mongoose from "mongoose";
 import { getPlatformConfig } from "../../../services/platformConfig.service.js";
@@ -727,19 +726,6 @@ export const assignRiderToOrder = async (req, res) => {
             });
         }
 
-        const priorTerminations = await OrderTermination.find({
-            orderId: masterOrder._id,
-            previousRiderId: { $in: uniqueRiderIds },
-        }).select("previousRiderId");
-        if (priorTerminations.length) {
-            const blockedIds = new Set(priorTerminations.map((entry) => entry.previousRiderId.toString()));
-            const blockedRider = riders.find((rider) => blockedIds.has(rider._id.toString()));
-            return res.status(409).json({
-                success: false,
-                code: "RIDER_PREVIOUSLY_TERMINATED_ORDER",
-                message: `${blockedRider?.name || "This rider"} previously terminated this order and cannot be assigned to it again.`,
-            });
-        }
         const unavailableRider = riders.find((rider) => rider.status !== 'available' || !rider.isActive || rider.deletedAt || rider.currentOrderId);
         if (unavailableRider) {
             return res.status(400).json({

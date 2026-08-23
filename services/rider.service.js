@@ -313,13 +313,6 @@ export const getPendingOffers = async (riderId) => {
             // DONT return if order is already assigned to a rider
             if (order.riderId || vendorOrder.riderId) continue;
 
-            // Never render a previously terminated order back to the same rider.
-            const terminatedByThisRider = await OrderTermination.exists({
-                orderId: order._id,
-                previousRiderId: rider._id,
-            });
-            if (terminatedByThisRider) continue;
-
             const orderObj = order.toObject();
             // Set offer _id to vendorOrder._id! So the rider accepts the specific vendor order.
             orderObj._id = vendorOrder._id;

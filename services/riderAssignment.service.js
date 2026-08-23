@@ -4,7 +4,6 @@ import VendorOrder from "../model/vendor/VendorOrder.js";
 import Vendor from "../model/vendor/vendor.model.js";
 import Rider from "../model/rider.model.js";
 import RiderAssignment from "../model/riderAssignment.model.js";
-import OrderTermination from "../model/OrderTermination.js";
 import { getPlatformConfig } from "./platformConfig.service.js";
 import OrderBroadcastQueue from "../model/OrderBroadcastQueue.js";
 import { RIDER_FIXED_PAYOUT, BROADCAST_TTL_SECONDS } from "../config/payouts.js";
@@ -120,22 +119,15 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
 
     await expireStaleRiderAssignmentOffers(candidateRiders.map((rider) => rider._id));
 
-    // A rider who rejected or terminated this order must not receive it again.
-    // Timeouts remain eligible because they may simply have been busy.
-    const [pastRejects, pastTerminations] = await Promise.all([
-        RiderAssignment.find({
-            vendorOrderId: vendorOrder._id,
-            status: "rejected",
-        }).select("riderId"),
-        OrderTermination.find({
-            orderId: masterOrder._id,
-            status: { $in: ["pending", "reassigned", "disputed", "resolved"] },
-        }).select("previousRiderId"),
-    ]);
-    const alreadyHandledIds = new Set([
-        ...pastRejects.map((assignment) => assignment.riderId.toString()),
-        ...pastTerminations.map((termination) => termination.previousRiderId.toString()),
-    ]);
+    // Explicit rejections remain excluded. Timeouts and terminations are eligible
+    // for a fresh offer if the rider is still available.
+    const pastRejects = await RiderAssignment.find({
+        vendorOrderId: vendorOrder._id,
+        status: "rejected",
+    }).select("riderId");
+    const alreadyHandledIds = new Set(
+        pastRejects.map((assignment) => assignment.riderId.toString())
+    );
 
     const riders = candidateRiders.filter(
         (rider) => !alreadyHandledIds.has(rider._id.toString())
