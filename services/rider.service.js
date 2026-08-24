@@ -1150,31 +1150,15 @@ export const adminApproveRider = async (riderId, adminId) => {
     if (!rider.isActive || rider.deletedAt) throw new Error("Cannot approve an inactive rider");
     if (!rider.cityId || !rider.stateId) throw new Error("Assign the rider's state and city before approval");
 
-    const payoutsBeforeCutoff = payoutsToday.filter((tx) => new Date(tx.date) < payoutCutoff);
-    const ridesBeforePayout = new Set(payoutsBeforeCutoff.map((tx) => tx.orderId?.toString())).size;
-    const earningsBeforePayout = payoutsBeforeCutoff.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
+    rider.isVerified = true;
+    rider.approvedAt = rider.approvedAt || new Date();
+    rider.approvedBy = adminId || null;
+    rider.locationStatus = "approved";
+    rider.requestedState = "";
+    rider.requestedCity = "";
+    await rider.save();
 
-    const payoutsAfterCutoff = payoutsToday.filter((tx) => new Date(tx.date) >= payoutCutoff);
-    const ridesAfterCutoff = new Set(payoutsAfterCutoff.map((tx) => tx.orderId?.toString())).size;
-    const earningsAfterCutoff = payoutsAfterCutoff.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
-
-    return {
-        rider: rider.getPublicProfile ? rider.getPublicProfile() : rider,
-        payoutHour,
-        payoutCutoff,
-        nextPayout,
-        earnings: {
-            totalToday: payoutsToday.reduce((sum, tx) => sum + Number(tx.amount || 0), 0),
-            beforePayout: earningsBeforePayout,
-            afterPayout: earningsAfterCutoff,
-        },
-        rides: {
-            today: new Set(payoutsToday.map((tx) => tx.orderId?.toString())).size,
-            beforePayout: ridesBeforePayout,
-            afterPayout: ridesAfterCutoff,
-        },
-        transactions: payoutsToday.sort((a, b) => new Date(b.date) - new Date(a.date)),
-    };
+    return rider.getPublicProfile ? rider.getPublicProfile() : rider;
 };
 
 /**
