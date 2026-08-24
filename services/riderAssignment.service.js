@@ -72,7 +72,7 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
     const riderQuery = {
         cityId,
         stateId,
-        status: { $in: ["available", "pending_assignment", "on_delivery"] },
+        status: "available",
         isActive: true,
         isVerified: true,
         isSuspended: { $ne: true },
@@ -203,20 +203,24 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
             { session }
         );
 
-        const riderUpdate = await Rider.updateMany(
-            {
-                _id: { $in: riderIds },
-                status: "available",
-                isActive: true,
-                isVerified: true,
-                deletedAt: null,
-                currentOrderId: null,
-                cityId,
-                stateId,
-            },
-            { $set: { status: "pending_assignment", assignmentExpiresAt } },
-            { session }
-        );
+        const reservedRiderIds = [];
+        for (const riderId of riderIds) {
+            const reserved = await Rider.findOneAndUpdate(
+                {
+                    _id: riderId,
+                    status: "available",
+                    isActive: true,
+                    isVerified: true,
+                    deletedAt: null,
+                    currentOrderId: null,
+                    cityId,
+                    stateId,
+                },
+                { $set: { status: "pending_assignment", assignmentExpiresAt } },
+                { session, new: true }
+            );
+            if (reserved) reservedRiderIds.push(reserved._id);
+        }
 
         if (orderUpdate.modifiedCount !== 1) {
             // Order could not be transitioned: already assigned, cancelled, or wrong status.
@@ -227,7 +231,11 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
             );
         }
 
-        await RiderAssignment.create(riderIds.map((riderId) => ({
+        if (!reservedRiderIds.length) {
+            throw new Error("No riders remained available when the broadcast was reserved");
+        }
+
+        await RiderAssignment.create(reservedRiderIds.map((riderId) => ({
             orderId: masterOrder._id,
             vendorOrderId: vendorOrder._id,
             riderId,
@@ -244,6 +252,8 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
             },
         })), { session, ordered: true });
 
+        riderIds.splice(0, riderIds.length, ...reservedRiderIds);
+
         await session.commitTransaction();
     } catch (error) {
         await session.abortTransaction();
@@ -251,6 +261,9 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
     } finally {
         session.endSession();
     }
+
+    const reservedIdSet = new Set(riderIds.map((id) => id.toString()));
+    const offeredRiders = riders.filter((rider) => reservedIdSet.has(rider._id.toString()));
 
     // ── Queue broadcast timeout job ─────────────────────────────────────
     try {
@@ -280,7 +293,7 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
         const { SOCKET_EVENTS, buildPayload } = await import("../socket/rider.events.js");
         const { sendRiderNotification, sendNotification } = await import("./notification.service.js");
 
-        await Promise.all(riders.map(async (rider) => {
+        await Promise.all(offeredRiders.map(async (rider) => {
             emitToRider(rider._id, SOCKET_EVENTS.ORDER_ASSIGNED_TO_RIDER, buildPayload.orderAssigned({
                 orderId: masterOrder._id,
                 riderId: rider._id,
@@ -317,13 +330,13 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
             orderId: masterOrder.orderId || masterOrder._id,
             orderDatabaseId: masterOrder._id,
             vendorOrderId: vendorOrder._id,
-            message: `Automatic assignment sent to ${riders.length} rider(s). Waiting for first acceptance.`,
+            message: `Automatic assignment sent to ${offeredRiders.length} rider(s). Waiting for first acceptance.`,
         }, "admin");
     } catch (error) {
         console.warn("Automatic rider assignment notification failed:", error.message);
     }
 
-    return { success: true, riderCount: riders.length, riderIds };
+    return { success: true, riderCount: offeredRiders.length, riderIds };
 };
 
 /**
