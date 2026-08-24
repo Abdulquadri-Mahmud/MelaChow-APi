@@ -27,4 +27,10 @@ describe("rider operational regressions", () => {
     expect(mongo).toContain("changesActiveAssignmentFields");
     expect(mongo).toContain("error.statusCode = 409");
   });
+
+  it("reports force-available conflicts without an internal server error", async () => {
+    const riderService = await source("../../services/rider.service.js");
+    expect(riderService).toContain("Rider still has an active assigned order");
+    expect(riderService).toMatch(/Rider still has an active assigned order[\s\S]*error\.statusCode = 409/);
+  });
 });
