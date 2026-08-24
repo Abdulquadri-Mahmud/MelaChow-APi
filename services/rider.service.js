@@ -991,8 +991,15 @@ export const adminUpdateRider = async (riderId, updateData) => {
         "locationStatus", "requestedState", "requestedCity"
     ];
 
-    if (rider.currentOrderId && (updateData.status || updateData.vendorId !== undefined || updateData.cityId !== undefined || updateData.stateId !== undefined)) {
-        throw new Error("Cannot change rider status, vendor, or city while the rider has an active assignment");
+    const changesActiveAssignmentFields =
+        (updateData.status !== undefined && updateData.status !== rider.status) ||
+        (updateData.vendorId !== undefined && String(updateData.vendorId || "") !== String(rider.vendorId || "")) ||
+        (updateData.cityId !== undefined && String(updateData.cityId || "") !== String(rider.cityId || "")) ||
+        (updateData.stateId !== undefined && String(updateData.stateId || "") !== String(rider.stateId || ""));
+    if (rider.currentOrderId && changesActiveAssignmentFields) {
+        const error = new Error("Cannot change rider status, vendor, or city while the rider has an active assignment");
+        error.statusCode = 409;
+        throw error;
     }
 
     const previousVehicleId = rider.platformVehicleId?.toString() || null;

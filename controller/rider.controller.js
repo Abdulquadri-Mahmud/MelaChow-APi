@@ -972,24 +972,44 @@ export const requestDeliveryOTP = async (req, res, next) => {
             return res.status(403).json({ success: false, message: 'Unauthorized' });
         }
 
-        const VendorOrderModel = (await import("../model/vendor/VendorOrder.js")).default;
-        const vendorOrder = await VendorOrderModel.findById(orderId);
-        const actualOrderId = vendorOrder ? vendorOrder.userOrderId : orderId;
+        let order;
+        let vendorOrder = null;
+        let actualOrderId;
+        let currentStatus;
+        let customerPhone;
+        let customerUserId;
+        let customerEmail;
 
-        // Fetch order to get customer phone
-        const order = await Order.findById(actualOrderId)
-            .populate('userId', 'email firstname');
+        if (usePostgresRiderAssignmentWrites()) {
+            const { getDeliveryOtpContext } = await import("../services/postgres/riderOtp.repository.js");
+            const context = await getDeliveryOtpContext(orderId, riderId);
+            if (!context) return res.status(404).json({ success: false, message: 'Order not found' });
+            if (!context.isAssigned) return res.status(403).json({ success: false, message: 'Rider not assigned to this order' });
+            actualOrderId = context.actualOrderId;
+            currentStatus = context.orderStatus;
+            customerPhone = context.customerPhone;
+            customerUserId = context.customerUserId;
+            customerEmail = context.customerEmail;
+            order = { _id: actualOrderId, orderId: context.orderId, userId: customerUserId };
+        } else {
+            const VendorOrderModel = (await import("../model/vendor/VendorOrder.js")).default;
+            vendorOrder = await VendorOrderModel.findById(orderId);
+            actualOrderId = vendorOrder ? vendorOrder.userOrderId : orderId;
+            order = await Order.findById(actualOrderId).populate('userId', 'email firstname');
+            if (order) {
+                const isAssigned = (order.riderId?.toString() === riderId) || (vendorOrder && vendorOrder.riderId?.toString() === riderId);
+                if (!isAssigned) return res.status(403).json({ success: false, message: 'Rider not assigned to this order' });
+                currentStatus = vendorOrder ? vendorOrder.orderStatus : order.orderStatus;
+                customerPhone = order.deliveryAddress?.phone || order.phone;
+                customerUserId = order.userId?._id || order.userId;
+                customerEmail = order.userId?.email;
+            }
+        }
 
         if (!order) {
             return res.status(404).json({ success: false, message: 'Order not found' });
         }
 
-        const isAssigned = (order.riderId?.toString() === riderId) || (vendorOrder && vendorOrder.riderId?.toString() === riderId);
-        if (!isAssigned) {
-            return res.status(403).json({ success: false, message: 'Rider not assigned to this order' });
-        }
-
-        const currentStatus = vendorOrder ? vendorOrder.orderStatus : order.orderStatus;
         if (currentStatus !== 'out_for_delivery' && currentStatus !== 'picked_up') {
             return res.status(400).json({
                 success: false,
@@ -998,9 +1018,7 @@ export const requestDeliveryOTP = async (req, res, next) => {
         }
 
         // Resolve customer phone ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â delivery address phone takes priority
-        const customerPhone = order.deliveryAddress?.phone || order.phone;
-
-        if (!customerPhone && !order.userId?.email) {
+        if (!customerPhone && !customerEmail) {
             return res.status(400).json({
                 success: false,
                 message: 'Customer has no phone or email on file ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â cannot send OTP'
@@ -1012,7 +1030,7 @@ export const requestDeliveryOTP = async (req, res, next) => {
             result = await sendDeliveryOTP(
                 actualOrderId,
                 customerPhone,
-                order.userId?._id || order.userId,
+                customerUserId,
                 { forceResend: resend === true }
             );
         } catch (otpErr) {
@@ -1025,7 +1043,7 @@ export const requestDeliveryOTP = async (req, res, next) => {
             });
         }
         if (!result.reused) {
-            sendNotification(order.userId?._id || order.userId, "delivery_confirmation_code", {
+            sendNotification(customerUserId, "delivery_confirmation_code", {
                 orderId: order.orderId || order._id.toString(),
                 orderDatabaseId: order._id.toString(),
                 deliveryOtp: await getActiveDeliveryOTP(actualOrderId),
