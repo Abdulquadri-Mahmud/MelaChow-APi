@@ -22,6 +22,8 @@ export const getVendorLocations = async (req, res) => {
         // Find all approved vendors with valid stateId
         const vendorsWithStates = await Vendor.distinct("stateId", {
             verified: true,
+            isApproved: true,
+            isLive: true,
             active: true,
             suspended: false,
             stateId: { $exists: true, $ne: null },
@@ -108,6 +110,8 @@ export const getLegacyVendorLocations = async (req, res) => {
         // Get unique states and cities from vendor address strings
         const vendors = await Vendor.find({
             verified: true,
+            isApproved: true,
+            isLive: true,
             active: true,
             suspended: false,
             $or: [

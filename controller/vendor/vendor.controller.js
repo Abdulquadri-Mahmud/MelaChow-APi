@@ -18,6 +18,7 @@ import { usePostgresWalletReads } from "../../services/postgres/compat.js";
 import { walletRepository } from "../../services/postgres/wallet.repository.js";
 import MenuItem from "../../model/menu/MenuItem.js";
 import MenuItemPortion from "../../model/menu/MenuItemPortion.js";
+import { PUBLIC_VENDOR_FILTER } from "../../utils/vendorAvailability.js";
 
 const stripRecipientCode = (value) => {
   if (!value || typeof value !== "object") return value;
@@ -343,6 +344,7 @@ export const getVendorForUserDisplay = async (req, res) => {
     // Find vendor by ObjectId or slug
     const vendor = await vendorModel
       .findOne({
+        ...PUBLIC_VENDOR_FILTER,
         $or: [{ _id: id }, { storeSlug: id }],
       })
       .populate("cityId", "name platformDeliveryFee")

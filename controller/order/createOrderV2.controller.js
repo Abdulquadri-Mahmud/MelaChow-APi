@@ -25,6 +25,7 @@ import VendorDeliveryClaim from "../../model/promo/VendorDeliveryClaim.js";
 import { buildPromoIdentity } from "../../utils/promoIdentity.js";
 import { orderAutoCancelQueue } from "../../config/queue.js";
 import { assertVendorIsOpen } from "../../utils/vendorOpenStatus.js";
+import { assertVendorAcceptingOrders } from "../../utils/vendorAvailability.js";
 import { recordPaymentAttemptEvent } from "../../services/paymentHardening.service.js";
 import { generateOrderInvoice } from "../../services/invoice.service.js";
 import { usePostgresOrderWrites, usePostgresPaymentWrites } from "../../services/postgres/compat.js";
@@ -1313,7 +1314,7 @@ export const createOrderV2 = async ({
         const vendorsForFees = await Vendor.find({
           _id: { $in: uniqueVendorIds },
         }).select(
-          "storeName platformDeliveryFeeOverride address openingHours"
+          "storeName platformDeliveryFeeOverride address openingHours verified isApproved isLive active suspended deletedAt"
         ).lean();
 
         if (vendorsForFees.length !== uniqueVendorIds.length) {
@@ -1329,6 +1330,8 @@ export const createOrderV2 = async ({
         // Resolve correct fee per vendor from DB
         for (const vendor of vendorsForFees) {
           const vendorId = vendor._id.toString();
+
+          assertVendorAcceptingOrders(vendor);
 
           assertVendorIsOpen(vendor);
 

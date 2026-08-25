@@ -185,6 +185,9 @@ export const getRecommendations = async (req, res) => {
             : null;
 
         const vendorQuery = {
+            verified: true,
+            isApproved: true,
+            isLive: true,
             active: true,
             suspended: false,
             deletedAt: null,
