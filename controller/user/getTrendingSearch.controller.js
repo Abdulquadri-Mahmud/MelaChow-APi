@@ -37,6 +37,9 @@ export const getTrendingSearch = async (req, res) => {
 
     // ── Build vendor query with location filter ──
     const vendorQuery = {
+      verified: true,
+      isApproved: true,
+      isLive: true,
       active: true,
       suspended: false,
       deletedAt: null,

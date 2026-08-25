@@ -94,6 +94,9 @@ export const getNearbyVendorsForUser = async (req, res) => {
 
         // Build Query: Match EITHER String Address OR ID Location
         const query = {
+            verified: true,
+            isApproved: true,
+            isLive: true,
             active: true,
             suspended: false,
             deletedAt: null,
