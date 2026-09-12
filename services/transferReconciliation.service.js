@@ -3,6 +3,8 @@ import Withdrawal from "../model/wallet/Withdrawal.model.js";
 import RiderWithdrawal from "../model/wallet/RiderWithdrawal.model.js";
 import Wallet from "../model/wallet/wallet.mode.js";
 import { verifyPaystackTransfer } from "./paystackTransfer.service.js";
+import { usePostgresPayoutWrites } from "./postgres/compat.js";
+import { payoutRepository } from "./postgres/payout.repository.js";
 
 const TERMINAL_FAILURES = new Set(["failed", "reversed"]);
 const IN_FLIGHT = new Set(["pending", "processing", "otp"]);
@@ -22,6 +24,9 @@ const sanitizeProviderPayload = (data = {}) => ({
 });
 
 export const findWithdrawal = async ({ id, reference, session } = {}) => {
+    if (usePostgresPayoutWrites()) {
+        return id ? payoutRepository.findById(id) : payoutRepository.findByReference(reference);
+    }
     const query = id ? { _id: id } : { paystackReference: reference };
     let withdrawal = await Withdrawal.findOne(query).session(session || null);
     if (withdrawal) return { withdrawal, type: "vendor", Model: Withdrawal };
@@ -36,6 +41,12 @@ export const applyTransferOutcome = async ({ reference, providerData, source = "
     if (!reference) throw new Error("Transfer outcome is missing a reference");
     const providerStatus = String(providerData?.status || "").toLowerCase();
     if (!providerStatus) throw new Error("Transfer outcome is missing a provider status");
+
+    if (usePostgresPayoutWrites()) {
+        const found = await payoutRepository.findByReference(reference);
+        if (!found) return { found: false, reference, providerStatus };
+        return payoutRepository.applyProviderOutcome(found.type, reference, providerData, source);
+    }
 
     const session = await mongoose.startSession();
     let result;
@@ -139,6 +150,19 @@ export const reconcileWithdrawal = async ({ id, reference, source = "manual" }) 
 export const reconcileStaleWithdrawals = async ({ olderThanMinutes = 10, limit = 100 } = {}) => {
     const cutoff = new Date(Date.now() - olderThanMinutes * 60 * 1000);
     const query = { status: { $in: ["pending", "processing"] }, updatedAt: { $lte: cutoff } };
+    if (usePostgresPayoutWrites()) {
+        const rows = await payoutRepository.listStale({ olderThanMinutes, limit });
+        const summary = { checked: 0, reconciled: 0, manualReview: 0, errors: [] };
+        for (const row of rows) {
+            summary.checked += 1;
+            try {
+                const result = await reconcileWithdrawal({ reference: row.paystackReference, source: "scheduled" });
+                summary.reconciled += 1;
+                if (["manual_review", "amount_mismatch", "status_mismatch"].includes(result?.outcome)) summary.manualReview += 1;
+            } catch (error) { summary.errors.push({ reference: row.paystackReference, message: error.message }); }
+        }
+        return summary;
+    }
     const [vendorRows, riderRows] = await Promise.all([
         Withdrawal.find(query).sort({ updatedAt: 1 }).limit(limit).select("paystackReference").lean(),
         RiderWithdrawal.find(query).sort({ updatedAt: 1 }).limit(limit).select("paystackReference").lean(),

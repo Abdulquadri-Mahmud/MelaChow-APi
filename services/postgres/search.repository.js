@@ -1,4 +1,5 @@
 import prisma from "../../config/prisma.js";
+import { getGlobalDeliveryConfig } from "../deliveryPricing.service.js";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -41,10 +42,12 @@ const categoryPublicShape = (category) => {
   };
 };
 
-const resolveDeliveryFee = (vendor) => {
+const resolveDeliveryFee = (vendor, config) => {
   const override = vendor?.platformDeliveryFeeOverride;
-  const cityFee = vendor?.city?.platformDeliveryFee || 0;
-  return override != null && override > 0 ? override : cityFee;
+  const feeKobo = vendor?.deliveryManagedBy === "vendor"
+    ? Number(vendor?.flatRateDeliveryFee || 0)
+    : Number(override ?? Number(config?.fallbackFlatFeeNaira ?? 400) * 100);
+  return feeKobo / 100;
 };
 
 const restaurantShape = (vendor) => ({
@@ -67,7 +70,7 @@ const portionSummaryShape = (portion) => ({
   is_default: portion.isDefault,
 });
 
-const searchItemShape = (item, { includePortions = true } = {}) => {
+const searchItemShape = (item, { includePortions = true, deliveryConfig } = {}) => {
   const cheapest = (item.portions || [])[0];
 
   return {
@@ -76,7 +79,7 @@ const searchItemShape = (item, { includePortions = true } = {}) => {
     image: item.imageUrl || "",
     price: cheapest ? cheapest.price / 100 : null,
     portionLabel: cheapest?.label ?? null,
-    deliveryFee: resolveDeliveryFee(item.vendor),
+    deliveryFee: resolveDeliveryFee(item.vendor, deliveryConfig),
     item_type: item.itemType,
     dietary_type: item.dietaryType === "non_veg" ? "non-veg" : item.dietaryType,
     is_available: item.isAvailable ?? true,
@@ -91,13 +94,13 @@ const searchItemShape = (item, { includePortions = true } = {}) => {
   };
 };
 
-const searchComboShape = (combo) => ({
+const searchComboShape = (combo, deliveryConfig) => ({
   _id: legacyId(combo),
   name: combo.name,
   image: combo.imageUrl || "",
   price: combo.price / 100,
   portionLabel: "Combo",
-  deliveryFee: resolveDeliveryFee(combo.vendor),
+  deliveryFee: resolveDeliveryFee(combo.vendor, deliveryConfig),
   item_type: "combo",
   dietary_type: combo.dietaryType === "non_veg" ? "non-veg" : combo.dietaryType,
   is_available: combo.isAvailable ?? true,
@@ -282,9 +285,10 @@ export const searchRepository = {
       }),
     ]);
 
+    const deliveryConfig = await getGlobalDeliveryConfig();
     const suggestions = [
-      ...menus.map((item) => searchItemShape(item)),
-      ...combos.map(searchComboShape),
+      ...menus.map((item) => searchItemShape(item, { deliveryConfig })),
+      ...combos.map((combo) => searchComboShape(combo, deliveryConfig)),
     ]
       .sort((a, b) => (b.ratingCount || 0) - (a.ratingCount || 0))
       .slice(0, limitNum);
@@ -362,9 +366,10 @@ export const searchRepository = {
     ]);
 
     const total = menusTotal + combosTotal;
+    const deliveryConfig = await getGlobalDeliveryConfig();
     const data = [
-      ...menus.map((item) => searchItemShape(item)),
-      ...combos.map(searchComboShape),
+      ...menus.map((item) => searchItemShape(item, { deliveryConfig })),
+      ...combos.map((combo) => searchComboShape(combo, deliveryConfig)),
     ]
       .sort((a, b) => {
         if (sort === "rating_desc") return (b.ratingCount || 0) - (a.ratingCount || 0);

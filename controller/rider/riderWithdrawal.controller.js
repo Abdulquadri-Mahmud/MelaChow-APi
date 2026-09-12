@@ -3,9 +3,10 @@ import { randomUUID } from "crypto";
 import Rider from "../../model/rider.model.js";
 import Wallet from "../../model/wallet/wallet.mode.js";
 import RiderWithdrawal from "../../model/wallet/RiderWithdrawal.model.js";
-import { usePostgresWalletReads } from "../../services/postgres/compat.js";
+import { usePostgresPayoutWrites, usePostgresWalletReads } from "../../services/postgres/compat.js";
 import { walletRepository } from "../../services/postgres/wallet.repository.js";
-import { checkPaystackBalance } from "../../services/paystackTransfer.service.js";
+import { checkPaystackBalance, initiatePaystackTransfer } from "../../services/paystackTransfer.service.js";
+import { payoutRepository } from "../../services/postgres/payout.repository.js";
 import { getNextPayoutWindowMessage } from "../../utils/payoutSchedule.js";
 import { getPlatformConfig } from "../../services/platformConfig.service.js";
 import { getEffectiveFeeConfig, computeActorPayout } from "../../utils/paystackFees.js";
@@ -95,6 +96,27 @@ export const saveBankAccount = async (req, res) => {
             });
         }
 
+        if (usePostgresPayoutWrites()) {
+            const localBypass = process.env.NODE_ENV !== "production" && process.env.LOCAL_VENDOR_PAYOUT_BYPASS === "true";
+            let accountName = "Local Test Account", recipientCode = `local_rider_${bankCode}_${String(accountNumber).slice(-4)}`;
+            if (!localBypass) {
+                try {
+                    const resolveResp = await axios.get(`https://api.paystack.co/bank/resolve?account_number=${accountNumber}&bank_code=${bankCode}`, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` } });
+                    accountName = resolveResp.data?.data?.account_name;
+                    if (!accountName) throw new Error("Account name not returned");
+                } catch { return res.status(400).json({ success: false, message: "Could not verify bank account. Please check the details and try again." }); }
+                try {
+                    const recipientResp = await axios.post("https://api.paystack.co/transferrecipient", { type: "nuban", name: accountName, account_number: accountNumber, bank_code: bankCode, currency: "NGN" }, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`, "Content-Type": "application/json" } });
+                    recipientCode = recipientResp.data?.data?.recipient_code;
+                    if (!recipientCode) throw new Error("recipient_code not returned");
+                } catch { return res.status(502).json({ success: false, message: "Failed to register bank account with payment provider. Please try again." }); }
+            }
+            const payoutDetails = { bankCode, bankName, accountNumber, accountName, recipientCode, payoutEnabled: true };
+            const rider = await payoutRepository.updateOwnerPayoutDetails("rider", riderId, payoutDetails);
+            if (!rider) return res.status(404).json({ success: false, message: "Rider not found" });
+            return res.status(200).json({ success: true, message: "Bank account saved successfully", data: { bankName, accountNumber, accountName, payoutEnabled: true } });
+        }
+
         const rider = await Rider.findById(riderId).select("+payoutDetails.recipientCode");
         if (!rider) {
             return res.status(404).json({ success: false, message: "Rider not found" });
@@ -177,6 +199,42 @@ export const saveBankAccount = async (req, res) => {
     }
 };
 
+const initiatePostgresRiderWithdrawal = async (req, res, amount) => {
+    const context = await payoutRepository.getOwnerContext("rider", req.rider._id);
+    if (!context) return res.status(404).json({ success: false, message: "Rider or wallet not found" });
+    const details = context.owner.payoutDetails && typeof context.owner.payoutDetails === "object" ? context.owner.payoutDetails : {};
+    if (!details.payoutEnabled || !details.recipientCode) return res.status(400).json({ success: false, message: "No verified bank account on file. Please add a bank account before withdrawing." });
+    const payoutCalc = computeActorPayout("rider", amount, getEffectiveFeeConfig("rider", context.owner, await getPlatformConfig()));
+    if (payoutCalc.net <= 0) return res.status(400).json({ success: false, message: "Withdrawal amount too small after fees" });
+    const localBypass = process.env.NODE_ENV !== "production" && process.env.LOCAL_VENDOR_PAYOUT_BYPASS === "true";
+    if (!localBypass) {
+        try {
+            const { sufficient } = await checkPaystackBalance(Math.round(payoutCalc.net * 100));
+            if (!sufficient) return res.status(400).json({ success: false, code: "PAYSTACK_BALANCE_PENDING_SETTLEMENT", message: getNextPayoutWindowMessage().message });
+        } catch { return res.status(503).json({ success: false, message: "Could not verify payout availability right now. Please try again shortly." }); }
+    }
+    const reference = `RWD_${randomUUID().replace(/-/g, "").toUpperCase()}`;
+    const reserved = await payoutRepository.reserveWithdrawal({ type: "rider", tokenId: req.rider._id, requestedAmountNaira: amount, transferFeeNaira: payoutCalc.feeChargedToActor, netAmountNaira: payoutCalc.net, appliedMarkupNaira: payoutCalc.markupChargedToActor, reference });
+    if (reserved.error === "insufficient_balance") return res.status(400).json({ success: false, message: `Insufficient balance. Available: ₦${reserved.balance.toLocaleString()}` });
+    if (reserved.error === "payout_in_progress") return res.status(400).json({ success: false, message: "You already have a withdrawal in progress. Please wait for it to complete." });
+    if (reserved.error === "cooldown") return res.status(429).json({ success: false, message: `Withdrawal cooldown active. You can withdraw again in ${reserved.hoursRemaining} hour${reserved.hoursRemaining !== 1 ? "s" : ""}.` });
+    if (reserved.error) return res.status(400).json({ success: false, message: "Unable to reserve withdrawal" });
+    if (localBypass) {
+        const withdrawal = await payoutRepository.markProcessing("rider", reference, { transferCode: `local_${reference}`, providerStatus: "local_test" });
+        return res.status(200).json({ success: true, message: "Local test withdrawal reserved successfully", data: withdrawal });
+    }
+    try {
+        const provider = await initiatePaystackTransfer({ recipientCode: details.recipientCode, amountKobo: Math.round(payoutCalc.net * 100), reference, reason: `MelaChow rider payout — ${context.owner.name}` });
+        const withdrawal = await payoutRepository.markProcessing("rider", reference, { transferCode: provider.transferCode, providerStatus: provider.status });
+        return res.status(200).json({ success: true, message: "Withdrawal initiated successfully", data: withdrawal });
+    } catch (error) {
+        const definitive = error.response && error.response.status >= 400 && error.response.status < 500;
+        if (definitive) { await payoutRepository.restoreFailed("rider", reference, error.response?.data?.message || "Paystack rejected transfer"); return res.status(502).json({ success: false, message: "Transfer initiation failed. Your balance has been restored." }); }
+        await payoutRepository.markProcessing("rider", reference, { uncertain: true });
+        return res.status(202).json({ success: true, message: "Transfer status is uncertain. Funds remain reserved while Paystack reconciliation runs.", data: { reference, status: "processing" } });
+    }
+};
+
 /**
  * ─── STEP 3: Initiate withdrawal ─────────────────────────────────────────────
  * Debits rider wallet and initiates Paystack transfer.
@@ -201,6 +259,8 @@ export const initiateRiderWithdrawal = async (req, res) => {
         if (amount > 500000) {
             return res.status(400).json({ success: false, message: "Maximum withdrawal amount is ₦500,000" });
         }
+
+        if (usePostgresPayoutWrites()) return initiatePostgresRiderWithdrawal(req, res, amount);
 
         // STEP 2 — Fetch rider with payout details
         const rider = await Rider.findById(riderId).select("+payoutDetails.recipientCode");

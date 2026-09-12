@@ -6,6 +6,8 @@
 } from '../../services/notification.service.js';
 import PushSubscription from '../../model/notification/pushSubscription.model.js';
 import Notification from '../../model/notification/notification.model.js';
+import { usePostgresNotificationWrites } from '../../services/postgres/compat.js';
+import { notificationRepository } from '../../services/postgres/notification.repository.js';
 
 export const subscribeToNotifications = async (req, res) => {
     try {
@@ -15,6 +17,7 @@ export const subscribeToNotifications = async (req, res) => {
         if (!subscription || !subscription.endpoint || !subscription.keys) {
             return res.status(400).json({ message: 'Invalid subscription object' });
         }
+        if(usePostgresNotificationWrites()){await notificationRepository.saveSubscription('user',userId,subscription,deviceType,req.headers['user-agent']);return res.status(201).json({message:'Subscribed successfully'});}
 
         await saveSubscription(userId, subscription, deviceType);
 
@@ -94,7 +97,16 @@ export const sendTestNotification = async (req, res) => {
 export const getNotificationHistory = async (req, res) => {
     try {
         const { limit = 100, skip = 0, type, unread } = req.query;
+        if (usePostgresNotificationWrites()) {
+            const result = await notificationRepository.list('user', req.userId, { limit, skip, type, unread, restaurantId: req.query.restaurantId });
+            return res.json({ success: true, ...result, hasMore: result.total > Number(skip) + result.notifications.length });
+        }
 
+        if (usePostgresNotificationWrites()) {
+            const deleted = await notificationRepository.removeSubscription('user', req.userId, endpoint);
+            if (!deleted) return res.status(404).json({ message: 'Subscription not found' });
+            return res.json({ success: true, message: 'Unsubscribed successfully' });
+        }
         // Build query
         let query = { userId: req.userId };
 
@@ -153,6 +165,7 @@ export const getNotificationHistory = async (req, res) => {
  */
 export const getUnreadCount = async (req, res) => {
     try {
+        if (usePostgresNotificationWrites()) return res.json({ success: true, count: await notificationRepository.unreadCount('user', req.userId) });
         const count = await Notification.countDocuments({
             userId: req.userId,
             read: false
@@ -175,6 +188,12 @@ export const getUnreadCount = async (req, res) => {
  */
 export const markAsRead = async (req, res) => {
     try {
+        if (usePostgresNotificationWrites()) {
+            const notification = await notificationRepository.markRead('user', req.userId, req.params.id);
+            if (!notification) return res.status(404).json({ success: false, message: 'Notification not found' });
+            await syncUnreadCountToRedis(req.userId);
+            return res.json({ success: true, notification });
+        }
         const notification = await Notification.findOneAndUpdate(
             {
                 _id: req.params.id,
@@ -211,6 +230,11 @@ export const markAsRead = async (req, res) => {
  */
 export const markAllAsRead = async (req, res) => {
     try {
+        if (usePostgresNotificationWrites()) {
+            const modifiedCount = await notificationRepository.markAllRead('user', req.userId);
+            await syncUnreadCountToRedis(req.userId);
+            return res.json({ success: true, message: 'All notifications marked as read', modifiedCount });
+        }
         const result = await Notification.updateMany(
             { userId: req.userId, read: false },
             { read: true }
@@ -240,6 +264,11 @@ export const markAllAsRead = async (req, res) => {
  */
 export const deleteNotification = async (req, res) => {
     try {
+        if (usePostgresNotificationWrites()) {
+            const deletedCount = await notificationRepository.remove('user', req.userId, req.params.id);
+            if (!deletedCount) return res.status(404).json({ success: false, message: 'Notification not found' });
+            return res.json({ success: true, message: 'Notification deleted' });
+        }
         const notification = await Notification.findOneAndDelete({
             _id: req.params.id,
             userId: req.userId // Ensure user owns this notification
@@ -272,6 +301,10 @@ export const deleteNotification = async (req, res) => {
  */
 export const clearAllNotifications = async (req, res) => {
     try {
+        if (usePostgresNotificationWrites()) {
+            const deletedCount = await notificationRepository.remove('user', req.userId);
+            return res.json({ success: true, message: 'All notifications cleared', deletedCount });
+        }
         const result = await Notification.deleteMany({
             userId: req.userId
         });

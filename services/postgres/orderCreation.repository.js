@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import prisma from "../../config/prisma.js";
 import { assertVendorIsOpen } from "../../utils/vendorOpenStatus.js";
+import { quoteVendorDelivery } from "../deliveryPricing.service.js";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -47,46 +48,32 @@ const platformConfigValue = async (tx) => {
   };
 };
 
-const calculateServiceFee = (config, subtotal) => {
+export const calculateServiceFeeKobo = (config, subtotalKobo) => {
+  const subtotal = Math.max(0, Math.round(Number(subtotalKobo) || 0));
   if (!config.serviceFeeEnabled || !subtotal || subtotal <= 0) return 0;
 
   if (config.serviceFeeType === "fixed") {
-    return Math.max(0, Number(config.serviceFeeValue || 0));
+    // Fixed service-fee configuration is entered in naira while PostgreSQL
+    // order money is stored in kobo.
+    return Math.max(0, Math.round(Number(config.serviceFeeValue || 0) * 100));
   }
 
   if (config.serviceFeeType === "percentage") {
     const rawFee = (subtotal * Number(config.serviceFeeValue || 0)) / 100;
-    const cappedFee = config.serviceFeeCap > 0 ? Math.min(rawFee, Number(config.serviceFeeCap)) : rawFee;
+    const capKobo = Math.max(0, Number(config.serviceFeeCap || 0) * 100);
+    const cappedFee = capKobo > 0 ? Math.min(rawFee, capKobo) : rawFee;
     return Math.max(0, Math.round(cappedFee));
   }
 
   return 0;
 };
 
-const resolveVendorDeliveryFee = async (tx, vendor) => {
+const resolveVendorDeliveryFee = (vendor, platformConfig) => {
   if (vendor.platformDeliveryFeeOverride != null && vendor.platformDeliveryFeeOverride > 0) {
     return vendor.platformDeliveryFeeOverride;
   }
-
-  if (vendor.city?.platformDeliveryFee != null) {
-    return vendor.city.platformDeliveryFee;
-  }
-
-  const cityName = vendor.address?.city;
-  if (!cityName) {
-    throw new Error(`Vendor "${vendor.storeName}" has no city set for delivery fee resolution.`);
-  }
-
-  const city = await tx.city.findFirst({
-    where: { name: { equals: cityName, mode: "insensitive" } },
-    select: { platformDeliveryFee: true },
-  });
-
-  if (!city) {
-    throw new Error(`No platform delivery fee configured for city "${cityName}".`);
-  }
-
-  return city.platformDeliveryFee || 0;
+  const fallbackNaira = Number(platformConfig?.distanceDeliveryConfig?.fallbackFlatFeeNaira ?? 400);
+  return Math.max(0, Math.round(fallbackNaira * 100));
 };
 
 const resolveChoiceSelections = async (tx, menuItemId, selectedChoices = []) => {
@@ -141,6 +128,13 @@ const resolveChoiceSelections = async (tx, menuItemId, selectedChoices = []) => 
   }
 
   return { selectedOptions: resolvedChoices, choicesPrice };
+};
+
+export const calculateVendorCommissionKobo = (subtotalKobo, config = {}) => {
+  if (!config.commissionEnabled) return 0;
+  const subtotal = Math.max(0, Math.round(Number(subtotalKobo) || 0));
+  const rate = Math.min(100, Math.max(0, Number(config.commissionRate) || 0));
+  return Math.round((subtotal * rate) / 100);
 };
 const normalizeOrderItems = async (tx, items) => {
   const normalizedItems = [];
@@ -362,6 +356,9 @@ export const postgresOrderCreationRepository = {
     paymentReference = null,
     idempotencyKey = null,
     orderCode = null,
+    discountCode = null,
+    promoIdentity = {},
+    rawIp = "unknown",
   }) {
     if (!userId) throw new Error("User ID is required");
     if (!Array.isArray(items) || items.length === 0) throw new Error("Order items are required");
@@ -402,7 +399,7 @@ export const postgresOrderCreationRepository = {
 
       const vendors = await tx.vendor.findMany({
         where: { id: { in: vendorIds } },
-        include: { city: { select: { platformDeliveryFee: true } } },
+        include: { city: true },
       });
       if (vendors.length !== vendorIds.length) throw new Error("One or more restaurants not found");
 
@@ -413,23 +410,85 @@ export const postgresOrderCreationRepository = {
       }
 
       const deliveryFeeMap = new Map();
+      const deliveryQuoteMap = new Map();
       let totalDeliveryFee = 0;
+      const submittedAddressId = deliveryAddress?.id || deliveryAddress?._id;
+      const resolvedAddressId = submittedAddressId ? await resolveId(tx.userAddress, submittedAddressId) : null;
+      const selectedAddress = resolvedAddressId
+        ? await tx.userAddress.findFirst({ where: { id: resolvedAddressId, userId: customerId } })
+        : await tx.userAddress.findFirst({ where: { userId: customerId, isDefault: true } });
+      const platformConfig = await platformConfigValue(tx);
       for (const vendor of vendors) {
         assertVendorIsOpen(vendor);
         if (!frontendFeeMap.has(vendor.id)) {
           throw new Error(`Missing delivery fee for restaurant ${vendor.storeName}`);
         }
-        const resolvedFee = await resolveVendorDeliveryFee(tx, vendor);
+        const quote = selectedAddress ? await quoteVendorDelivery({ vendor, address: selectedAddress, checkout: true }) : null;
+        if (quote && !quote.deliverable) throw new Error(`${vendor.storeName} is outside the ${quote.radiusKm} km delivery area for this address.`);
+        const resolvedFee = quote?.deliveryFeeKobo ?? resolveVendorDeliveryFee(vendor, platformConfig);
+        if (quote) deliveryQuoteMap.set(vendor.id, quote);
         deliveryFeeMap.set(vendor.id, resolvedFee);
         totalDeliveryFee += resolvedFee;
       }
 
       const subtotal = normalizedItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
-      const platformConfig = await platformConfigValue(tx);
-      const serviceFee = calculateServiceFee(platformConfig, subtotal);
-      const total = subtotal + totalDeliveryFee + serviceFee;
+      const originalDeliveryFee = totalDeliveryFee;
+      let freeDeliveryPromo = { eligible: false, reason: "no_active_promo" };
+      let vendorDeliveryPromo = { applied: false, reason: "no_active_promo" };
+      let selectedPromo = null;
+      if (originalDeliveryFee > 0 && vendorIds.length === 1) {
+        const vendorId = vendorIds[0], now = new Date(), staleBefore = new Date(Date.now() - 45 * 60 * 1000);
+        const vendorPromo = await tx.vendorDeliveryPromo.findFirst({ where: { vendorId, isActive: true, OR: [{ startsAt: null }, { startsAt: { lte: now } }], AND: [{ OR: [{ endsAt: null }, { endsAt: { gte: now } }] }] }, orderBy: { createdAt: "desc" } });
+        if (vendorPromo && (vendorPromo.maxOrders == null || vendorPromo.usedOrders < vendorPromo.maxOrders)) {
+          const identities=[{userId:customerId},promoIdentity.hashedDeviceId?{hashedDeviceId:promoIdentity.hashedDeviceId}:null,promoIdentity.phoneHash?{phoneHash:promoIdentity.phoneHash}:null].filter(Boolean);
+          let prior=await tx.vendorDeliveryClaim.findFirst({where:{promoId:vendorPromo.id,OR:identities},include:{order:true}});
+          if(prior&&(!prior.order||["failed","refunded"].includes(prior.order.paymentStatus)||prior.order.orderStatus==="cancelled"||(prior.order.paymentStatus==="pending"&&prior.order.createdAt<staleBefore))){await tx.vendorDeliveryClaim.delete({where:{id:prior.id}});await tx.vendorDeliveryPromo.updateMany({where:{id:vendorPromo.id,usedOrders:{gt:0}},data:{usedOrders:{decrement:1}}});prior=null;}
+          if(!prior){selectedPromo={type:"vendor",row:vendorPromo};vendorDeliveryPromo={applied:true,promoId:vendorPromo.legacyMongoId||vendorPromo.id,vendorId,hashedDeviceId:promoIdentity.hashedDeviceId||null,phoneHash:promoIdentity.phoneHash||null,originalDeliveryFee:originalDeliveryFee/100,claimed:false};}
+        }
+        if(!selectedPromo){
+          const platformPromo=await tx.freeDeliveryPromo.findFirst({where:{isActive:true,OR:[{startsAt:null},{startsAt:{lte:now}}],AND:[{OR:[{endsAt:null},{endsAt:{gte:now}}]}]},orderBy:{createdAt:"desc"}});
+          if(platformPromo&&(platformPromo.maxOrders==null||platformPromo.usedOrders<platformPromo.maxOrders)){
+            const identities=[{userId:customerId},promoIdentity.hashedDeviceId?{hashedDeviceId:promoIdentity.hashedDeviceId}:null,promoIdentity.phoneHash?{phoneHash:promoIdentity.phoneHash}:null].filter(Boolean);
+            let prior=await tx.freeDeliveryClaim.findFirst({where:{promoId:platformPromo.id,OR:identities},include:{order:true}});
+            if(prior&&(!prior.order||["failed","refunded"].includes(prior.order.paymentStatus)||prior.order.orderStatus==="cancelled"||(prior.order.paymentStatus==="pending"&&prior.order.createdAt<staleBefore))){await tx.freeDeliveryClaim.delete({where:{id:prior.id}});await tx.freeDeliveryPromo.updateMany({where:{id:platformPromo.id,usedOrders:{gt:0}},data:{usedOrders:{decrement:1}}});prior=null;}
+            if(!prior){const hashedIp=crypto.createHash("sha256").update(rawIp||"unknown").digest("hex");const ipCount=await tx.freeDeliveryClaim.count({where:{hashedIp}});if(ipCount<5){selectedPromo={type:"platform",row:platformPromo,hashedIp};freeDeliveryPromo={eligible:true,promoId:platformPromo.legacyMongoId||platformPromo.id,hashedIp,hashedDeviceId:promoIdentity.hashedDeviceId||null,phoneHash:promoIdentity.phoneHash||null,originalDeliveryFee:originalDeliveryFee/100,claimed:false};}}
+          }
+        }
+        if(selectedPromo){totalDeliveryFee=0;for(const key of deliveryFeeMap.keys())deliveryFeeMap.set(key,0);}
+      }
+      const serviceFee = calculateServiceFeeKobo(platformConfig, subtotal);
+      let total = subtotal + totalDeliveryFee + serviceFee;
+      let appliedDiscount = null;
+      let reservedDiscount = null;
+      if (discountCode) {
+        const discount = await tx.discount.findUnique({ where: { code: String(discountCode).trim().toUpperCase() } });
+        const now = new Date();
+        if (!discount || !discount.isActive) throw new Error("Discount Error: Invalid discount code");
+        if (discount.startDate > now) throw new Error("Discount Error: Discount is not active yet");
+        if (discount.endDate && discount.endDate < now) throw new Error("Discount Error: Discount has expired");
+        if (discount.usageLimit != null && discount.usageCount >= discount.usageLimit) throw new Error("Discount Error: Discount usage limit reached");
+        if (subtotal < discount.minOrderAmount) throw new Error(`Discount Error: Minimum order of ₦${discount.minOrderAmount / 100} required`);
+        if (["VENDOR_ORDER", "SPECIFIC_ITEMS"].includes(discount.scope) && discount.vendorId !== vendorIds[0]) throw new Error("Discount Error: This discount is not valid for this vendor");
+        const identityFilters = [{ userId: customerId }, promoIdentity.hashedDeviceId ? { hashedDeviceId: promoIdentity.hashedDeviceId } : null, promoIdentity.phoneHash ? { phoneHash: promoIdentity.phoneHash } : null].filter(Boolean);
+        if (discount.userUsageLimit != null) {
+          const used = await tx.discountUsage.count({ where: { discountId: discount.id, OR: identityFilters } });
+          if (used >= discount.userUsageLimit) throw new Error("Discount Error: This discount has already been used by this account, device, or phone");
+        }
+        let discountAmount = 0;
+        if (discount.scope === "DELIVERY_FEE") discountAmount = discount.type === "FIXED" ? discount.value : Math.floor(totalDeliveryFee * discount.value / 100);
+        else if (["GLOBAL_ORDER", "VENDOR_ORDER"].includes(discount.scope)) discountAmount = discount.type === "FIXED" ? discount.value : Math.floor(subtotal * discount.value / 100);
+        else {
+          const matching = normalizedItems.filter(item => item.foodId && discount.targetFoodIds.includes(item.foodId));
+          if (!matching.length) throw new Error("Discount Error: Discount does not apply to any items in your cart");
+          discountAmount = matching.reduce((sum, item) => sum + (discount.type === "FIXED" ? discount.value * item.quantity : Math.floor(item.price * item.quantity * discount.value / 100)), 0);
+        }
+        if (discount.maxDiscountAmount != null) discountAmount = Math.min(discountAmount, discount.maxDiscountAmount);
+        discountAmount = Math.min(discountAmount, discount.scope === "DELIVERY_FEE" ? totalDeliveryFee : subtotal);
+        total -= discountAmount;
+        appliedDiscount = { code: discount.code, type: discount.type, amount: discountAmount / 100, scope: discount.scope, label: discount.description || discount.code, fundedBy: discount.fundedBy };
+        reservedDiscount = discount;
+      }
       const finalOrderCode = orderCode || generateOrderCode();
-      const commissionRate = platformConfig.commissionEnabled ? Number(platformConfig.commissionRate || 0) / 100 : 0;
 
       const order = await tx.order.create({
         data: {
@@ -445,8 +504,9 @@ export const postgresOrderCreationRepository = {
           paymentReference,
           idempotencyKey,
           orderStatus: "pending",
-          freeDeliveryPromo: { eligible: false, reason: "not_migrated_for_postgres_order_write" },
-          vendorDeliveryPromo: { applied: false, reason: "not_migrated_for_postgres_order_write" },
+          appliedDiscount,
+          freeDeliveryPromo,
+          vendorDeliveryPromo,
           statusLog: [
             {
               status: "pending",
@@ -458,6 +518,8 @@ export const postgresOrderCreationRepository = {
             create: vendorIds.map((restaurantId) => ({
               restaurantId,
               deliveryFee: deliveryFeeMap.get(restaurantId) || 0,
+              distanceMeters: deliveryQuoteMap.get(restaurantId)?.distanceMeters ?? null,
+              pricingSnapshot: deliveryQuoteMap.get(restaurantId)?.pricingSnapshot || { pricingMode: "flat_fallback" },
             })),
           },
           items: {
@@ -497,10 +559,26 @@ export const postgresOrderCreationRepository = {
         },
       });
 
+      if(selectedPromo?.type==="vendor"){
+        const claimed=await tx.vendorDeliveryPromo.updateMany({where:{id:selectedPromo.row.id,isActive:true,...(selectedPromo.row.maxOrders!=null?{usedOrders:{lt:selectedPromo.row.maxOrders}}:{})},data:{usedOrders:{increment:1}}});if(claimed.count!==1)throw new Error("Vendor delivery promo is no longer available");
+        await tx.vendorDeliveryClaim.create({data:{promoId:selectedPromo.row.id,vendorId:vendorIds[0],userId:customerId,orderId:order.id,hashedDeviceId:promoIdentity.hashedDeviceId||null,phoneHash:promoIdentity.phoneHash||null,metadata:{deliveryFeeWaived:originalDeliveryFee/100}}});vendorDeliveryPromo.claimed=true;
+        if(selectedPromo.row.maxOrders!=null&&selectedPromo.row.usedOrders+1>=selectedPromo.row.maxOrders){await tx.vendorDeliveryPromo.update({where:{id:selectedPromo.row.id},data:{isActive:false}});await tx.vendor.update({where:{id:vendorIds[0]},data:{hasActiveDeliveryPromo:false}});}
+      }else if(selectedPromo?.type==="platform"){
+        const claimed=await tx.freeDeliveryPromo.updateMany({where:{id:selectedPromo.row.id,isActive:true,...(selectedPromo.row.maxOrders!=null?{usedOrders:{lt:selectedPromo.row.maxOrders}}:{})},data:{usedOrders:{increment:1}}});if(claimed.count!==1)throw new Error("Free delivery promo is no longer available");
+        await tx.freeDeliveryClaim.create({data:{promoId:selectedPromo.row.id,userId:customerId,orderId:order.id,hashedIp:selectedPromo.hashedIp,hashedDeviceId:promoIdentity.hashedDeviceId||null,phoneHash:promoIdentity.phoneHash||null,metadata:{deliveryFeeWaived:originalDeliveryFee/100}}});freeDeliveryPromo.claimed=true;
+      }
+      if(selectedPromo){await tx.order.update({where:{id:order.id},data:{freeDeliveryPromo,vendorDeliveryPromo}});order.freeDeliveryPromo=freeDeliveryPromo;order.vendorDeliveryPromo=vendorDeliveryPromo;}
+
+      if (reservedDiscount) {
+        const claimed = await tx.discount.updateMany({ where: { id: reservedDiscount.id, ...(reservedDiscount.usageLimit != null ? { usageCount: { lt: reservedDiscount.usageLimit } } : {}) }, data: { usageCount: { increment: 1 } } });
+        if (claimed.count !== 1) throw new Error("Discount Error: Discount usage limit reached");
+        await tx.discountUsage.create({ data: { discountId: reservedDiscount.id, userId: customerId, orderId: order.id, hashedDeviceId: promoIdentity.hashedDeviceId || null, phoneHash: promoIdentity.phoneHash || null } });
+      }
+
       for (const vendorId of vendorIds) {
         const vendorItems = vendorItemsMap.get(vendorId) || [];
         const vendorSubtotal = vendorItems.reduce((sum, item) => sum + item.price * item.quantity, 0);
-        const commission = Math.round(vendorSubtotal * commissionRate);
+        const commission = calculateVendorCommissionKobo(vendorSubtotal, platformConfig);
         const vendorTotal = vendorSubtotal - commission;
 
         await tx.vendorOrder.create({

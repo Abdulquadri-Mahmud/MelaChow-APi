@@ -1,6 +1,8 @@
 import State from "../../model/location/State.js";
 import City from "../../model/location/City.js";
 import Vendor from "../../model/vendor/vendor.model.js";
+import { usePostgresAdminWrites } from "../../services/postgres/compat.js";
+import { locationMutationRepository } from "../../services/postgres/locationMutation.repository.js";
 
 /**
  * @desc Create a new state
@@ -17,6 +19,7 @@ export const createState = async (req, res) => {
                 message: "State name is required",
             });
         }
+        if(usePostgresAdminWrites()){const result=await locationMutationRepository.createState(name);if(result.error)return res.status(409).json({success:false,message:"State already exists",state:result.state});return res.status(201).json({success:true,message:"State created successfully",state:result.state});}
 
         // Check if state already exists
         const existingState = await State.findOne({
@@ -66,6 +69,7 @@ export const createCity = async (req, res) => {
                 message: "City name and stateId are required",
             });
         }
+        if(usePostgresAdminWrites()){const result=await locationMutationRepository.createCity({name,stateToken:stateId,platformDeliveryFee});if(result.error)return res.status(result.error==="state_not_found"?404:409).json({success:false,message:result.error==="state_not_found"?"State not found":"City already exists in this state"});return res.status(201).json({success:true,message:"City created successfully",city:result.city});}
 
         // Verify state exists
         const state = await State.findById(stateId);
@@ -131,6 +135,7 @@ export const toggleStateStatus = async (req, res) => {
                 message: "isActive must be a boolean",
             });
         }
+        if(usePostgresAdminWrites()){const state=await locationMutationRepository.toggle("state",id,isActive);if(!state)return res.status(404).json({success:false,message:"State not found"});return res.status(200).json({success:true,message:`State ${isActive?"activated":"deactivated"} successfully`,state});}
 
         const state = await State.findByIdAndUpdate(
             id,
@@ -176,6 +181,7 @@ export const toggleCityStatus = async (req, res) => {
                 message: "isActive must be a boolean",
             });
         }
+        if(usePostgresAdminWrites()){const city=await locationMutationRepository.toggle("city",id,isActive);if(!city)return res.status(404).json({success:false,message:"City not found"});return res.status(200).json({success:true,message:`City ${isActive?"activated":"deactivated"} successfully`,city});}
 
         const city = await City.findByIdAndUpdate(
             id,
@@ -212,6 +218,7 @@ export const toggleCityStatus = async (req, res) => {
  */
 export const getLocationRequests = async (req, res) => {
     try {
+        if(usePostgresAdminWrites()){const vendors=await locationMutationRepository.listLocationRequests();return res.status(200).json({success:true,count:vendors.length,vendors});}
         const vendors = await Vendor.find({
             locationStatus: "pending_review",
         })
@@ -242,6 +249,7 @@ export const getLocationRequests = async (req, res) => {
  */
 export const getAllStates = async (req, res) => {
     try {
+        if(usePostgresAdminWrites()){const states=await locationMutationRepository.listStates();return res.status(200).json({success:true,count:states.length,states});}
         const states = await State.find().sort({ name: 1 });
 
         res.status(200).json({
@@ -267,6 +275,7 @@ export const getAllStates = async (req, res) => {
 export const getAllCities = async (req, res) => {
     try {
         const { stateId } = req.query;
+        if(usePostgresAdminWrites()){const cities=await locationMutationRepository.listCities(stateId);return res.status(200).json({success:true,count:cities.length,cities});}
 
         const query = stateId ? { stateId } : {};
         const cities = await City.find(query)
@@ -297,6 +306,7 @@ export const updateCity = async (req, res) => {
     try {
         const { id } = req.params;
         const { name, stateId, isActive, platformDeliveryFee } = req.body;
+        if(usePostgresAdminWrites()){const result=await locationMutationRepository.updateCity(id,{name,stateId,isActive,platformDeliveryFee});if(result.error)return res.status(result.error==="not_found"||result.error==="state_not_found"?404:409).json({success:false,message:result.error==="not_found"?"City not found":result.error==="state_not_found"?"State not found":"City already exists in this state"});return res.status(200).json({success:true,message:"City updated successfully",city:result.city});}
 
         const city = await City.findById(id);
         if (!city) {

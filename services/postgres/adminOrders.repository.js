@@ -1,6 +1,7 @@
 import prisma from "../../config/prisma.js";
+import { calculateRiderPayoutKobo } from "./riderPayout.js";
 
-const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const mongoIdPattern = /^[0-9a-fA-F]{24}$/;
 
 const defaultPlatformConfig = {
@@ -150,6 +151,7 @@ const orderShape = (order, { deliveryType = false, activeAssignments = false } =
   statusLog: order.statusLog,
   createdAt: order.createdAt,
   updatedAt: order.updatedAt,
+  moneyUnit: "kobo",
   __v: 0,
   ...(deliveryType ? { deliveryType: "platform_managed" } : {}),
   ...(activeAssignments ? { activeAssignments: [] } : {}),
@@ -189,6 +191,7 @@ const vendorOrderShape = (vendorOrder) => ({
   riderId: vendorOrder.riderId,
   createdAt: vendorOrder.createdAt,
   updatedAt: vendorOrder.updatedAt,
+  moneyUnit: "kobo",
   __v: 0,
 });
 
@@ -206,6 +209,7 @@ const platformVendorOrderShape = (vendorOrder) => ({
   riderId: vendorOrder.rider?.legacyMongoId || vendorOrder.riderId,
   createdAt: vendorOrder.createdAt,
   updatedAt: vendorOrder.updatedAt,
+  moneyUnit: "kobo",
   __v: 0,
 });
 
@@ -234,6 +238,7 @@ const platformOrderShape = (order) => ({
   statusLog: order.statusLog,
   createdAt: order.createdAt,
   updatedAt: order.updatedAt,
+  moneyUnit: "kobo",
   __v: 0,
   vendorOrders: (order.vendorOrders || []).map(platformVendorOrderShape),
 });
@@ -461,7 +466,7 @@ const parentStatusFromVendorStatuses = (statuses) => {
   return "pending";
 };
 
-const automaticAssignmentExpiresAt = new Date("9999-12-31T23:59:59.999Z");
+const liveJobBoardExpiry = () => new Date("9999-12-31T23:59:59.999Z");
 
 const locationLegacyId = async (model, uuid) => {
   if (!uuid) return null;
@@ -481,8 +486,8 @@ const getPostgresPlatformConfig = async () => {
   };
 };
 
-const commissionLedgerOrderShape = (order, riderFixedPayout) => {
-  const riderEarnings = order.riderEarnings ?? riderFixedPayout;
+const commissionLedgerOrderShape = (order, platformConfig) => {
+  const riderEarnings = order.riderEarnings ?? calculateRiderPayoutKobo(order.deliveryFee, platformConfig);
   const totalCommission = (order.vendorOrders || []).reduce((sum, vendorOrder) => sum + (vendorOrder.commission || 0), 0);
   const deliveryFeeHeld = 0;
   const deliverySpread = Math.max(0, order.deliveryFee - riderEarnings);
@@ -502,6 +507,7 @@ const commissionLedgerOrderShape = (order, riderFixedPayout) => {
     deliveryFeeHeld,
     deliverySpread,
     platformRevenue: totalCommission + (order.serviceFee || 0) + deliverySpread,
+    moneyUnit: "kobo",
   };
 };
 
@@ -578,9 +584,9 @@ export const adminOrdersRepository = {
       include: orderInclude,
     });
 
-    if (!order && mongoIdPattern.test(String(orderId))) {
+    if (!order && (mongoIdPattern.test(String(orderId)) || uuidPattern.test(String(orderId)))) {
       const vendorOrder = await prisma.vendorOrder.findFirst({
-        where: { legacyMongoId: String(orderId) },
+        where: uuidPattern.test(String(orderId)) ? { id: String(orderId) } : { legacyMongoId: String(orderId) },
         select: { userOrderId: true },
       });
       if (vendorOrder) {
@@ -626,6 +632,7 @@ export const adminOrdersRepository = {
       totalCommission: vendorOrders.reduce((sum, vendorOrder) => sum + (vendorOrder.commission || 0), 0),
       totalVendorEarnings: vendorOrders.reduce((sum, vendorOrder) => sum + (vendorOrder.vendorTotal || 0), 0),
       total: order.total,
+      moneyUnit: "kobo",
     };
 
     return {
@@ -645,7 +652,6 @@ export const adminOrdersRepository = {
     const skip = (page - 1) * limit;
     const where = buildCommissionLedgerWhere(query);
     const platformConfig = await getPostgresPlatformConfig();
-    const riderFixedPayout = platformConfig.riderFixedPayout || 600;
 
     const [orders, total] = await Promise.all([
       prisma.order.findMany({
@@ -680,7 +686,7 @@ export const adminOrdersRepository = {
       prisma.order.count({ where }),
     ]);
 
-    const ledgerOrders = orders.map((order) => commissionLedgerOrderShape(order, riderFixedPayout));
+    const ledgerOrders = orders.map((order) => commissionLedgerOrderShape(order, platformConfig));
     const pagedOrders = ledgerOrders.slice(skip, skip + limit);
     const summary = ledgerOrders.reduce(
       (totals, order) => ({
@@ -702,7 +708,7 @@ export const adminOrdersRepository = {
     return {
       success: true,
       data: {
-        summary,
+        summary: { ...summary, moneyUnit: "kobo" },
         orders: pagedOrders,
         pagination: {
           total,
@@ -763,6 +769,7 @@ export const adminOrdersRepository = {
     return {
       success: true,
       data: {
+        moneyUnit: "kobo",
         totalOrders: orders.length,
         totalRevenue: orders.reduce((sum, order) => sum + (order.paymentStatus === "paid" ? order.total : 0), 0),
         totalCommission: vendorOrders.reduce((sum, vendorOrder) => sum + (vendorOrder.commission || 0), 0),
@@ -775,14 +782,21 @@ export const adminOrdersRepository = {
           total: order.total,
           orderStatus: order.orderStatus,
           createdAt: order.createdAt,
+          moneyUnit: "kobo",
         })),
       },
     };
   },
 
   async adminOverrideOrderStatus({ orderCode, status, reason, adminId }) {
-    const order = await prisma.order.findUnique({
-      where: { orderCode },
+    const order = await prisma.order.findFirst({
+      where: {
+        OR: [
+          { orderCode: String(orderCode) },
+          ...(uuidPattern.test(String(orderCode)) ? [{ id: String(orderCode) }] : []),
+          ...(mongoIdPattern.test(String(orderCode)) ? [{ legacyMongoId: String(orderCode) }] : []),
+        ],
+      },
       include: {
         user: {
           select: {
@@ -808,43 +822,47 @@ export const adminOrdersRepository = {
       return { success: false, status: 404, message: "Order not found" };
     }
 
-    if (status === "cancelled" && order.paymentStatus === "paid") {
-      return {
-        success: false,
-        status: 409,
-        message: "Postgres admin cancellation for paid orders is blocked until wallet refund writes are migrated",
-      };
-    }
-
     const previousStatus = order.orderStatus;
     const statusLog = Array.isArray(order.statusLog) ? order.statusLog : [];
     const adminLegacyId = adminId ? String(adminId) : "";
 
-    await prisma.$transaction([
-      prisma.order.update({
-        where: { id: order.id },
-        data: {
-          orderStatus: status,
-          statusLog: [
-            ...statusLog,
-            {
-              status,
-              changedBy: `admin:${adminLegacyId}`,
-              timestamp: new Date().toISOString(),
-            },
-          ],
-        },
-      }),
-      prisma.vendorOrder.updateMany({
-        where: { userOrderId: order.id },
-        data: { orderStatus: status },
-      }),
-    ]);
+    let refundResult = null;
+    await prisma.$transaction(async (tx) => {
+      let paymentStatus = order.paymentStatus;
+      if (status === "cancelled" && order.paymentStatus === "paid") {
+        const existing = await tx.refund.findFirst({ where: { orderId: order.id } });
+        if (existing) {
+          refundResult = { status: existing.status, amount: Number(existing.amount) };
+          paymentStatus = existing.status === "completed" ? "refunded" : order.paymentStatus;
+        } else {
+          const refundAmount = order.total;
+          const adminWallet = await tx.wallet.findFirst({ where: { ownerModel: "Admin" }, orderBy: { createdAt: "asc" } });
+          let credited = false;
+          if (adminWallet) {
+            const debited = await tx.wallet.updateMany({ where: { id: adminWallet.id, balance: { gte: refundAmount } }, data: { balance: { decrement: refundAmount } } });
+            if (debited.count === 1) {
+              const userWallet = await tx.wallet.upsert({ where: { ownerId_ownerModel: { ownerId: order.userId, ownerModel: "User" } }, create: { ownerId: order.userId, ownerModel: "User", balance: refundAmount }, update: { balance: { increment: refundAmount } } });
+              await tx.walletTransaction.createMany({ data: [
+                { walletId: adminWallet.id, type: "debit", amount: refundAmount, transactionType: "refund", orderId: order.id, description: `Refund to customer for Order ${order.orderCode} - ${reason || "admin_cancel"}`, metadata: { source: "postgres_admin_cancel_refund" } },
+                { walletId: userWallet.id, type: "credit", amount: refundAmount, transactionType: "refund", orderId: order.id, description: `Refund for cancelled Order ${order.orderCode}`, metadata: { source: "postgres_admin_cancel_refund" } },
+              ] });
+              credited = true;
+              paymentStatus = "refunded";
+            }
+          }
+          const refund = await tx.refund.create({ data: { orderId: order.id, userId: order.userId, amount: BigInt(refundAmount), reason: reason || "admin_cancel", status: credited ? "completed" : "pending", metadata: { originalTotal: refundAmount, commissionRetained: 0, orderStatusAtCancellation: previousStatus, walletCreditSucceeded: credited, notes: credited ? "Full refund credited to customer wallet" : "Admin wallet missing or insufficient; manual wallet credit required" } } });
+          refundResult = { status: refund.status, amount: Number(refund.amount) };
+        }
+      }
+
+      await tx.order.update({ where: { id: order.id }, data: { orderStatus: status, paymentStatus, statusLog: [...statusLog, { status, changedBy: `admin:${adminLegacyId}`, timestamp: new Date().toISOString() }] } });
+      await tx.vendorOrder.updateMany({ where: { userOrderId: order.id }, data: { orderStatus: status } });
+    }, { isolationLevel: "Serializable" });
 
     return {
       success: true,
       message: "Order status updated by admin",
-      data: { orderId: orderCode, previousStatus, newStatus: status, reason },
+      data: { orderId: order.orderCode, previousStatus, newStatus: status, reason, refund: refundResult ? { ...refundResult, amount: refundResult.amount / 100 } : null },
       notificationContext: {
         userId: order.user?.legacyMongoId || order.userId,
         orderLegacyId: legacyId(order),
@@ -856,8 +874,46 @@ export const adminOrdersRepository = {
     };
   },
 
+  async acceptOrderOnBehalf({ orderToken, vendorOrderToken = null, adminId = null }) {
+    const order = await prisma.order.findFirst({
+      where: { OR: [{ orderCode: String(orderToken) }, { legacyMongoId: String(orderToken) }, ...(uuidPattern.test(String(orderToken)) ? [{ id: String(orderToken) }] : [])] },
+      include: { user: { select: { legacyMongoId: true } }, vendorOrders: { include: { restaurant: { select: { legacyMongoId: true, storeName: true } } } } },
+    });
+    if (!order) return { success: false, status: 404, message: "Order not found" };
+    let targets = order.vendorOrders;
+    if (vendorOrderToken) targets = targets.filter((row) => [row.id, row.legacyMongoId].includes(String(vendorOrderToken)));
+    if (!targets.length) return { success: false, status: 404, message: "Vendor order not found" };
+    const now = new Date();
+    const statusLog = Array.isArray(order.statusLog) ? order.statusLog : [];
+    await prisma.$transaction(async (tx) => {
+      if (["pending", "accepted"].includes(order.orderStatus)) await tx.order.update({ where: { id: order.id }, data: { orderStatus: "accepted", statusLog: [...statusLog, { status: "accepted", changedBy: `admin:${adminId || "unknown"}:on_behalf_of_restaurant`, timestamp: now.toISOString() }] } });
+      await tx.vendorOrder.updateMany({ where: { id: { in: targets.map((row) => row.id) } }, data: { orderStatus: "accepted" } });
+    });
+    return { success: true, message: "Order accepted on behalf of restaurant", orderId: order.orderCode, notificationContext: { userId: order.user?.legacyMongoId || order.userId, orderLegacyId: legacyId(order), vendors: targets.map((row) => ({ vendorOrderId: row.legacyMongoId || row.id, restaurantId: row.restaurant?.legacyMongoId || row.restaurantId, storeName: row.restaurant?.storeName || "" })) } };
+  },
+
+  async assignRiders({ vendorOrderToken, riderTokens, adminId = null }) {
+    const vendorOrderId = await resolveId(prisma.vendorOrder, vendorOrderToken);
+    if (!vendorOrderId) return { success: false, status: 404, message: "No order found for assignment." };
+    const vendorOrder = await prisma.vendorOrder.findUnique({ where: { id: vendorOrderId }, include: { userOrder: true, restaurant: true } });
+    const riderIds = [...new Set((await Promise.all(riderTokens.map((token) => resolveId(prisma.rider, token)))).filter(Boolean))];
+    if (riderIds.length !== new Set(riderTokens.map(String)).size) return { success: false, status: 404, message: "One or more riders were not found." };
+    const riders = await prisma.rider.findMany({ where: { id: { in: riderIds } } });
+    if (riders.some((rider) => !rider.isActive || !rider.isVerified || rider.deletedAt || rider.currentOrderId || !["available", "pending_assignment"].includes(rider.status))) return { success: false, status: 409, message: "One or more riders are unavailable or already assigned." };
+    const cityId = vendorOrder.restaurant.cityId;
+    const stateId = vendorOrder.restaurant.stateId;
+    if (!cityId || !stateId) return { success: false, status: 400, message: "This order must have a defined city and state before assigning a rider." };
+    if (riders.some((rider) => rider.cityId !== cityId || rider.stateId !== stateId)) return { success: false, status: 400, message: "Every rider must be assigned to the same city and state as this order." };
+    const expiresAt = liveJobBoardExpiry(), now = new Date().toISOString(), statusLog = Array.isArray(vendorOrder.userOrder.statusLog) ? vendorOrder.userOrder.statusLog : [];
+    await prisma.$transaction(async (tx) => {
+      await tx.order.update({ where: { id: vendorOrder.userOrderId }, data: { riderAssignment: { status: "offered", assignedAt: now, acceptedAt: null, rejectedAt: null, expiresAt: expiresAt.toISOString(), lastReason: "", assignedBy: adminId }, statusLog: [...statusLog, { status: "rider_offer_broadcast", changedBy: `admin:${adminId || "unknown"}`, timestamp: now }] } });
+      await tx.riderAssignment.createMany({ data: riders.map((rider) => ({ orderId: vendorOrder.userOrderId, vendorOrderId: vendorOrder.id, riderId: rider.id, vendorId: vendorOrder.restaurantId, stateId, cityId, status: "pending", expiresAt, metadata: { assignedBy: adminId, assignedAt: now, restaurantName: vendorOrder.restaurant.storeName, orderReadableId: vendorOrder.userOrder.orderCode, assignmentMode: "manual" } })) });
+    });
+    return { success: true, message: "Rider assignment offers sent successfully", data: { orderId: vendorOrder.userOrder.orderCode, vendorOrderId: legacyId(vendorOrder), riderIds: riders.map(legacyId), expiresAt } };
+  },
+
   async updateVendorOrderStatus({ vendorOrderLegacyId, vendorLegacyId, status }) {
-    if (!["pending", "accepted", "preparing", "ready_for_pickup"].includes(status)) {
+    if (!["pending", "accepted", "preparing", "ready_for_pickup", "cancelled"].includes(status)) {
       return {
         success: false,
         status: 409,
@@ -865,14 +921,16 @@ export const adminOrdersRepository = {
       };
     }
 
-    const vendor = await prisma.vendor.findUnique({
-      where: { legacyMongoId: String(vendorLegacyId) },
+    const vendorId = await resolveId(prisma.vendor, vendorLegacyId);
+    const vendor = vendorId ? await prisma.vendor.findUnique({
+      where: { id: vendorId },
       select: { id: true, legacyMongoId: true, storeName: true, deliveryManagedBy: true },
-    });
+    }) : null;
     if (!vendor) return { success: false, status: 404, message: "Vendor not found" };
 
-    const vendorOrder = await prisma.vendorOrder.findUnique({
-      where: { legacyMongoId: String(vendorOrderLegacyId) },
+    const vendorOrderId = await resolveId(prisma.vendorOrder, vendorOrderLegacyId);
+    const vendorOrder = vendorOrderId ? await prisma.vendorOrder.findUnique({
+      where: { id: vendorOrderId },
       include: {
         restaurant: { select: { id: true, legacyMongoId: true, storeName: true, deliveryManagedBy: true } },
         userOrder: {
@@ -882,7 +940,7 @@ export const adminOrdersRepository = {
           },
         },
       },
-    });
+    }) : null;
 
     if (!vendorOrder) return { success: false, status: 404, message: "Vendor order not found" };
     if (vendorOrder.restaurantId !== vendor.id) return { success: false, status: 403, message: "Access denied to this order" };
@@ -940,8 +998,8 @@ export const adminOrdersRepository = {
       vendorOrder: {
         _id: legacyId(updatedVendorOrder),
         orderStatus: updatedVendorOrder.orderStatus,
-        userOrderId: updatedVendorOrder.userOrder.legacyMongoId,
-        restaurantId: updatedVendorOrder.restaurant.legacyMongoId,
+        userOrderId: legacyId(updatedVendorOrder.userOrder),
+        restaurantId: legacyId(updatedVendorOrder.restaurant),
         items: updatedVendorOrder.items,
         createdAt: updatedVendorOrder.createdAt,
         updatedAt: updatedVendorOrder.updatedAt,
@@ -953,7 +1011,7 @@ export const adminOrdersRepository = {
         orderId: vendorOrder.userOrder.orderCode,
         orderLegacyId: vendorOrder.userOrder.legacyMongoId,
         vendorOrderLegacyId: legacyId(vendorOrder),
-        restaurantId: vendor.legacyMongoId,
+        restaurantId: legacyId(vendor),
         restaurantName: vendor.storeName,
         totalAmount: vendorOrder.userOrder.total,
         items: vendorOrder.items,
@@ -963,8 +1021,10 @@ export const adminOrdersRepository = {
   },
 
   async offerReadyVendorOrderToAvailableRiders({ vendorOrderLegacyId, assignedBy = null }) {
-    const vendorOrder = await prisma.vendorOrder.findUnique({
-      where: { legacyMongoId: String(vendorOrderLegacyId) },
+    const automaticAssignmentExpiresAt = liveJobBoardExpiry();
+    const resolvedVendorOrderId = await resolveId(prisma.vendorOrder, vendorOrderLegacyId);
+    const vendorOrder = resolvedVendorOrderId ? await prisma.vendorOrder.findUnique({
+      where: { id: resolvedVendorOrderId },
       include: {
         restaurant: {
           select: {
@@ -988,7 +1048,7 @@ export const adminOrdersRepository = {
           },
         },
       },
-    });
+    }) : null;
 
     if (!vendorOrder?.userOrder) {
       return { success: false, reason: "order_not_found", riderCount: 0 };
@@ -1008,7 +1068,8 @@ export const adminOrdersRepository = {
       where: {
         cityId,
         stateId,
-        status: { in: ["available", "pending_assignment", "on_delivery"] },
+        status: "available",
+        currentOrderId: null,
         isActive: true,
         isVerified: true,
         deletedAt: null,
@@ -1055,20 +1116,14 @@ export const adminOrdersRepository = {
       return { success: false, reason: "no_new_riders_to_broadcast", riderCount: 0 };
     }
 
-    const availableRiderIds = riders.filter((rider) => rider.status === "available" && !rider.currentOrderId).map((rider) => rider.id);
     const statusLog = Array.isArray(vendorOrder.userOrder.statusLog) ? vendorOrder.userOrder.statusLog : [];
 
     await prisma.$transaction([
-      prisma.vendorOrder.updateMany({
-        where: { userOrderId: vendorOrder.userOrderId },
-        data: { orderStatus: "rider_assigned" },
-      }),
       prisma.order.update({
         where: { id: vendorOrder.userOrderId },
         data: {
-          orderStatus: "rider_assigned",
           riderAssignment: {
-            status: "assigned",
+            status: "offered",
             assignedAt: new Date().toISOString(),
             acceptedAt: null,
             rejectedAt: null,
@@ -1079,34 +1134,13 @@ export const adminOrdersRepository = {
           statusLog: [
             ...statusLog,
             {
-              status: "rider_assigned",
+              status: "rider_offer_broadcast",
               changedBy: assignedBy ? `admin:${assignedBy}` : "system:auto_assignment",
               timestamp: new Date().toISOString(),
             },
           ],
         },
       }),
-      ...(availableRiderIds.length
-        ? [
-            prisma.rider.updateMany({
-              where: {
-                id: { in: availableRiderIds },
-                status: "available",
-                isActive: true,
-                isVerified: true,
-                deletedAt: null,
-                currentOrderId: null,
-                cityId,
-                stateId,
-              },
-              data: {
-                status: "pending_assignment",
-                currentOrderId: vendorOrder.userOrderId,
-                assignmentExpiresAt: automaticAssignmentExpiresAt,
-              },
-            }),
-          ]
-        : []),
       ...riders.map((rider) =>
         prisma.riderAssignment.create({
           data: {
@@ -1119,12 +1153,12 @@ export const adminOrdersRepository = {
             status: "pending",
             expiresAt: automaticAssignmentExpiresAt,
             metadata: {
-              legacyStatus: "assigned",
+              legacyStatus: "offered",
               assignedBy,
               assignedAt: new Date().toISOString(),
               restaurantName: vendorOrder.restaurant?.storeName || "",
               orderReadableId: vendorOrder.userOrder.orderCode || "",
-              assignmentMode: "automatic",
+              assignmentMode: "live_job_board",
             },
           },
         })

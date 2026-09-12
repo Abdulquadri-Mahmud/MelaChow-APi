@@ -71,7 +71,9 @@ router.patch("/admin/riders/:riderId", adminAuth, riderController.adminUpdateRid
 router.patch("/admin/riders/:riderId/force-available", superAdminOnly, riderController.adminForceRiderAvailable);
 router.patch("/admin/riders/:riderId/suspension", superAdminOnly, riderController.adminSetRiderSuspension);
 router.patch("/admin/riders/:riderId/approve", adminAuth, riderController.adminApproveRider);
-router.delete("/admin/riders/:riderId", adminAuth, riderController.adminDeactivateRider);
+// Rider deletion is restricted to super-admins because it revokes login access
+// and removes the rider from the active fleet. Historical orders remain intact.
+router.delete("/admin/riders/:riderId", superAdminOnly, riderController.adminDeactivateRider);
 router.patch("/admin/riders/:riderId/reject-offer", adminAuth, riderController.adminRejectRiderAssignment);
 router.patch("/admin/riders/:riderId/unassign-order", adminAuth, riderController.adminUnassignRiderFromOrder);
 router.get("/admin/riders/:riderId/history", adminAuth, riderController.adminGetRiderHistory);

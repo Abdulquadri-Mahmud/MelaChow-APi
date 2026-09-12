@@ -633,8 +633,11 @@ const main = async () => {
 
   try {
     const vendor = await Vendor.findOne({}).lean();
-    const item = await MenuItem.findOne({ vendor_id: vendor._id }).lean();
-    const combo = await ComboItem.findOne({}).lean();
+    const importedIds = new Set((await prisma.menuItem.findMany({ select: { legacyMongoId: true } })).map((row) => row.legacyMongoId));
+    const candidates = await MenuItem.find({ vendor_id: vendor._id, is_archived: { $ne: true }, is_available: { $ne: false } }).lean();
+    const item = candidates.find((candidate) => importedIds.has(String(candidate._id)) && String(candidate.platform_category_id) !== "6975cef1f226b9b594873065") || candidates.find((candidate) => importedIds.has(String(candidate._id)));
+    if (!item) throw new Error("No imported public menu item sample found");
+    const combo = await ComboItem.findOne({ is_archived: { $ne: true }, is_available: { $ne: false } }).lean();
     const categoryId = item.platform_category_id.toString();
     const comboVendor = combo ? await Vendor.findById(combo.vendor_id).lean() : null;
 

@@ -17,6 +17,10 @@ import Order from "../../../model/order/Order.js";
 import { sendMail } from "../../../config/mailer.js";
 import { wrapLayout } from "../../../services/emailTemplate.service.js";
 import { generateOTP, generateResetToken } from "../../../utils/jwt.js";
+import { setVendorApprovalMirror } from "../../../services/postgres/vendorIdentity.repository.js";
+import { usePostgresAdminWrites } from "../../../services/postgres/compat.js";
+import { adminMutationRepository } from "../../../services/postgres/adminMutation.repository.js";
+import { payoutRepository } from "../../../services/postgres/payout.repository.js";
 
 const stripRecipientCode = (value) => {
   if (!value || typeof value !== "object") return value;
@@ -46,6 +50,14 @@ export const approveVendor = async (req, res) => {
   try {
     const { vendorId } = req.query;
     const { state, city, createLocation = false } = req.body;
+    if(usePostgresAdminWrites()){
+      let vendor=await adminMutationRepository.getVendor(vendorId);if(!vendor)return res.status(404).json({success:false,message:"Vendor not found"});
+      if(vendor.pickupLatitude==null||vendor.pickupLongitude==null)return res.status(400).json({success:false,message:"Confirm this restaurant's Google pickup address in Delivery & Location Control before approval."});
+      if(vendor.locationStatus==="pending_review"){
+        const stateName=state||vendor.requestedState||vendor.address?.state||"",cityName=city||vendor.requestedCity||vendor.address?.city||"";const address={...(vendor.address||{}),state:stateName,city:cityName};const changed=await adminMutationRepository.mutateVendor({vendorToken:vendorId,adminToken:req.admin._id,action:"pending_update",data:{stateId:null,cityId:null,locationStatus:"approved",requestedState:"",requestedCity:"",address}});vendor=changed.vendor;
+      }
+      const result=await adminMutationRepository.mutateVendor({vendorToken:vendorId,adminToken:req.admin._id,action:"approve"});if(result.error){const messages={not_found:"Vendor not found",email_unverified:"Cannot approve this vendor until their email is verified.",password_missing:"Cannot approve this vendor until they finish setting a password."};return res.status(result.error==="not_found"?404:400).json({success:false,message:messages[result.error]});}sendVendorApprovalEmail(result.vendor).catch(()=>{});return res.status(200).json({success:true,message:"Vendor approved successfully and notified via email",vendor:stripRecipientCode(result.vendor)});
+    }
 
     const vendor = await vendorModel.findById(vendorId).select("+payoutDetails +password");
     if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
@@ -107,7 +119,11 @@ export const approveVendor = async (req, res) => {
     // ========================================
     console.log("✅ [Approval Workflow] About to save vendor...");
     vendor.isApproved = true;
+    // Approval authorizes the account; publishing remains the vendor's choice.
+    vendor.isLive = false;
+    vendor.publishedAt = null;
     await vendor.save();
+    await setVendorApprovalMirror(vendor, true);
     console.log("✅ [Approval Workflow] Vendor saved - firing background notification...");
 
     // Send approval email (Non-blocking)
@@ -147,6 +163,14 @@ export const updatePendingVendor = async (req, res) => {
   try {
     const { vendorId } = req.query;
     const { state, city, street, postalCode, createLocation = false } = req.body;
+
+    if(usePostgresAdminWrites()){
+      const vendor=await adminMutationRepository.getVendor(vendorId);if(!vendor)return res.status(404).json({success:false,message:"Vendor not found"});if(vendor.isApproved)return res.status(400).json({success:false,message:"Approved vendors cannot be updated from pending review"});
+      const stateName=typeof state==="string"?state.trim():"",cityName=typeof city==="string"?city.trim():"";const data={},address={...(vendor.address||{})};
+      if(stateName||cityName){if(!stateName||!cityName)return res.status(400).json({success:false,message:"Both state and city are required when updating location"});Object.assign(data,{stateId:null,cityId:null,locationStatus:vendor.pickupLatitude!=null&&vendor.pickupLongitude!=null?"approved":"pending_review",requestedState:stateName,requestedCity:cityName});Object.assign(address,{state:stateName,city:cityName});}
+      if(typeof street==="string")address.street=street.trim();if(typeof postalCode==="string")address.postalCode=postalCode.trim();data.address=address;
+      const result=await adminMutationRepository.mutateVendor({vendorToken:vendorId,adminToken:req.admin._id,action:"pending_update",data});if(result.error)return res.status(result.error==="already_approved"?400:404).json({success:false,message:result.error==="already_approved"?"Approved vendors cannot be updated from pending review":"Vendor not found"});return res.status(200).json({success:true,message:"Pending vendor details updated",vendor:stripRecipientCode(result.vendor)});
+    }
 
     const vendor = await vendorModel.findById(vendorId).select("+payoutDetails +password");
     if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
@@ -287,8 +311,10 @@ export const sendVendorOnboardingReminder = async (req, res) => {
       return res.status(400).json({ success: false, message: "vendorId is required" });
     }
 
-    const vendor = await vendorModel.findById(vendorId)
-      .select("+password +otp +otpExpires +passwordSetupToken +passwordSetupExpires");
+    let vendor = usePostgresAdminWrites()
+      ? await adminMutationRepository.getVendor(vendorId)
+      : await vendorModel.findById(vendorId)
+        .select("+password +otp +otpExpires +passwordSetupToken +passwordSetupExpires");
 
     if (!vendor) {
       return res.status(404).json({ success: false, message: "Vendor not found" });
@@ -332,20 +358,33 @@ export const sendVendorOnboardingReminder = async (req, res) => {
         </div>`;
     }
 
-    await vendor.save();
+    if (usePostgresAdminWrites()) {
+      vendor = await adminMutationRepository.setVendorOnboardingReminder({
+        vendorToken: vendorId,
+        adminToken: req.admin?._id,
+        type: reminderType,
+        otp: reminderType === "email_verification" ? vendor.otp : null,
+        otpExpires: reminderType === "email_verification" ? vendor.otpExpires : null,
+        passwordSetupToken: reminderType === "password_setup" ? vendor.passwordSetupToken : null,
+        passwordSetupExpires: reminderType === "password_setup" ? vendor.passwordSetupExpires : null,
+      });
+    } else {
+      await vendor.save();
+    }
     await sendMail({
       to: vendor.email,
       subject,
       html: wrapLayout("Complete Account Setup", content, "Vendor onboarding"),
     });
-
-    await ActivityLog.create({
-      adminId: req.admin._id,
-      action: "SEND_VENDOR_ONBOARDING_REMINDER",
-      targetType: "Vendor",
-      targetId: vendor._id,
-      details: `Sent ${reminderType.replace("_", " ")} reminder to ${vendor.storeName}`,
-    });
+    if (!usePostgresAdminWrites()) {
+      await ActivityLog.create({
+        adminId: req.admin._id,
+        action: "SEND_VENDOR_ONBOARDING_REMINDER",
+        targetType: "Vendor",
+        targetId: vendor._id,
+        details: `Sent ${reminderType.replace("_", " ")} reminder to ${vendor.storeName}`,
+      });
+    }
 
     res.status(200).json({
       success: true,
@@ -365,6 +404,7 @@ export const setVendorOpenOverride = async (req, res) => {
     if (!["schedule", "open", "closed"].includes(status)) {
       return res.status(400).json({ success: false, message: "status must be schedule, open, or closed" });
     }
+    if(usePostgresAdminWrites()){const result=await adminMutationRepository.mutateVendor({vendorToken:vendorId,adminToken:req.admin._id,action:"open_override",data:{status}});if(result.error)return res.status(result.error==="not_found"?404:409).json({success:false,message:result.error==="cannot_force_open"?"A suspended, inactive, or unapproved vendor cannot be forced open":"Vendor not found"});const openStatus=getVendorOpenStatus(result.vendor.openingHours);return res.json({success:true,message:status==="schedule"?"Vendor returned to its normal schedule":`Vendor is now forced ${status}`,data:{openingHours:result.vendor.openingHours,openStatus}});}
 
     const vendor = await vendorModel.findById(vendorId);
     if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
@@ -405,6 +445,7 @@ export const setVendorOpenOverride = async (req, res) => {
 export const rejectVendor = async (req, res) => {
   try {
     const { vendorId, reason } = req.query;
+    if(usePostgresAdminWrites()){const result=await adminMutationRepository.mutateVendor({vendorToken:vendorId,adminToken:req.admin._id,action:"reject",reason});if(result.error)return res.status(result.error==="not_found"?404:400).json({success:false,message:result.error==="already_approved"?"Vendor already approved, cannot reject.":"Vendor not found"});sendVendorRejectionEmail(result.vendor,reason).catch(()=>{});return res.status(200).json({success:true,message:"Vendor rejected successfully and notified via email",vendor:stripRecipientCode(result.vendor)});}
 
     const vendor = await vendorModel.findById(vendorId).select("+payoutDetails +password");
     if (!vendor)
@@ -449,6 +490,7 @@ export const rejectVendor = async (req, res) => {
 export const suspendVendor = async (req, res) => {
   try {
     const { vendorId, reason } = req.query;
+    if(usePostgresAdminWrites()){const result=await adminMutationRepository.mutateVendor({vendorToken:vendorId,adminToken:req.admin._id,action:"suspend",reason});if(result.error)return res.status(result.error==="not_found"?404:400).json({success:false,message:result.error==="already_suspended"?"Vendor is already suspended.":"Vendor not found"});sendVendorSuspensionEmail(result.vendor,result.vendor.suspensionReason).catch(()=>{});return res.status(200).json({success:true,message:"Vendor suspended successfully and notified via email",vendor:stripRecipientCode(result.vendor)});}
 
     // Find vendor
     const vendor = await vendorModel.findById(vendorId).select("+payoutDetails +password");
@@ -503,6 +545,7 @@ export const suspendVendor = async (req, res) => {
 export const reactivateVendor = async (req, res) => {
   try {
     const { vendorId } = req.query;
+    if(usePostgresAdminWrites()){const result=await adminMutationRepository.mutateVendor({vendorToken:vendorId,adminToken:req.admin._id,action:"reactivate"});if(result.error)return res.status(result.error==="not_found"?404:400).json({success:false,message:result.error==="not_suspended"?"Vendor is not suspended":"Vendor not found"});sendVendorReactivationEmail(result.vendor).catch(()=>{});return res.status(200).json({success:true,message:"Vendor reactivated successfully",vendor:stripRecipientCode(result.vendor)});}
 
     const vendor = await vendorModel.findById(vendorId).select("+payoutDetails +password");
     if (!vendor)
@@ -718,6 +761,7 @@ export const toggleVendorStatus = async (req, res) => {
 
     if (!vendorId)
       return res.status(400).json({ success: false, message: "vendorId is required" });
+    if(usePostgresAdminWrites()){const isSuspended=suspended==="true",result=await adminMutationRepository.mutateVendor({vendorToken:vendorId,adminToken:req.admin._id,action:isSuspended?"suspend":"reactivate"});if(result.error&&result.error!=="already_suspended"&&result.error!=="not_suspended")return res.status(404).json({success:false,message:"Vendor not found"});const vendor=result.vendor||await adminMutationRepository.getVendor(vendorId);return res.status(200).json({success:true,message:`Vendor has been ${isSuspended?"suspended":"reactivated"} successfully`,vendor:stripRecipientCode(vendor)});}
 
     const vendor = await vendorModel.findById(vendorId).select("+payoutDetails +password");
     if (!vendor)
@@ -766,6 +810,7 @@ export const updateCommission = async (req, res) => {
       return res
         .status(400)
         .json({ success: false, message: "Invalid commission rate" });
+    if(usePostgresAdminWrites()){const result=await adminMutationRepository.updateAllCommission({adminToken:req.admin._id,commissionRate:newRate});return res.status(200).json({success:true,message:`Commission rate updated to ${newRate}% for all vendors`,updatedCount:result.modifiedCount});}
 
     // Update all vendors' commission rate
     const result = await vendorModel.updateMany({}, { $set: { commissionRate: newRate } });

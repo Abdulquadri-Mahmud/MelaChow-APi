@@ -20,6 +20,7 @@ const findCandidate = async () => {
       isArchived: false,
       vendor: { active: true, deletedAt: null },
       portions: { some: { isAvailable: true, isInStock: true } },
+      choiceGroups: { none: { isRequired: true } },
     },
     orderBy: { createdAt: "asc" },
     include: {

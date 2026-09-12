@@ -318,7 +318,7 @@ export const adminOverrideOrderStatus = async (req, res) => {
 
             try {
                 const { sendOrderNotification, sendVendorNotification } = await import("../../../services/notification.service.js");
-                await sendOrderNotification(response.notificationContext.userId, orderId, status, {
+                await sendOrderNotification(response.notificationContext.userId, response.data.orderId, status, {
                     orderDatabaseId: response.notificationContext.orderLegacyId,
                     cancellationReason: status === 'cancelled' ? reason : undefined
                 });
@@ -649,6 +649,17 @@ export const assignRiderToOrder = async (req, res) => {
         ? req.body.riderIds
         : (req.body.riderId ? [req.body.riderId] : []);
     const uniqueRiderIds = [...new Set(riderIds.map((id) => id?.toString()).filter(Boolean))];
+
+    if (usePostgresOrderStatusWrites()) {
+        if (!vendorOrderId || !uniqueRiderIds.length) return res.status(400).json({ success: false, message: "vendorOrderId and riderId or riderIds are required" });
+        try {
+            const response = await adminOrdersRepository.assignRiders({ vendorOrderToken: vendorOrderId, riderTokens: uniqueRiderIds, adminId: req.admin?._id });
+            return res.status(response.status || (response.success ? 200 : 400)).json(response);
+        } catch (error) {
+            console.error("PostgreSQL rider assignment error:", error.message);
+            return res.status(500).json({ success: false, message: "Failed to assign rider to order", error: error.message });
+        }
+    }
 
     // Step 4: Validation Helper
     const isValidObjectId = (id) => mongoose.Types.ObjectId.isValid(id);
@@ -1032,6 +1043,23 @@ export const acceptOrderOnBehalfOfRestaurant = async (req, res) => {
     try {
         const { orderId } = req.params;
         const { vendorOrderId } = req.body || {};
+
+        if (usePostgresOrderStatusWrites()) {
+            const response = await adminOrdersRepository.acceptOrderOnBehalf({ orderToken: orderId, vendorOrderToken: vendorOrderId, adminId: req.admin?._id });
+            if (!response.success) return res.status(response.status || 400).json(response);
+            try {
+                const { sendOrderNotification, sendVendorNotification } = await import("../../../services/notification.service.js");
+                const names = response.notificationContext.vendors.map((entry) => entry.storeName).filter(Boolean).join(", ");
+                await sendOrderNotification(response.notificationContext.userId, response.orderId, "accepted", { orderDatabaseId: response.notificationContext.orderLegacyId, restaurantName: names });
+                for (const entry of response.notificationContext.vendors) {
+                    await sendVendorNotification(entry.restaurantId, response.orderId, "system", { orderId: response.orderId, title: "Order Accepted by Platform Admin", message: `Admin has accepted Order #${response.orderId} on behalf of your restaurant. Please begin food preparation.` });
+                    const { offerOrderToAvailableRiders } = await import("../../../services/riderAssignment.service.js");
+                    await offerOrderToAvailableRiders({ vendorOrderId: entry.vendorOrderId, assignedBy: `admin:${req.admin?._id || "unknown"}:on_behalf` });
+                }
+            } catch (notifErr) { console.warn("Notifications/assignment after accept-on-behalf failed:", notifErr.message); }
+            const { notificationContext, ...payload } = response;
+            return res.status(200).json(payload);
+        }
 
         // Find main order by ID or orderId string
         const mainOrderQuery = String(orderId).match(/^[0-9a-fA-F]{24}$/)

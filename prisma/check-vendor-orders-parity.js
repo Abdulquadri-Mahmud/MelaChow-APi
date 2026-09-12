@@ -68,6 +68,7 @@ const diffSignatures = (left, right, path = "$", diffs = []) => {
 };
 
 const invoke = async ({ provider, handler, vendor, params = {} }) => {
+  process.env.POSTGRES_MIGRATION_ENABLED = "true";
   process.env.DB_VENDOR_ORDER_READ_PROVIDER = provider;
   const req = { vendor, params };
   let statusCode = 200;
@@ -125,7 +126,8 @@ const main = async () => {
 
     console.log(JSON.stringify({ sample: { vendorId: String(sample.restaurantId), vendorOrderId: String(sample._id) }, results }, null, 2));
   } finally {
-    process.env.DB_VENDOR_ORDER_READ_PROVIDER = "postgres";
+    process.env.DB_VENDOR_ORDER_READ_PROVIDER = "mongo";
+    process.env.POSTGRES_MIGRATION_ENABLED = "false";
     await mongoose.disconnect();
     await prisma.$disconnect();
   }

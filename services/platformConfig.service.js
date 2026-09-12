@@ -1,4 +1,6 @@
 import PlatformConfig from "../model/platform/PlatformConfig.model.js";
+import { usePostgresPlatformConfigReads } from "./postgres/compat.js";
+import { platformConfigRepository } from "./postgres/platformConfig.repository.js";
 
 /**
  * Fetch the singleton platform config.
@@ -10,6 +12,10 @@ import PlatformConfig from "../model/platform/PlatformConfig.model.js";
  * this adds ~1ms per order. Add Redis caching when you're doing 100+ orders/min.
  */
 export const getPlatformConfig = async () => {
+  if (usePostgresPlatformConfigReads()) {
+    return platformConfigRepository.getRuntimeConfig();
+  }
+
   const config = await PlatformConfig.findOne({ type: "singleton" }).lean();
 
   if (!config) {

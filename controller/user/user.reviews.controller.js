@@ -4,7 +4,7 @@ import "../../model/vendor/food.model.js";
 import "../../model/category.model.js";
 import vendorModel from "../../model/vendor/vendor.model.js";
 import MenuItem from "../../model/menu/MenuItem.js";
-import { usePostgresReviewReads } from "../../services/postgres/compat.js";
+import { usePostgresReviewReads, usePostgresReviewWrites } from "../../services/postgres/compat.js";
 import { reviewManagementRepository } from "../../services/postgres/reviewManagement.repository.js";
 
 /**
@@ -21,6 +21,12 @@ export const createReview = async (req, res) => {
     // Validate required fields
     if (!userId || !vendorId || !rating)
       return res.status(400).json({ success: false, message: "userId, vendorId, and rating are required" });
+
+    if (usePostgresReviewWrites()) {
+      const result = await reviewManagementRepository.createReview({ userId, vendorId, foodId, rating, comment });
+      if (result.error) return res.status(result.error === "invalid_rating" ? 400 : 404).json({ success: false, message: result.error.replaceAll("_", " ") });
+      return res.status(201).json({ success: true, message: "Review created successfully", review: result.review });
+    }
 
     // Optional: check if vendor exists
     const vendor = await vendorModel.findById(vendorId);
@@ -293,6 +299,11 @@ export const getAllVendorReviews = async (req, res) => {
 export const deleteReview = async (req, res) => {
   try {
     const { reviewId } = req.query;
+    if (usePostgresReviewWrites()) {
+      const review = await reviewManagementRepository.deleteReview(reviewId);
+      if (!review) return res.status(404).json({ success: false, message: "Review not found" });
+      return res.status(200).json({ success: true, message: "Review deleted successfully" });
+    }
     const review = await Reviews.findById(reviewId);
     if (!review) return res.status(404).json({ success: false, message: "Review not found" });
 

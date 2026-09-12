@@ -6,7 +6,10 @@ const getResendClient = () => {
     if (resend) return resend;
 
     if (!process.env.RESEND_API_KEY) {
-        if (process.env.NODE_ENV === 'test') return null;
+        // Local development should not require production email credentials.
+        // Callers can still complete their flow using a development OTP returned
+        // by the relevant controller. Production must always have Resend set.
+        if (process.env.NODE_ENV !== 'production') return null;
         throw new Error('RESEND_API_KEY environment variable is required');
     }
 
@@ -27,7 +30,8 @@ const getResendClient = () => {
 export const sendMail = async ({ to, subject, html }) => {
     const client = getResendClient();
     if (!client) {
-        return { id: 'test-message-id', to, subject };
+        console.info(`[Local email preview] to=${to} subject=${subject}`);
+        return { id: 'local-message-id', to, subject, localPreview: true };
     }
 
     const { data, error } = await client.emails.send({

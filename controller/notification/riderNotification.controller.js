@@ -1,4 +1,6 @@
 import Notification from "../../model/notification/notification.model.js";
+import { usePostgresNotificationWrites } from "../../services/postgres/compat.js";
+import { notificationRepository } from "../../services/postgres/notification.repository.js";
 
 /**
  * Get rider's notification history
@@ -6,6 +8,7 @@ import Notification from "../../model/notification/notification.model.js";
 export const getRiderNotifications = async (req, res) => {
     try {
         const { limit = 100, skip = 0, unread } = req.query;
+        if (usePostgresNotificationWrites()) { const result=await notificationRepository.list('rider',req.rider._id,{limit,skip,unread});return res.json({success:true,...result,hasMore:result.total>Number(skip)+result.notifications.length}); }
 
         // Build query for this specific rider
         let query = { riderId: req.rider._id };
@@ -44,6 +47,7 @@ export const getRiderNotifications = async (req, res) => {
  */
 export const getUnreadRiderCount = async (req, res) => {
     try {
+        if (usePostgresNotificationWrites()) return res.json({success:true,count:await notificationRepository.unreadCount('rider',req.rider._id)});
         const count = await Notification.countDocuments({
             riderId: req.rider._id,
             read: false
@@ -66,6 +70,7 @@ export const getUnreadRiderCount = async (req, res) => {
  */
 export const getSingleRiderNotification = async (req, res) => {
     try {
+        if (usePostgresNotificationWrites()) {const notification=await notificationRepository.markRead('rider',req.rider._id,req.params.id);if(!notification)return res.status(404).json({success:false,message:'Notification not found'});return res.json({success:true,notification});}
         const notification = await Notification.findOneAndUpdate(
             {
                 _id: req.params.id,
@@ -99,6 +104,7 @@ export const getSingleRiderNotification = async (req, res) => {
  */
 export const markRiderNotificationAsRead = async (req, res) => {
     try {
+        if (usePostgresNotificationWrites()) {const notification=await notificationRepository.markRead('rider',req.rider._id,req.params.id);if(!notification)return res.status(404).json({success:false,message:'Notification not found'});return res.json({success:true,notification});}
         const notification = await Notification.findOneAndUpdate(
             {
                 _id: req.params.id,
@@ -132,6 +138,7 @@ export const markRiderNotificationAsRead = async (req, res) => {
  */
 export const clearAllRiderNotifications = async (req, res) => {
     try {
+        if (usePostgresNotificationWrites()) {const deletedCount=await notificationRepository.remove('rider',req.rider._id);return res.json({success:true,message:'All notifications cleared',deletedCount});}
         const result = await Notification.deleteMany({
             riderId: req.rider._id
         });
@@ -176,6 +183,7 @@ export const subscribeRider = async (req, res, next) => {
         if (!subscription || !subscription.endpoint) {
             return res.status(400).json({ success: false, message: "Subscription is required" });
         }
+        if(usePostgresNotificationWrites()){await notificationRepository.saveSubscription('rider',req.rider._id,subscription,deviceType,req.headers['user-agent']);return res.status(200).json({success:true,message:'Subscribed to push notifications'});}
 
         const RiderPushSubscription = (await import("../../model/notification/riderPushSubscription.model.js")).default;
 
@@ -192,6 +200,22 @@ export const subscribeRider = async (req, res, next) => {
         );
 
         res.status(200).json({ success: true, message: "Subscribed to push notifications" });
+    } catch (error) {
+        next(error);
+    }
+};
+
+export const unsubscribeRider = async (req, res, next) => {
+    try {
+        const endpoint = req.body?.endpoint;
+        if (!endpoint) return res.status(400).json({ success: false, message: "Endpoint is required" });
+        if (usePostgresNotificationWrites()) {
+            await notificationRepository.removeSubscription('rider', req.rider._id, endpoint);
+            return res.json({ success: true, message: "Unsubscribed from push notifications" });
+        }
+        const RiderPushSubscription = (await import("../../model/notification/riderPushSubscription.model.js")).default;
+        await RiderPushSubscription.findOneAndDelete({ riderId: req.rider._id, 'subscription.endpoint': endpoint });
+        return res.json({ success: true, message: "Unsubscribed from push notifications" });
     } catch (error) {
         next(error);
     }

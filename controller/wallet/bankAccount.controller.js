@@ -4,6 +4,8 @@ import { fetchBankList, resolveBankAccount as resolveAccountService, createTrans
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const PAYSTACK_BASE_URL = "https://api.paystack.co";
+const useLocalPayoutBypass = () =>
+  process.env.NODE_ENV !== "production" && process.env.LOCAL_VENDOR_PAYOUT_BYPASS === "true";
 
 /**
  * Handle Paystack API errors safely
@@ -16,6 +18,8 @@ const handlePaystackError = (error, defaultMessage) => {
 // ─── FUNCTION 1: getBankList ───
 export const getBankList = async (req, res) => {
   try {
+    // Bank discovery is read-only and should always use Paystack's complete,
+    // paginated directory. The local bypass only replaces account verification.
     const banks = await fetchBankList();
     return res.json({ success: true, banks, data: banks });
   } catch (error) {
@@ -34,7 +38,9 @@ export const resolveAccount = async (req, res) => {
       return res.status(400).json({ message: "Account number and bank code are required" });
     }
 
-    const account_name = await resolveAccountService(account_number, bank_code);
+    const account_name = useLocalPayoutBypass()
+      ? "Local Test Account"
+      : await resolveAccountService(account_number, bank_code);
 
     return res.json({
       success: true,

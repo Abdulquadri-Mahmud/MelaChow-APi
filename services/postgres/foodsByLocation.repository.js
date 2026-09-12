@@ -1,4 +1,5 @@
 import prisma from "../../config/prisma.js";
+import { getGlobalDeliveryConfig } from "../deliveryPricing.service.js";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -42,10 +43,12 @@ const restaurantShape = (vendor) => ({
   openingHours: vendor?.openingHours,
 });
 
-const resolveDeliveryFee = (vendor) => {
+const resolveDeliveryFee = (vendor, deliveryConfig) => {
   const override = vendor?.platformDeliveryFeeOverride;
-  const cityFee = vendor?.city?.platformDeliveryFee || 0;
-  return override != null && override > 0 ? override : cityFee;
+  const feeKobo = vendor?.deliveryManagedBy === "vendor"
+    ? Number(vendor?.flatRateDeliveryFee || 0)
+    : Number(override ?? Number(deliveryConfig?.fallbackFlatFeeNaira ?? 400) * 100);
+  return feeKobo / 100;
 };
 
 const portionShape = (portion) => ({
@@ -69,7 +72,7 @@ const choiceGroupShape = (group) => ({
   __v: 0,
 });
 
-const foodShape = (item) => {
+const foodShape = (item, deliveryConfig) => {
   const cheapest = (item.portions || [])[0];
 
   return {
@@ -79,7 +82,7 @@ const foodShape = (item) => {
     price: cheapest ? cheapest.price / 100 : null,
     portionLabel: cheapest?.label || null,
     description: item.description || "",
-    deliveryFee: resolveDeliveryFee(item.vendor),
+    deliveryFee: resolveDeliveryFee(item.vendor, deliveryConfig),
     item_type: item.itemType,
     dietary_type: item.dietaryType === "non_veg" ? "non-veg" : item.dietaryType,
     tags: item.tags || [],
@@ -91,14 +94,14 @@ const foodShape = (item) => {
   };
 };
 
-const comboShape = (combo) => ({
+const comboShape = (combo, deliveryConfig) => ({
   _id: legacyId(combo),
   name: combo.name,
   image: combo.imageUrl || "",
   price: Math.round(combo.price / 100),
   portionLabel: "Combo",
   description: combo.description || "",
-  deliveryFee: resolveDeliveryFee(combo.vendor),
+  deliveryFee: resolveDeliveryFee(combo.vendor, deliveryConfig),
   item_type: "combo",
   dietary_type: combo.dietaryType === "non_veg" ? "non-veg" : combo.dietaryType || "mixed",
   tags: combo.tags || [],
@@ -107,12 +110,6 @@ const comboShape = (combo) => ({
   isCombo: true,
   restaurant: restaurantShape(combo.vendor),
 });
-
-const vendorInclude = {
-  city: {
-    select: { platformDeliveryFee: true },
-  },
-};
 
 const categoryInclude = {
   parent: {
@@ -191,7 +188,6 @@ export const foodsByLocationRepository = {
 
     const vendors = await prisma.vendor.findMany({
       where: vendorWhere,
-      include: vendorInclude,
     });
 
     if (!vendors.length) {
@@ -215,7 +211,7 @@ export const foodsByLocationRepository = {
           isArchived: false,
         },
         include: {
-          vendor: { include: vendorInclude },
+          vendor: true,
           platformCategory: { include: categoryInclude },
           portions: {
             where: { isAvailable: true },
@@ -234,7 +230,7 @@ export const foodsByLocationRepository = {
           isArchived: false,
         },
         include: {
-          vendor: { include: vendorInclude },
+          vendor: true,
           platformCategory: { include: categoryInclude },
         },
       }),
@@ -250,7 +246,11 @@ export const foodsByLocationRepository = {
       };
     }
 
-    const foods = [...items.map(foodShape), ...combos.map(comboShape)];
+    const deliveryConfig = await getGlobalDeliveryConfig();
+    const foods = [
+      ...items.map((item) => foodShape(item, deliveryConfig)),
+      ...combos.map((combo) => comboShape(combo, deliveryConfig)),
+    ];
 
     return {
       success: true,

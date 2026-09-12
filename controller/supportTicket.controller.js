@@ -4,6 +4,8 @@ import Order from "../model/order/Order.js";
 import { notifyAdmins, sendNotification } from "../services/notification.service.js";
 import { sendMail } from "../config/mailer.js";
 import { settleSupportRefund } from "../services/supportRefundSettlement.service.js";
+import { usePostgresSupportWrites } from "../services/postgres/compat.js";
+import { supportRepository } from "../services/postgres/support.repository.js";
 
 const CATEGORY_PRIORITY = {
   payment_issue: "high",
@@ -26,7 +28,7 @@ function deadlineFromNow(hours) { return new Date(Date.now() + hours * 60 * 60 *
 function safeEvidence(value) { const urls = Array.isArray(value) ? value : []; return [...new Set(urls.map((url) => cleanText(url, 1000)).filter((url) => /^https:\/\//i.test(url)))].slice(0, 5); }
 async function notifyCustomerSupport(ticket, title, message) {
   const url = "/get-help/tickets/" + ticket._id;
-  await sendNotification(ticket.userId, "support_update", { title, message, url, additionalData: { ticketId: String(ticket._id), ticketNumber: ticket.ticketNumber } }).catch((error) => console.error("Support notification failed:", error.message));
+  await sendNotification(ticket.userId?._id || ticket.userId, "support_update", { title, message, url, additionalData: { ticketId: String(ticket._id), ticketNumber: ticket.ticketNumber } }).catch((error) => console.error("Support notification failed:", error.message));
   if (ticket.customerEmail) sendMail({ to: ticket.customerEmail, subject: title + " — " + ticket.ticketNumber, html: "<p>" + message + "</p><p>Open your MelaChow support ticket: <a href='" + (process.env.FRONTEND_URL || "https://melachow.com") + url + "'>" + ticket.ticketNumber + "</a></p>" }).catch((error) => console.error("Support email failed:", error.message));
 }
 
@@ -75,13 +77,14 @@ export const createSupportTicket = async (req, res) => {
     }
 
     const userId = req.user?._id || req.userId;
-    const matchedOrder = await resolveCustomerOrder(orderReference, userId);
+    const matchedOrder = usePostgresSupportWrites() ? await supportRepository.resolveOrder(orderReference, userId) : await resolveCustomerOrder(orderReference, userId);
     const safeCategory = CATEGORY_PRIORITY[category] ? category : "other";
 
-    const ticket = await SupportTicket.create({
+    const ticketPayload = {
       userId,
+      orderId: matchedOrder?.legacyMongoId || matchedOrder?.id || matchedOrder?._id || null,
       order: matchedOrder?._id || null,
-      orderReference: cleanText(orderReference || matchedOrder?.orderId || "", 80),
+      orderReference: cleanText(orderReference || matchedOrder?.orderCode || matchedOrder?.orderId || "", 80),
       paymentReference: cleanText(paymentReference || matchedOrder?.paymentReference || "", 120),
       category: safeCategory,
       priority: CATEGORY_PRIORITY[safeCategory] || "normal",
@@ -95,7 +98,8 @@ export const createSupportTicket = async (req, res) => {
       conversation: [{ body: normalizedMessage, senderRole: "customer", senderId: userId, senderName: getCustomerName(req.user), attachments: safeEvidence(evidence) }],
       firstResponseDueAt: deadlineFromNow(FIRST_RESPONSE_HOURS[CATEGORY_PRIORITY[safeCategory] || "normal"]),
       resolutionDueAt: deadlineFromNow(RESOLUTION_HOURS[CATEGORY_PRIORITY[safeCategory] || "normal"]),
-    });
+    };
+    const ticket = usePostgresSupportWrites() ? await supportRepository.create(ticketPayload) : await SupportTicket.create(ticketPayload);
 
     await notifyAdmins("support_ticket", {
       message: `${ticket.ticketNumber}: ${ticket.subject}`,
@@ -122,6 +126,7 @@ export const createSupportTicket = async (req, res) => {
 
 export const getMySupportTickets = async (req, res) => {
   try {
+    if (usePostgresSupportWrites()) return res.status(200).json({ success: true, data: { tickets: await supportRepository.myList(req.userId) } });
     const tickets = await SupportTicket.find({ userId: req.userId })
       .populate("order", "orderId total paymentStatus orderStatus riderId createdAt")
       .sort({ createdAt: -1 })
@@ -136,6 +141,11 @@ export const getMySupportTickets = async (req, res) => {
 
 export const getMySupportTicket = async (req, res) => {
   try {
+    if (usePostgresSupportWrites()) {
+      const ticket = await supportRepository.get(req.params.ticketId, req.userId);
+      if (!ticket) return res.status(404).json({ success: false, message: "Support ticket not found." });
+      return res.status(200).json({ success: true, data: { ticket } });
+    }
     const ticket = await SupportTicket.findOne({ _id: req.params.ticketId, userId: req.userId })
       .populate("order", "orderId total paymentStatus orderStatus riderId createdAt")
       .lean();
@@ -152,6 +162,7 @@ export const getMySupportTicket = async (req, res) => {
 
 export const getAdminSupportTickets = async (req, res) => {
   try {
+    if (usePostgresSupportWrites()) return res.status(200).json({ success: true, data: await supportRepository.adminList(req.query) });
     await SupportTicket.updateMany({ status: { $in: ["open", "pending"] }, resolutionDueAt: { $lt: new Date() } }, { $set: { status: "escalated" } });
     const {
       status,
@@ -225,6 +236,11 @@ export const getAdminSupportTickets = async (req, res) => {
 
 export const getAdminSupportTicket = async (req, res) => {
   try {
+    if (usePostgresSupportWrites()) {
+      const ticket = await supportRepository.get(req.params.ticketId);
+      if (!ticket) return res.status(404).json({ success: false, message: "Support ticket not found." });
+      return res.status(200).json({ success: true, data: { ticket } });
+    }
     const ticket = await SupportTicket.findById(req.params.ticketId)
       .populate("userId", "firstname lastname fullName email phone")
       .populate("order", "orderId total paymentStatus orderStatus riderId deliveryAddress phone items createdAt")
@@ -244,6 +260,15 @@ export const getAdminSupportTicket = async (req, res) => {
 export const updateAdminSupportTicket = async (req, res) => {
   try {
     const { status, priority, note } = req.body || {};
+    if (status && !SUPPORT_STATUSES.has(status)) return res.status(400).json({ success: false, message: "Invalid support ticket status." });
+    if (priority && !SUPPORT_PRIORITIES.has(priority)) return res.status(400).json({ success: false, message: "Invalid support ticket priority." });
+    if (usePostgresSupportWrites()) {
+      const before = await supportRepository.get(req.params.ticketId);
+      if (!before) return res.status(404).json({ success: false, message: "Support ticket not found." });
+      const ticket = await supportRepository.adminUpdate(req.params.ticketId, { status, priority, note: cleanText(note, 1200), admin: req.admin });
+      if (before.status !== ticket.status) await notifyCustomerSupport(ticket, "Your support ticket status changed", "Your ticket " + ticket.ticketNumber + " is now " + ticket.status + ". Open the ticket to view the latest details.");
+      return res.status(200).json({ success: true, message: "Support ticket updated.", data: { ticket } });
+    }
     const ticket = await SupportTicket.findById(req.params.ticketId);
 
     if (!ticket) {
@@ -326,6 +351,13 @@ export const updateAdminSupportTicket = async (req, res) => {
 
 export const addCustomerSupportMessage = async (req, res) => {
   try {
+    if (usePostgresSupportWrites()) {
+      const body=cleanText(req.body?.message,2500); if(body.length<2)return res.status(400).json({success:false,message:"Please enter a message."});
+      const ticket=await supportRepository.addMessage(req.params.ticketId,{role:"customer",ownerToken:req.userId,body,senderName:getCustomerName(req.user),attachments:safeEvidence(req.body?.evidence)});
+      if(!ticket)return res.status(404).json({success:false,message:"Support ticket not found."});
+      await notifyAdmins("support_ticket",{message:ticket.ticketNumber+": customer replied",url:"/admin/support",additionalData:{ticketId:String(ticket._id)}});
+      return res.json({success:true,data:{ticket}});
+    }
     const ticket = await SupportTicket.findOne({ _id: req.params.ticketId, userId: req.userId });
     const body = cleanText(req.body?.message, 2500);
     if (!ticket) return res.status(404).json({ success: false, message: "Support ticket not found." });
@@ -341,6 +373,10 @@ export const addCustomerSupportMessage = async (req, res) => {
 
 export const replyToSupportTicket = async (req, res) => {
   try {
+    if (usePostgresSupportWrites()) {
+      const body=cleanText(req.body?.message,2500);if(body.length<2)return res.status(400).json({success:false,message:"Please enter a reply."});const adminName=req.admin?.name||req.admin?.email||"MelaChow Support";
+      const ticket=await supportRepository.addMessage(req.params.ticketId,{role:"admin",body,senderName:adminName,admin:req.admin});if(!ticket)return res.status(404).json({success:false,message:"Support ticket not found."});await notifyCustomerSupport(ticket,"MelaChow Support replied",adminName+": "+body);return res.json({success:true,data:{ticket}});
+    }
     const ticket = await SupportTicket.findById(req.params.ticketId);
     const body = cleanText(req.body?.message, 2500);
     if (!ticket) return res.status(404).json({ success: false, message: "Support ticket not found." });
@@ -357,7 +393,8 @@ export const replyToSupportTicket = async (req, res) => {
 
 export const assignSupportTicketToMe = async (req, res) => {
   try {
-    const ticket = await SupportTicket.findById(req.params.ticketId);
+    if (usePostgresSupportWrites()) { const ticket=await supportRepository.assign(req.params.ticketId,req.admin);if(!ticket)return res.status(404).json({success:false,message:"Support ticket not found."});return res.json({success:true,data:{ticket}}); }
+    const ticket = usePostgresSupportWrites() ? await supportRepository.get(req.params.ticketId) : await SupportTicket.findById(req.params.ticketId);
     if (!ticket) return res.status(404).json({ success: false, message: "Support ticket not found." });
     ticket.assignedAdminId = req.admin?._id; ticket.assignedAdminName = req.admin?.name || req.admin?.email || "Support"; ticket.lastAdminActivityAt = new Date();
     await ticket.save();

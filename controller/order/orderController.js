@@ -31,8 +31,9 @@ import {
   hasProcessedPaymentWebhookEvent,
   markPaymentWebhookEventProcessed,
 } from "../../services/paymentHardening.service.js";
-import { usePostgresOrderStatusWrites, usePostgresPaymentWrites, usePostgresRiderAssignmentWrites } from "../../services/postgres/compat.js";
+import { usePostgresReads, usePostgresOrderStatusWrites, usePostgresPaymentWrites, usePostgresRiderAssignmentWrites, usePostgresVendorOrderReads } from "../../services/postgres/compat.js";
 import { adminOrdersRepository } from "../../services/postgres/adminOrders.repository.js";
+import { vendorOrdersRepository } from "../../services/postgres/vendorOrders.repository.js";
 import { postgresPaymentRepository } from "../../services/postgres/payment.repository.js";
 import { applyTransferOutcome } from "../../services/transferReconciliation.service.js";
 
@@ -91,6 +92,38 @@ const handlePostgresPaymentVerification = async ({ reference, label = "" }) => {
 
   await postgresPaymentRepository.validateSuccessfulPaymentForOrder(order, payData);
   const fulfillment = await postgresPaymentRepository.fulfillPaidOrder(reference);
+
+  if (!fulfillment.idempotent && fulfillment.notificationContext) {
+    const context = fulfillment.notificationContext;
+    const notificationTasks = [
+      sendOrderNotification(context.userId, fulfillment.order.orderId, "pending", {
+        orderDatabaseId: fulfillment.order._id,
+        orderId: fulfillment.order.orderId,
+      }),
+    ];
+    const { sendVendorNotification, notifyAdmins } = await import("../../services/notification.service.js");
+    for (const vendor of context.vendors) {
+      notificationTasks.push(sendVendorNotification(vendor.vendorId, fulfillment.order.orderId, "vendor_new_order", {
+        orderId: fulfillment.order.orderId,
+        orderDatabaseId: vendor.vendorOrderId,
+        customerName: context.customerName,
+        location: context.location,
+        restaurantName: vendor.restaurantName,
+        items: vendor.items,
+        totalAmount: context.totalKobo / 100,
+      }));
+    }
+    notificationTasks.push(notifyAdmins("system", {
+      orderId: fulfillment.order.orderId,
+      orderDatabaseId: fulfillment.order._id,
+      message: `New paid order #${fulfillment.order.orderId} is awaiting vendor acceptance.`,
+      url: `/admin/orders/${fulfillment.order._id}`,
+    }));
+    Promise.allSettled(notificationTasks).then((results) => {
+      const failures = results.filter((result) => result.status === "rejected");
+      if (failures.length) console.error("Postgres paid-order notification fan-out failures:", failures.map((failure) => failure.reason?.message));
+    });
+  }
 
   return {
     statusCode: 200,
@@ -1287,6 +1320,18 @@ export const getSingleOrder = async (req, res) => {
       return res.status(400).json({ message: "Order ID is required" });
     }
 
+    if (usePostgresReads()) {
+      const result = await vendorOrdersRepository.getCustomerOrder(orderId, userId);
+      if (!result) return res.status(404).json({ message: "Order not found" });
+      // PostgreSQL-native orders use UUIDs while migrated orders can retain a
+      // legacy Mongo identifier. Delivery OTP storage supports both, so never
+      // gate the lookup on the old 24-character ObjectId format.
+      result.deliveryOtp = result.order?._id
+        ? await getActiveDeliveryOTP(result.order._id).catch(() => null)
+        : null;
+      return res.json({ ...result, message: "Order fetched successfully" });
+    }
+
     // 1️⃣ Find order + populate food & restaurant
     // Support both MongoDB ObjectId and human-readable orderId string
     const query = String(orderId).match(/^[0-9a-fA-F]{24}$/) 
@@ -1379,6 +1424,12 @@ export const getUserOrders = async (req, res) => {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
+    if (usePostgresReads()) {
+      const orders = await vendorOrdersRepository.listCustomerOrders(userId);
+      console.log(`Postgres: found ${orders.length} orders for user ${userId}`);
+      return res.json({ orders });
+    }
+
     const orders = await Order.find({ userId }).sort({ createdAt: -1 });
     console.log(`✅ Found ${orders.length} orders for user ${userId}`);
 
@@ -1395,6 +1446,10 @@ export const getUserOrders = async (req, res) => {
 export const getVendorOrders = async (req, res) => {
   try {
     const vendorId = req.vendor._id;
+
+    if (usePostgresVendorOrderReads()) {
+      return res.json({ vendorOrders: await vendorOrdersRepository.listVendorOrders(vendorId) });
+    }
 
     const vendorOrders = await VendorOrder.find({ restaurantId: vendorId })
       .sort({ createdAt: -1 })
@@ -1438,6 +1493,14 @@ export const getVendorOrders = async (req, res) => {
 export const getVendorOrdersByStatus = async (req, res) => {
   try {
     const vendorId = req.vendor._id;
+
+    if (usePostgresVendorOrderReads()) {
+      const orders = await vendorOrdersRepository.listVendorOrders(vendorId);
+      return res.json(Object.fromEntries([
+        "pending", "accepted", "preparing", "ready_for_pickup", "rider_assigned",
+        "out_for_delivery", "delivered", "completed", "cancelled", "failed", "refunded",
+      ].map((status) => [status, orders.filter((order) => order.orderStatus === status)])));
+    }
 
     const orders = await VendorOrder.find({ restaurantId: vendorId })
       .sort({ createdAt: -1 })
@@ -1517,7 +1580,7 @@ export const updateVendorOrderStatus = async (req, res) => {
     }
 
     // ✅ Validate MongoDB ObjectId format (24 hex characters)
-    if (!vendorOrderId.match(/^[0-9a-fA-F]{24}$/)) {
+    if (!usePostgresOrderStatusWrites() && !vendorOrderId.match(/^[0-9a-fA-F]{24}$/)) {
       console.error('❌ Invalid vendorOrderId format:', {
         received: vendorOrderId,
         length: vendorOrderId.length,
@@ -1869,6 +1932,13 @@ export const completeVendorOrder = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Vendor Order ID is required"
+      });
+    }
+
+    if (usePostgresOrderStatusWrites()) {
+      return res.status(403).json({
+        success: false,
+        message: "Platform-managed orders are completed by the rider or an administrator, not by the vendor.",
       });
     }
 
@@ -2344,6 +2414,19 @@ export const cancelOrder = async (req, res) => {
     try {
         const userId = req.userId;
         const { orderId } = req.params;
+
+        if (usePostgresOrderStatusWrites()) {
+            const result = await vendorOrdersRepository.cancelCustomerOrder(orderId, userId);
+            if (result.error === "not_found") return res.status(404).json({ success: false, message: "Order not found or unauthorized" });
+            if (result.error === "not_pending") return res.status(403).json({ success: false, message: "Cancellation failed. This order has already been accepted and is being prepared by the restaurant. Please contact support if you need further assistance." });
+            for (const vendorOrder of result.vendorOrders || []) {
+                try {
+                    const { sendVendorNotification } = await import("../../services/notification.service.js");
+                    await sendVendorNotification(vendorOrder.restaurant?.legacyMongoId || vendorOrder.restaurantId, result.order.legacyMongoId || result.order.id, "vendor_order_cancelled", { orderId: result.order.orderCode, customerName: "the customer" });
+                } catch (pushErr) { console.warn("Postgres cancellation notification failed:", pushErr.message); }
+            }
+            return res.status(200).json({ success: true, message: "Order cancelled successfully and funds refunded to your wallet.", refundAmount: Number(result.refund?.amount || 0) / 100, refundStatus: result.refund?.status });
+        }
 
         const order = await Order.findOne({ _id: orderId, userId });
 

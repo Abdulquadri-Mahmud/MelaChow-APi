@@ -3,6 +3,8 @@ import Vendor from "../../model/vendor/vendor.model.js";
 import City from "../../model/location/City.js";
 import State from "../../model/location/State.js";
 import VendorDeliveryPromo from "../../model/promo/VendorDeliveryPromo.js";
+import { usePostgresReads } from "../../services/postgres/compat.js";
+import { nearbyVendorsRepository } from "../../services/postgres/nearbyVendors.repository.js";
 
 const getActiveVendorPromoMap = async (vendorIds) => {
     if (!vendorIds.length) return new Map();
@@ -52,6 +54,12 @@ export const getNearbyVendorsForUser = async (req, res) => {
         // Priority: Query Params -> Default Address -> First Address
         let city = req.query.city;
         let state = req.query.state;
+
+        if (usePostgresReads()) {
+            const vendors = await nearbyVendorsRepository.list({ city, state, addressId: req.query.addressId, userId: req.postgresUserId });
+            if ((!city || !state) && !req.postgresUserId) return res.status(400).json({ success: false, message: "Select a delivery address or provide city and state." });
+            return res.json({ success: true, userLocation: { city, state }, count: vendors.length, vendors });
+        }
 
         if (!city || !state) {
             if (!userId) {

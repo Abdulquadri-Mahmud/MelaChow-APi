@@ -3,8 +3,11 @@ import { blockToken } from "../middleware/tokenBlocklist.js";
 import Rider from "../model/rider.model.js";
 import { generateAccessToken, generateRefreshToken } from "../utils/generateTokens.js";
 import { sendAuthCookies } from '../utils/sendTokenCookie.js';
-import { generateOTP, generateResetToken } from "../utils/jwt.js";
+import { generateOTP, generateResetToken, verifyToken } from "../utils/jwt.js";
 import { sendMail } from "../config/mailer.js";
+import { usePostgresNotificationWrites, usePostgresRiderReads } from "../services/postgres/compat.js";
+import { riderAccountsRepository } from "../services/postgres/riderAccounts.repository.js";
+import { notificationRepository } from "../services/postgres/notification.repository.js";
 
 export const loginRider = async (req, res, next) => {
     try {
@@ -12,6 +15,30 @@ export const loginRider = async (req, res, next) => {
 
         if (!phone || !password) {
             return res.status(400).json({ success: false, message: "Phone and password are required" });
+        }
+
+        if (usePostgresRiderReads()) {
+            const result = await riderAccountsRepository.authenticate(phone, password);
+            if (result.error === "not_found") return res.status(404).json({ success: false, message: "Rider not found" });
+            if (result.error === "locked") return res.status(403).json({ success: false, message: "Account is temporarily locked due to too many failed attempts" });
+            if (result.error === "inactive" || result.error === "unverified") {
+                return res.status(403).json({
+                    success: false,
+                    message: result.error === "inactive" ? "Rider account is inactive" : "Rider account is pending admin approval",
+                });
+            }
+            if (result.error) return res.status(401).json({ success: false, message: "Invalid credentials" });
+
+            const payload = { riderId: result.databaseId, role: "rider" };
+            const accessToken = generateAccessToken(payload);
+            const refreshToken = generateRefreshToken(payload);
+            sendAuthCookies(res, accessToken, refreshToken, "rider");
+            return res.status(200).json({
+                success: true,
+                message: "Login successful",
+                accessToken,
+                rider: result.rider,
+            });
         }
 
         const rider = await Rider.findOne({ phone, deletedAt: null }).select("+password");
@@ -107,10 +134,35 @@ export const logoutRider = async (req, res) => {
     }
 };
 
+export const refreshRiderToken = async (req, res) => {
+    try {
+        const token = req.cookies.riderRefreshToken;
+        if (!token) return res.status(401).json({ success: false, message: "No refresh token provided" });
+
+        const decoded = verifyToken(token);
+        if (decoded.type !== "refresh" || decoded.role !== "rider") {
+            return res.status(401).json({ success: false, message: "Invalid rider refresh token" });
+        }
+
+        const rider = usePostgresRiderReads()
+            ? await riderAccountsRepository.getByToken(decoded.id)
+            : await Rider.findById(decoded.id).select("-password -otp -otpExpires");
+        if (!rider || !rider.isActive || !rider.isVerified || rider.deletedAt) {
+            return res.status(401).json({ success: false, message: "Rider not found or inactive" });
+        }
+
+        const accessToken = generateAccessToken({ riderId: usePostgresRiderReads() ? decoded.id : rider._id, role: "rider" });
+        sendAuthCookies(res, accessToken, token, "rider");
+        return res.status(200).json({ success: true, accessToken });
+    } catch (error) {
+        return res.status(401).json({ success: false, message: "Token refresh failed", error: error.message });
+    }
+};
+
 export const getMe = async (req, res) => {
     res.status(200).json({
         success: true,
-        data: req.rider.getPublicProfile()
+        data: usePostgresRiderReads() ? req.rider : req.rider.getPublicProfile()
     });
 };
 
@@ -155,6 +207,24 @@ export const forgotRiderPassword = async (req, res, next) => {
 
         if (!identifier) {
             return res.status(400).json({ success: false, message: "Phone number or email is required" });
+        }
+
+        if (usePostgresNotificationWrites()) {
+            await notificationRepository.saveSubscription("rider", req.rider._id, subscription, deviceType, req.headers["user-agent"]);
+            return res.status(200).json({ success: true, message: "Subscribed to push notifications" });
+        }
+
+        if (usePostgresRiderReads()) {
+            const otp = generateOTP();
+            const rider = await riderAccountsRepository.beginPasswordReset(identifier, otp, new Date(Date.now() + 10 * 60 * 1000));
+            if (rider?.email) {
+                try {
+                    await sendMail({ to: rider.email, subject: "Reset Your Rider Password - MelaChow", html: `<p>Use this code to reset your rider password:</p><h2>${otp}</h2><p>This code expires in 10 minutes.</p>` });
+                } catch (mailError) {
+                    console.error("[RiderForgotPassword] Mail sending error:", mailError.message);
+                }
+            }
+            return res.status(200).json({ success: true, message: rider ? "Password reset code sent successfully." : "If an active rider account exists with this phone or email, a reset code has been issued.", target: identifier, hasEmail: Boolean(rider?.email), ...(process.env.NODE_ENV === "development" && rider ? { devOtp: otp } : {}) });
         }
 
         const searchPhone = identifier.replace(/[^\d+]/g, '');
@@ -240,6 +310,14 @@ export const verifyRiderResetCode = async (req, res, next) => {
         }
 
         const identifier = phoneOrEmail.trim();
+
+        if (usePostgresRiderReads()) {
+            const resetToken = generateResetToken();
+            const verified = await riderAccountsRepository.verifyPasswordReset(identifier, otp, resetToken, new Date(Date.now() + 30 * 60 * 1000));
+            if (!verified) return res.status(400).json({ success: false, message: "Invalid or expired reset code" });
+            return res.status(200).json({ success: true, message: "Reset code verified successfully", resetToken });
+        }
+
         const searchPhone = identifier.replace(/[^\d+]/g, '');
 
         const rider = await Rider.findOne({
@@ -294,6 +372,12 @@ export const resetRiderPassword = async (req, res, next) => {
 
         if (newPassword.length < 8) {
             return res.status(400).json({ success: false, message: "New password must be at least 8 characters long" });
+        }
+
+        if (usePostgresRiderReads()) {
+            const updated = await riderAccountsRepository.completePasswordReset(phoneOrEmail, resetToken, newPassword);
+            if (!updated) return res.status(400).json({ success: false, message: "Invalid or expired reset session. Please request a new reset code." });
+            return res.status(200).json({ success: true, message: "Password reset successful! You can now log in with your new password." });
         }
 
         const identifier = phoneOrEmail.trim();

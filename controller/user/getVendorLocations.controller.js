@@ -1,6 +1,8 @@
 import Vendor from "../../model/vendor/vendor.model.js";
 import State from "../../model/location/State.js";
 import City from "../../model/location/City.js";
+import prisma from "../../config/prisma.js";
+import { usePostgresReads } from "../../services/postgres/compat.js";
 
 /**
  * @desc Get list of unique states and cities where active vendors operate
@@ -11,6 +13,20 @@ import City from "../../model/location/City.js";
  */
 export const getVendorLocations = async (req, res) => {
     try {
+        if (usePostgresReads()) {
+            const states = await prisma.state.findMany({
+                where: { isActive: true },
+                orderBy: { name: "asc" },
+                include: { cities: { where: { isActive: true }, orderBy: { name: "asc" } } },
+            });
+            const locations = states.map((state) => ({
+                state: state.name,
+                stateId: state.legacyMongoId || state.id,
+                postgresStateId: state.id,
+                cities: state.cities.map((city) => ({ name: city.name, cityId: city.legacyMongoId || city.id, postgresCityId: city.id })),
+            }));
+            return res.status(200).json({ success: true, message: "Fetched locations successfully", count: locations.length, locations });
+        }
         // Debug: Check if we have any vendors at all
         const totalVendors = await Vendor.countDocuments();
         const activeVendors = await Vendor.countDocuments({

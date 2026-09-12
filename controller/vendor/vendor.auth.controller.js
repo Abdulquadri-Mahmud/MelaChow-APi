@@ -6,6 +6,18 @@ import jwt from "jsonwebtoken";
 import { blockToken } from "../../middleware/tokenBlocklist.js";
 import { createTransferRecipient, resolveBankAccount } from '../../services/bank.service.js';
 import { validateVendorLocation } from '../../services/locationService.js';
+import {
+  authenticateVendorIdentity,
+  postgresVendorIdentityEnabled,
+  publicVendor,
+  registerVendorIdentity,
+  setVendorIdentityPassword,
+  startVendorPasswordResetIdentity,
+  verifyVendorPasswordResetIdentity,
+  completeVendorPasswordResetIdentity,
+  findVendorByTokenId,
+  verifyVendorIdentity,
+} from '../../services/postgres/vendorIdentity.repository.js';
 
 const CURRENT_VENDOR_TERMS_VERSION = "vendor-terms-2026-05-12";
 
@@ -30,6 +42,14 @@ const resolveAndBuildPayoutDetails = async (payoutDetails = {}) => {
 
   if (!/^\d{10}$/.test(accountNumber)) {
     throw new Error("Account number must be 10 digits");
+  }
+
+  if (process.env.NODE_ENV !== "production" && process.env.LOCAL_VENDOR_PAYOUT_BYPASS === "true") {
+    return {
+      bankName, bankCode, accountName: "Local Test Account", accountNumber,
+      recipientCode: `local_${bankCode}_${accountNumber.slice(-4)}`,
+      payoutMethod: "paystack", payoutEnabled: false,
+    };
   }
 
   const accountName = await resolveBankAccount(accountNumber, bankCode);
@@ -85,7 +105,17 @@ export const registerVendor = async (req, res) => {
       city: normalizeText(address?.city),
       state: normalizeText(address?.state),
       postalCode: normalizeText(address?.postalCode),
+      formattedAddress: normalizeText(address?.formattedAddress),
+      googlePlaceId: normalizeText(address?.googlePlaceId),
+      latitude: Number.isFinite(Number(address?.latitude)) ? Number(address.latitude) : null,
+      longitude: Number.isFinite(Number(address?.longitude)) ? Number(address.longitude) : null,
     };
+    if (normalizedAddress.latitude != null && normalizedAddress.longitude != null) {
+      normalizedAddress.coordinates = {
+        type: "Point",
+        coordinates: [normalizedAddress.longitude, normalizedAddress.latitude],
+      };
+    }
 
     // Validate input
     if (!normalizedEmail || !normalizedName || !normalizedPhone || !normalizedStoreName) {
@@ -142,10 +172,45 @@ export const registerVendor = async (req, res) => {
     const otp = generateOTP();
     const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
+    if (postgresVendorIdentityEnabled()) {
+      const hasGoogleCoordinates = Boolean(
+        normalizedAddress.googlePlaceId &&
+        normalizedAddress.latitude != null && normalizedAddress.latitude >= -90 && normalizedAddress.latitude <= 90 &&
+        normalizedAddress.longitude != null && normalizedAddress.longitude >= -180 && normalizedAddress.longitude <= 180
+      );
+      const locationData = {
+        stateId: null,
+        cityId: null,
+        locationStatus: hasGoogleCoordinates ? "approved" : "pending_review",
+        requestedState: normalizedAddress.state,
+        requestedCity: normalizedAddress.city,
+        pickupLatitude: hasGoogleCoordinates ? normalizedAddress.latitude : null,
+        pickupLongitude: hasGoogleCoordinates ? normalizedAddress.longitude : null,
+        pickupPlaceId: hasGoogleCoordinates ? normalizedAddress.googlePlaceId : null,
+        pickupFormattedAddress: hasGoogleCoordinates ? (normalizedAddress.formattedAddress || normalizedAddress.street) : null,
+      };
+      const result = await registerVendorIdentity({
+        email: normalizedEmail, name: normalizedName, phone: normalizedPhone,
+        storeName: normalizedStoreName, storeDescription: normalizedStoreDescription,
+        logo, cuisineTypes, address: normalizedAddress, openingHours,
+        payoutDetails: verifiedPayoutDetails, termsAcceptance, otp, otpExpires,
+        ...locationData,
+      });
+      if (result.conflict) return res.status(400).json({ message: 'Email already registered' });
+      await sendMail({ to: normalizedEmail, subject: 'Verify Your Vendor Account - MelaChow', html: `<p>Use this code to verify your vendor account:</p><div style="font-size:32px;font-weight:bold">${otp}</div><p>This code expires in 10 minutes.</p>` });
+      return res.status(200).json({
+        message: 'Verification code sent to your email', email: normalizedEmail,
+        ...(process.env.NODE_ENV !== 'production' && !process.env.RESEND_API_KEY ? { devOtp: otp } : {}),
+      });
+    }
+
     if (existingVendor) {
       // Update existing unverified vendor
       existingVendor.otp = otp;
       existingVendor.otpExpires = otpExpires;
+      existingVendor.isApproved = false;
+      existingVendor.isLive = false;
+      existingVendor.publishedAt = null;
       existingVendor.name = normalizedName || existingVendor.name;
       existingVendor.phone = normalizedPhone || existingVendor.phone;
       existingVendor.storeName = normalizedStoreName || existingVendor.storeName;
@@ -211,6 +276,9 @@ export const registerVendor = async (req, res) => {
         otp,
         otpExpires,
         verified: false,
+        isApproved: false,
+        isLive: false,
+        publishedAt: null,
         deliveryManagedBy: "admin",
         termsAcceptance,
       });
@@ -281,6 +349,15 @@ export const verifyVendorRegistration = async (req, res) => {
       return res.status(400).json({ message: 'Email and OTP are required' });
     }
 
+    if (postgresVendorIdentityEnabled()) {
+      const passwordSetupToken = generateResetToken();
+      const result = await verifyVendorIdentity({ email, otp, setupToken: passwordSetupToken, setupExpires: new Date(Date.now() + 30 * 60 * 1000) });
+      if (result.error === 'not_found') return res.status(404).json({ message: 'Vendor not found' });
+      if (result.error === 'invalid_otp') return res.status(400).json({ message: 'Invalid OTP' });
+      if (result.error === 'expired_otp') return res.status(400).json({ message: 'OTP expired. Please request a new one.' });
+      return res.status(200).json({ message: 'Account verified successfully. Please set your password.', email: result.vendor.email, requiresPassword: !result.vendor.password, passwordSetupToken });
+    }
+
     // Find vendor with OTP
     const vendor = await Vendor.findOne({ email }).select('+otp +otpExpires +passwordSetupToken +passwordSetupExpires');
 
@@ -335,6 +412,18 @@ export const setVendorPassword = async (req, res) => {
       return res.status(400).json({ message: 'Password must be at least 8 characters' });
     }
 
+    if (postgresVendorIdentityEnabled()) {
+      const result = await setVendorIdentityPassword({ email, password, setupToken: passwordSetupToken });
+      if (result.error === 'invalid_setup') return res.status(400).json({ message: 'This password setup link is invalid or has expired. Please request a new link.' });
+      if (result.error === 'already_set') return res.status(400).json({ message: 'Password already set. Use login instead.' });
+      if (!result.vendor.isApproved) return res.status(200).json({ success: true, message: 'Password set successfully. Your account is currently pending admin approval.', requiresApproval: true });
+      const tokenId = result.vendor.legacyMongoId || result.vendor.id;
+      const accessToken = generateAccessToken(tokenId, 'vendor');
+      const refreshToken = generateRefreshToken(tokenId, 'vendor');
+      sendAuthCookies(res, accessToken, refreshToken, 'vendor');
+      return res.status(200).json({ message: 'Password set successfully', vendor: publicVendor(result.vendor), accessToken });
+    }
+
     const vendor = await Vendor.findOne({
       email,
       verified: true,
@@ -379,7 +468,6 @@ export const setVendorPassword = async (req, res) => {
 
     // Generate tokens (only if already approved - rare case but possible for re-registrations)
     const accessToken = generateAccessToken(vendor._id, 'vendor');
-    sendAuthCookies(res, accessToken, token, 'vendor');
     const refreshToken = generateRefreshToken(vendor._id, 'vendor');
 
     // Set HttpOnly cookie
@@ -409,6 +497,20 @@ export const loginVendorWithPassword = async (req, res) => {
 
     if (!email || !password) {
       return res.status(400).json({ message: 'Email and password are required' });
+    }
+
+    if (postgresVendorIdentityEnabled()) {
+      const result = await authenticateVendorIdentity({ email, password });
+      if (result.error === 'verification_required') return res.status(401).json({ message: 'Email not verified. Please verify your email first.', requiresVerification: true });
+      if (result.error === 'approval_required') return res.status(403).json({ success: false, message: 'Your account is pending admin approval.', requiresApproval: true });
+      if (result.error === 'inactive') return res.status(401).json({ message: 'Account suspended or inactive. Please contact support.' });
+      if (result.error === 'locked') return res.status(423).json({ message: 'Account temporarily locked due to multiple failed login attempts.' });
+      if (result.error) return res.status(401).json({ message: 'Invalid email or password' });
+      const tokenId = result.vendor.legacyMongoId || result.vendor.id;
+      const accessToken = generateAccessToken(tokenId, 'vendor');
+      const refreshToken = generateRefreshToken(tokenId, 'vendor');
+      sendAuthCookies(res, accessToken, refreshToken, 'vendor');
+      return res.status(200).json({ success: true, message: 'Login successful', vendor: publicVendor(result.vendor), accessToken });
     }
 
     // Find vendor with password field
@@ -512,7 +614,10 @@ export const vendorForgotPasswordNew = async (req, res) => {
       return res.status(400).json({ message: 'Email is required' });
     }
 
-    const vendor = await Vendor.findOne({ email, verified: true }).select('+otp +otpExpires');
+    const otp = generateOTP();
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+    const identityResult = postgresVendorIdentityEnabled() ? await startVendorPasswordResetIdentity({ email, otp, otpExpires }) : null;
+    const vendor = postgresVendorIdentityEnabled() ? identityResult?.vendor : await Vendor.findOne({ email, verified: true }).select('+otp +otpExpires');
 
     if (!vendor) {
       return res.status(200).json({
@@ -521,12 +626,7 @@ export const vendorForgotPasswordNew = async (req, res) => {
     }
 
     // Generate OTP
-    const otp = generateOTP();
-    const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-
-    vendor.otp = otp;
-    vendor.otpExpires = otpExpires;
-    await vendor.save();
+    if (!postgresVendorIdentityEnabled()) { vendor.otp = otp; vendor.otpExpires = otpExpires; await vendor.save(); }
 
     // Send reset email
     await sendMail({
@@ -574,6 +674,14 @@ export const verifyVendorResetCode = async (req, res) => {
       return res.status(400).json({ message: 'Email and code are required' });
     }
 
+    if (postgresVendorIdentityEnabled()) {
+      const resetToken = generateResetToken();
+      const result = await verifyVendorPasswordResetIdentity({ email, otp, resetToken, resetPasswordExpires: new Date(Date.now() + 30 * 60 * 1000) });
+      if (result.error === 'not_found') return res.status(404).json({ message: 'Vendor not found' });
+      if (result.error === 'invalid_otp') return res.status(400).json({ message: 'Invalid reset code' });
+      if (result.error === 'expired_otp') return res.status(400).json({ message: 'Reset code expired' });
+      return res.status(200).json({ success: true, message: 'Reset code verified', resetToken });
+    }
     const vendor = await Vendor.findOne({ email }).select('+otp +otpExpires +passwordSetupToken +passwordSetupExpires');
 
     if (!vendor) {
@@ -624,6 +732,14 @@ export const resetVendorPasswordNew = async (req, res) => {
       return res.status(400).json({ message: 'Password must be at least 8 characters' });
     }
 
+    if (postgresVendorIdentityEnabled()) {
+      const result = await completeVendorPasswordResetIdentity({ email, resetToken, password: newPassword });
+      if (result.error) return res.status(400).json({ message: 'Invalid or expired reset token' });
+      const tokenId = result.vendor.id;
+      const accessToken = generateAccessToken(tokenId, 'vendor'), refreshToken = generateRefreshToken(tokenId, 'vendor');
+      sendAuthCookies(res, accessToken, refreshToken, 'vendor');
+      return res.status(200).json({ success: true, message: 'Password reset successful', vendor: publicVendor(result.vendor), accessToken });
+    }
     const vendor = await Vendor.findOne({
       email,
       resetPasswordToken: resetToken,
@@ -681,14 +797,15 @@ export const refreshVendorToken = async (req, res) => {
       return res.status(401).json({ message: 'Invalid token type or role' });
     }
 
-    const vendor = await Vendor.findById(decoded.id);
+    const vendor = postgresVendorIdentityEnabled() ? await findVendorByTokenId(decoded.id) : await Vendor.findById(decoded.id);
 
     if (!vendor || vendor.suspended || !vendor.active || !vendor.isApproved) {
       return res.status(401).json({ message: 'Vendor not found, inactive, or pending approval' });
     }
 
     // Generate new access token
-    const accessToken = generateAccessToken(vendor._id, 'vendor');
+    const accessToken = generateAccessToken(postgresVendorIdentityEnabled() ? vendor.id : vendor._id, 'vendor');
+    sendAuthCookies(res, accessToken, token, 'vendor');
 
     res.status(200).json({
       success: true,

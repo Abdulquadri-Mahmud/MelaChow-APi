@@ -3,10 +3,28 @@ import { Worker } from "bullmq";
 import { redisConnection } from "../config/redis.js";
 import Order from "../model/order/Order.js";
 import logger from "../config/logger.js";
+import { usePostgresRiderAssignmentWrites } from "../services/postgres/compat.js";
+import { disputeRepository } from "../services/postgres/dispute.repository.js";
 
 new Worker("dispute-escalation", async (job) => {
     const { orderId } = job.data;
     logger.info({ orderId }, "⏰ Dispute escalation watchdog fired");
+
+    if (usePostgresRiderAssignmentWrites()) {
+        const result = await disputeRepository.escalate(orderId);
+        if (result.skipped) {
+            logger.info({ orderId, reason: result.reason }, "Dispute already resolved or missing - skipping escalation");
+            return;
+        }
+        const { sendNotification } = await import("../services/notification.service.js");
+        await sendNotification(null, "dispute_escalation_admin", {
+            orderId: result.orderId,
+            orderDatabaseId: result.orderDatabaseId,
+            message: `Disputed delivery remake window expired without response for Order #${result.orderId}. Admin attention required.`,
+        }, "admin");
+        logger.info({ orderId }, "Dispute escalated to admin successfully");
+        return;
+    }
 
     const order = await Order.findById(orderId);
     if (!order) return;

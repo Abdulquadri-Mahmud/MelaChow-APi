@@ -1,31 +1,24 @@
 import express from "express";
 import { adminAuth } from "../../middleware/adminAuth.js";
-import {
-    createCity,
-    createState,
-    getAllCities,
-    getAllStates,
-    getLocationRequests,
-    toggleCityStatus,
-    toggleStateStatus,
-    updateCity
-} from "../../controller/Admin/location.controller.js";
+import { getAllCities, getAllStates, getLocationRequests } from "../../controller/Admin/location.controller.js";
 
 const router = express.Router();
 
 // All routes require admin authentication
 router.use(adminAuth);
 
-// State management
-router.post("/states", createState);
+const retiredLocationWrite = (_req, res) => res.status(410).json({ success: false, message: "Manual state and city management has been retired. Use Google-confirmed addresses and Delivery & Location Control." });
+
+// Read-only compatibility for historical rider/vendor records.
+router.post("/states", retiredLocationWrite);
 router.get("/states", getAllStates);
-router.patch("/states/:id/activate", toggleStateStatus);
+router.patch("/states/:id/activate", retiredLocationWrite);
 
 // City management
-router.post("/cities", createCity);
+router.post("/cities", retiredLocationWrite);
 router.get("/cities", getAllCities);
-router.patch("/cities/:id/activate", toggleCityStatus);
-router.patch("/cities/:id", updateCity);
+router.patch("/cities/:id/activate", retiredLocationWrite);
+router.patch("/cities/:id", retiredLocationWrite);
 
 // Location requests from vendors
 router.get("/location-requests", getLocationRequests);

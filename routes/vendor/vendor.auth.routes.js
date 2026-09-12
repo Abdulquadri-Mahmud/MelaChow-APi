@@ -1,4 +1,5 @@
 import express from "express";
+import rateLimit from "express-rate-limit";
 import {
     registerVendor,
     verifyVendorRegistration,
@@ -10,8 +11,15 @@ import {
     refreshVendorToken,
     vendorLogout
 } from "../../controller/vendor/vendor.auth.controller.js";
+import { autocompleteDeliveryAddress, getDeliveryPlaceDetails } from "../../controller/location/googleLocation.controller.js";
 
 const router = express.Router();
+const vendorLocationLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    limit: 60,
+    standardHeaders: true,
+    legacyHeaders: false,
+});
 
 // ============================================
 // ✅ NEW: Password-Based Authentication Routes
@@ -19,6 +27,8 @@ const router = express.Router();
 
 // Registration flow
 router.post("/register", registerVendor);
+router.get("/locations/autocomplete", vendorLocationLimiter, autocompleteDeliveryAddress);
+router.get("/locations/place/:placeId", vendorLocationLimiter, getDeliveryPlaceDetails);
 router.post("/verify-registration", verifyVendorRegistration);
 router.post("/verify-otp", verifyVendorRegistration); // Alias for frontend compatibility
 router.post("/set-password", setVendorPassword);

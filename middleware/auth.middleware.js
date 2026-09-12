@@ -1,6 +1,7 @@
 import jwt from "jsonwebtoken";
 import User from "../model/user.model.js";
 import { isTokenBlocked } from "./tokenBlocklist.js";
+import { findIdentityByTokenId, postgresUserIdentityEnabled, publicUser } from "../services/postgres/userIdentity.repository.js";
 
 const auth = async (req, res, next) => {
   if (req.method === "OPTIONS") return next(); // skip preflight
@@ -45,7 +46,12 @@ const auth = async (req, res, next) => {
       return res.status(403).json({ message: "Access denied. User role required." });
     }
 
-    const user = await User.findById(decoded.id).select("-password");
+    const identity = postgresUserIdentityEnabled()
+      ? await findIdentityByTokenId(decoded.id)
+      : null;
+    const user = postgresUserIdentityEnabled()
+      ? (identity ? publicUser(identity) : null)
+      : await User.findById(decoded.id).select("-password");
 
     if (!user) {
       return res.status(401).json({ message: "User not found or deleted" });
@@ -56,7 +62,10 @@ const auth = async (req, res, next) => {
     }
 
     req.user = user;
-    req.userId = decoded.id;
+    // Keep the public Mongo-compatible ID until dependent order/cart domains
+    // have moved to PostgreSQL UUIDs.
+    req.userId = user._id;
+    req.postgresUserId = identity?.id || null;
 
     next();
   } catch (err) {

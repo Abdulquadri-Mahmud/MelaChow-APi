@@ -2,6 +2,8 @@ import Discount from "../../model/discount/Discount.js";
 import discountService from "../../services/discount.service.js";
 import { buildPromoIdentity } from "../../utils/promoIdentity.js";
 import Food from "../../model/vendor/food.model.js";
+import { usePostgresDiscountWrites } from "../../services/postgres/compat.js";
+import { discountRepository } from "../../services/postgres/discount.repository.js";
 
 const VALID_TYPES = ["PERCENTAGE", "FIXED"];
 const VALID_SCOPES = ["GLOBAL_ORDER", "VENDOR_ORDER", "SPECIFIC_ITEMS", "DELIVERY_FEE"];
@@ -150,11 +152,15 @@ export const createDiscount = async (req, res) => {
             return res.status(400).json({ success: false, message: validationError });
         }
 
-        const existing = await Discount.findOne({ code: payload.code.toUpperCase() });
+        const existing = usePostgresDiscountWrites() ? await discountRepository.byCode(payload.code) : await Discount.findOne({ code: payload.code.toUpperCase() });
         if (existing) {
             return res.status(400).json({ success: false, message: "Discount code already exists" });
         }
 
+        if (usePostgresDiscountWrites()) {
+            const discount = await discountRepository.create(payload);
+            return res.status(201).json({ success: true, message: "Discount created successfully", data: discount, discount });
+        }
         const discount = new Discount(payload);
 
         await discount.save();
@@ -180,6 +186,10 @@ export const createDiscount = async (req, res) => {
 export const getDiscounts = async (req, res) => {
     try {
         const { vendorId } = req.query;
+        if (usePostgresDiscountWrites()) {
+            const discounts = await discountRepository.list(vendorId);
+            return res.status(200).json({ success: true, data: discounts, discounts });
+        }
         const query = {};
 
         if (vendorId) {
@@ -206,23 +216,33 @@ export const getDiscounts = async (req, res) => {
 export const updateDiscount = async (req, res) => {
     try {
         const { id } = req.params;
-        const discount = await Discount.findById(id);
+        const discount = usePostgresDiscountWrites() ? await discountRepository.get(id) : await Discount.findById(id);
         if (!discount) {
             return res.status(404).json({ success: false, message: "Discount not found" });
         }
 
         const oldFoodIds = discount.targetFoodIds || [];
-        const payload = normalizeDiscountPayload(req.body, discount.toObject());
+        const payload = normalizeDiscountPayload(req.body, typeof discount.toObject === "function" ? discount.toObject() : discount);
         const validationError = validateDiscountPayload(payload);
         if (validationError) {
             return res.status(400).json({ success: false, message: validationError });
         }
 
         if (payload.code && payload.code.toUpperCase() !== discount.code) {
+            if (usePostgresDiscountWrites()) {
+                const existing = await discountRepository.byCode(payload.code);
+                if (existing && existing._id !== discount._id) return res.status(400).json({ success: false, message: "Discount code already exists" });
+            } else {
             const existing = await Discount.findOne({ code: payload.code.toUpperCase(), _id: { $ne: id } });
             if (existing) {
                 return res.status(400).json({ success: false, message: "Discount code already exists" });
             }
+            }
+        }
+
+        if (usePostgresDiscountWrites()) {
+            const updated = await discountRepository.update(id, payload);
+            return res.status(200).json({ success: true, message: "Discount updated successfully", data: updated, discount: updated });
         }
 
         Object.assign(discount, payload);
@@ -243,6 +263,11 @@ export const updateDiscount = async (req, res) => {
 
 export const activateDiscount = async (req, res) => {
     try {
+        if (usePostgresDiscountWrites()) {
+            const discount = await discountRepository.setActive(req.params.id, true);
+            if (!discount) return res.status(404).json({ success: false, message: "Discount not found" });
+            return res.status(200).json({ success: true, message: "Discount activated", data: discount, discount });
+        }
         const discount = await Discount.findByIdAndUpdate(
             req.params.id,
             { isActive: true },
@@ -258,6 +283,11 @@ export const activateDiscount = async (req, res) => {
 
 export const deactivateDiscount = async (req, res) => {
     try {
+        if (usePostgresDiscountWrites()) {
+            const discount = await discountRepository.setActive(req.params.id, false);
+            if (!discount) return res.status(404).json({ success: false, message: "Discount not found" });
+            return res.status(200).json({ success: true, message: "Discount deactivated", data: discount, discount });
+        }
         const discount = await Discount.findByIdAndUpdate(
             req.params.id,
             { isActive: false },
@@ -273,6 +303,11 @@ export const deactivateDiscount = async (req, res) => {
 
 export const deleteDiscount = async (req, res) => {
     try {
+        if (usePostgresDiscountWrites()) {
+            const discount = await discountRepository.remove(req.params.id);
+            if (!discount) return res.status(404).json({ success: false, message: "Discount not found" });
+            return res.status(200).json({ success: true, message: "Discount deleted" });
+        }
         const discount = await Discount.findByIdAndDelete(req.params.id);
         if (!discount) return res.status(404).json({ success: false, message: "Discount not found" });
 

@@ -34,7 +34,10 @@ export async function initializeSocket(server) {
 
     // Redis adapter setup for multi-instance support
     try {
-        await Promise.all([pubClient.connect(), subClient.connect()]);
+        await Promise.race([
+            Promise.all([pubClient.connect(), subClient.connect()]),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Redis adapter connection timed out')), 3000)),
+        ]);
         io.adapter(createAdapter(pubClient, subClient));
         console.log('✅ Socket.IO Redis adapter active — multi-instance broadcasting enabled');
     } catch (err) {

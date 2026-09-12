@@ -11,9 +11,11 @@ import { sendDeliveryOTP, verifyDeliveryOTP, getActiveDeliveryOTP } from '../ser
 import { sendNotification } from '../services/notification.service.js';
 import { validateVendorLocation } from "../services/locationService.js";
 import mongoose from "mongoose";
-import { usePostgresAdminRiderReads, usePostgresRiderAssignmentWrites, usePostgresRiderReads } from "../services/postgres/compat.js";
+import { usePostgresAdminRiderReads, usePostgresAdminWrites, usePostgresRiderAssignmentWrites, usePostgresRiderReads } from "../services/postgres/compat.js";
 import { adminRidersRepository } from "../services/postgres/adminRiders.repository.js";
 import { riderSelfRepository } from "../services/postgres/riderSelf.repository.js";
+import { riderAccountsRepository } from "../services/postgres/riderAccounts.repository.js";
+import { riderHistoryRepository } from "../services/postgres/riderHistory.repository.js";
 import { usePostgresWalletReads } from "../services/postgres/compat.js";
 import { walletRepository } from "../services/postgres/wallet.repository.js";
 import { sendRiderApprovalEmail, sendRiderSuspensionEmail } from "../config/riderAccount.mailer.js";
@@ -21,6 +23,10 @@ import { sendRiderApprovalEmail, sendRiderSuspensionEmail } from "../config/ride
 export const createRider = async (req, res, next) => {
     try {
         const vendorId = req.params.vendorId || null;
+        if (usePostgresRiderAssignmentWrites()) {
+            const rider = await riderAccountsRepository.create({ ...req.body, isVerified: false }, vendorId);
+            return res.status(201).json({ success: true, data: rider });
+        }
         const rider = await riderService.createRider(
             { ...req.body, isVerified: false },
             vendorId
@@ -73,7 +79,7 @@ export const registerRider = async (req, res, next) => {
             locationData = await validateVendorLocation(stateName, cityName);
         }
 
-        const rider = await riderService.createRider({
+        const riderData = {
             name,
             phone,
             email: email || undefined,
@@ -90,12 +96,15 @@ export const registerRider = async (req, res, next) => {
             vehicleType: ["bicycle", "motorbike"].includes(vehicleType) ? vehicleType : "motorbike",
             isVerified: false,
             payoutDetails: payoutDetails || undefined,
-        });
+        };
+        const rider = usePostgresRiderAssignmentWrites()
+            ? await riderAccountsRepository.create(riderData)
+            : await riderService.createRider(riderData);
 
         res.status(201).json({
             success: true,
             message: "Rider account registered successfully. Your account is pending admin approval.",
-            data: rider.getPublicProfile(),
+            data: rider.getPublicProfile ? rider.getPublicProfile() : rider,
         });
     } catch (error) {
         next(error);
@@ -106,7 +115,9 @@ export const getVendorRiders = async (req, res, next) => {
     try {
         const { vendorId } = req.params;
         const { status } = req.query;
-        const riders = await riderService.getRidersByVendor(vendorId, { status });
+        const riders = usePostgresRiderReads()
+            ? await riderAccountsRepository.listForVendor(vendorId, { status })
+            : await riderService.getRidersByVendor(vendorId, { status });
         res.status(200).json({ success: true, count: riders.length, data: riders });
     } catch (error) {
         next(error);
@@ -116,7 +127,10 @@ export const getVendorRiders = async (req, res, next) => {
 export const getSingleVendorRider = async (req, res, next) => {
     try {
         const { vendorId, riderId } = req.params;
-        const rider = await riderService.getSingleRiderForVendor(riderId, vendorId);
+        const rider = usePostgresRiderReads()
+            ? await riderAccountsRepository.getForVendor(riderId, vendorId)
+            : await riderService.getSingleRiderForVendor(riderId, vendorId);
+        if (!rider) return res.status(404).json({ success: false, message: "Rider not found for this vendor" });
         res.status(200).json({ success: true, data: rider });
     } catch (error) {
         next(error);
@@ -128,7 +142,9 @@ export const getAvailableRiders = async (req, res, next) => {
         const { vendorId } = req.params;
         // If it's a vendor-managed fleet request, return all active riders
         // Vendors manually manage their fleet and need to see all riders for manual assignment.
-        const riders = await riderService.getRidersByVendor(vendorId, { isActive: true });
+        const riders = usePostgresRiderReads()
+            ? await riderAccountsRepository.listForVendor(vendorId, { isActive: true })
+            : await riderService.getRidersByVendor(vendorId, { isActive: true });
         res.status(200).json({ success: true, count: riders.length, data: riders });
     } catch (error) {
         next(error);
@@ -140,7 +156,9 @@ export const assignRider = async (req, res, next) => {
         const { vendorId, orderId } = req.params;
         const { riderId } = req.body;
 
-        const { order, rider } = await riderService.assignRiderToOrder(orderId, riderId, vendorId);
+        const { order, rider } = usePostgresRiderAssignmentWrites()
+            ? await riderAccountsRepository.assign(orderId, riderId, vendorId)
+            : await riderService.assignRiderToOrder(orderId, riderId, vendorId);
 
         const io = getIO(req);
 
@@ -338,7 +356,9 @@ export const updateRiderStatus = async (req, res, next) => {
 
         // Suspension is enforced before every path, including optional Postgres writes.
         if (["available", "on_delivery"].includes(status)) {
-            const suspension = await Rider.findById(riderId).select("isSuspended suspendedUntil");
+            const suspension = usePostgresRiderReads()
+                ? await riderAccountsRepository.getSuspension(riderId)
+                : await Rider.findById(riderId).select("isSuspended suspendedUntil");
             if (!suspension) {
                 return res.status(404).json({ success: false, message: "Rider not found" });
             }
@@ -354,13 +374,34 @@ export const updateRiderStatus = async (req, res, next) => {
                 });
             }
 
-            if (suspension.isSuspended) {
+            if (suspension.isSuspended && !usePostgresRiderReads()) {
                 await Rider.updateOne(
                     { _id: riderId },
                     { $set: { isSuspended: false, suspendedUntil: null } }
                 );
             }
         }
+
+        // A normal online/offline toggle has no order context. Keep this path
+        // entirely in PostgreSQL; assignment accept/reject continues below.
+        if (usePostgresRiderAssignmentWrites() && ["available", "offline"].includes(status) && !reason && !reqOrderId) {
+            const result = await riderAccountsRepository.setAvailability(riderId, status);
+            if (result.error === "not_found") return res.status(404).json({ success: false, message: "Rider not found" });
+            if (result.error === "inactive") return res.status(403).json({ success: false, message: "Rider account is inactive" });
+            if (result.error === "unverified") return res.status(403).json({ success: false, message: "Rider account is pending admin approval" });
+            if (result.error === "active_delivery") {
+                return res.status(409).json({ success: false, message: "You cannot change availability while an order is assigned to you" });
+            }
+
+            if (status === "available") {
+                const { catchupRiderWithPendingOrders } = await import("../services/riderAssignment.service.js");
+                catchupRiderWithPendingOrders(riderId).catch((error) =>
+                    console.error(`[Catch-up] Error for rider ${riderId}:`, error.message)
+                );
+            }
+            return res.status(200).json({ success: true, data: result.rider });
+        }
+
         if (usePostgresRiderAssignmentWrites() && (status === "on_delivery" || ((reason || reqOrderId) && status === "available"))) {
             const response = status === "on_delivery"
                 ? await riderSelfRepository.acceptAssignment(riderId, reqOrderId)
@@ -1031,7 +1072,11 @@ export const requestDeliveryOTP = async (req, res, next) => {
                 actualOrderId,
                 customerPhone,
                 customerUserId,
-                { forceResend: resend === true }
+                {
+                    forceResend: resend === true,
+                    customerEmail,
+                    readableOrderId: order.orderId || order._id.toString(),
+                }
             );
         } catch (otpErr) {
             if (otpErr.code === "OTP_RESEND_COOLDOWN") {
@@ -1116,9 +1161,22 @@ export const confirmDelivery = async (req, res, next) => {
             return res.status(403).json({ success: false, message: 'Unauthorized' });
         }
 
-        const VendorOrderModel = (await import("../model/vendor/VendorOrder.js")).default;
-        const vendorOrder = await VendorOrderModel.findById(orderId);
-        const actualOrderId = vendorOrder ? vendorOrder.userOrderId : orderId;
+        let actualOrderId;
+        if (usePostgresRiderAssignmentWrites()) {
+            const { getDeliveryOtpContext } = await import("../services/postgres/riderOtp.repository.js");
+            const context = await getDeliveryOtpContext(orderId, riderId);
+            if (!context) {
+                return res.status(404).json({ success: false, message: "Order not found" });
+            }
+            if (!context.isAssigned) {
+                return res.status(403).json({ success: false, message: "Rider not assigned to this order" });
+            }
+            actualOrderId = context.actualOrderId;
+        } else {
+            const VendorOrderModel = (await import("../model/vendor/VendorOrder.js")).default;
+            const vendorOrder = await VendorOrderModel.findById(orderId);
+            actualOrderId = vendorOrder ? vendorOrder.userOrderId : orderId;
+        }
 
         // Verify OTP
         const { verified } = await verifyDeliveryOTP(actualOrderId, otp.toString().trim());
@@ -1273,7 +1331,10 @@ export const confirmDelivery = async (req, res, next) => {
 export const updateRider = async (req, res, next) => {
     try {
         const { vendorId, riderId } = req.params;
-        const rider = await riderService.updateRider(riderId, vendorId, req.body);
+        const rider = usePostgresRiderAssignmentWrites()
+            ? await riderAccountsRepository.updateForVendor(riderId, vendorId, req.body)
+            : await riderService.updateRider(riderId, vendorId, req.body);
+        if (!rider) return res.status(404).json({ success: false, message: "Rider not found for this vendor" });
         res.status(200).json({ success: true, data: rider });
     } catch (error) {
         next(error);
@@ -1286,7 +1347,10 @@ export const riderUpdateSelf = async (req, res, next) => {
         if (req.rider._id.toString() !== riderId) {
             return res.status(403).json({ success: false, message: "Unauthorized to update this profile" });
         }
-        const rider = await riderService.riderUpdateSelf(riderId, req.body);
+        const rider = usePostgresRiderAssignmentWrites()
+            ? await riderAccountsRepository.updateSelf(riderId, req.body)
+            : await riderService.riderUpdateSelf(riderId, req.body);
+        if (!rider) return res.status(404).json({ success: false, message: "Rider not found" });
         res.status(200).json({ success: true, data: rider });
     } catch (error) {
         next(error);
@@ -1296,6 +1360,11 @@ export const riderUpdateSelf = async (req, res, next) => {
 export const deactivateRider = async (req, res, next) => {
     try {
         const { vendorId, riderId } = req.params;
+        if (usePostgresAdminWrites()) {
+            const response = await adminRidersRepository.deactivateRider(riderId, { vendorToken: vendorId, softDelete: true });
+            if (!response.success) return res.status(response.status).json(response);
+            return res.status(200).json({ success: true, message: "Rider deactivated successfully" });
+        }
         await riderService.deactivateRider(riderId, vendorId);
         res.status(200).json({ success: true, message: "Rider deactivated successfully" });
     } catch (error) {
@@ -1322,10 +1391,10 @@ export const adminGetAllRiders = async (req, res, next) => {
 export const adminUpdateRider = async (req, res, next) => {
     try {
         const { riderId } = req.params;
-        const rider = await riderService.adminUpdateRider(riderId, {
-            ...req.body,
-            approvedBy: req.admin?._id
-        });
+        const rider = usePostgresAdminWrites()
+            ? await adminRidersRepository.updateRider(riderId, req.body, req.admin?._id)
+            : await riderService.adminUpdateRider(riderId, { ...req.body, approvedBy: req.admin?._id });
+        if (!rider) return res.status(404).json({ success: false, message: "Rider not found" });
         res.status(200).json({ success: true, data: rider });
     } catch (error) {
         next(error);
@@ -1335,7 +1404,10 @@ export const adminUpdateRider = async (req, res, next) => {
 export const adminForceRiderAvailable = async (req, res, next) => {
     try {
         const { riderId } = req.params;
-        const rider = await riderService.adminForceRiderAvailable(riderId, req.admin._id);
+        const rider = usePostgresAdminWrites()
+            ? await adminRidersRepository.forceRiderAvailable(riderId, req.admin._id)
+            : await riderService.adminForceRiderAvailable(riderId, req.admin._id);
+        if (!rider) return res.status(404).json({ success: false, message: "Rider not found" });
         res.status(200).json({
             success: true,
             message: "Rider status overridden to available",
@@ -1353,7 +1425,10 @@ export const adminSetRiderSuspension = async (req, res, next) => {
             return res.status(400).json({ success: false, message: "A boolean suspended value is required" });
         }
 
-        const rider = await riderService.adminSetRiderSuspension(riderId, { suspended, reason }, req.admin._id);
+        const rider = usePostgresAdminWrites()
+            ? await adminRidersRepository.setRiderSuspension(riderId, { suspended, reason, adminToken: req.admin._id })
+            : await riderService.adminSetRiderSuspension(riderId, { suspended, reason }, req.admin._id);
+        if (!rider) return res.status(404).json({ success: false, message: "Rider not found" });
         if (suspended && rider.email) {
             sendRiderSuspensionEmail(rider, reason).catch((error) => {
                 console.error("Rider suspension email failed (non-blocking):", error.message);
@@ -1367,7 +1442,10 @@ export const adminSetRiderSuspension = async (req, res, next) => {
 export const adminApproveRider = async (req, res, next) => {
     try {
         const { riderId } = req.params;
-        const rider = await riderService.adminApproveRider(riderId, req.admin?._id);
+        const rider = usePostgresAdminWrites()
+            ? await adminRidersRepository.approveRider(riderId, req.admin?._id)
+            : await riderService.adminApproveRider(riderId, req.admin?._id);
+        if (!rider) return res.status(404).json({ success: false, message: "Rider not found" });
         if (rider.email) {
             sendRiderApprovalEmail(rider).catch((error) => {
                 console.error("Rider approval email failed (non-blocking):", error.message);
@@ -1400,7 +1478,10 @@ export const adminGetAssignmentHistory = async (req, res, next) => {
 export const adminGetRiderHistory = async (req, res, next) => {
     try {
         const { riderId } = req.params;
-        const history = await riderService.getRiderHistorySummary(riderId, req.query);
+        const history = usePostgresAdminRiderReads()
+            ? await riderHistoryRepository.get(riderId, req.query)
+            : await riderService.getRiderHistorySummary(riderId, req.query);
+        if (!history) return res.status(404).json({ success: false, message: "Rider not found" });
         res.status(200).json({ success: true, data: history });
     } catch (error) {
         next(error);
@@ -1435,6 +1516,10 @@ export const adminGetPlatformVehicles = async (req, res, next) => {
 
 export const adminCreatePlatformVehicle = async (req, res, next) => {
     try {
+        if (usePostgresAdminWrites()) {
+            const vehicle = await adminRidersRepository.createPlatformVehicle(req.body);
+            return res.status(201).json({ success: true, data: vehicle });
+        }
         const vehicle = await PlatformVehicle.create(req.body);
         res.status(201).json({ success: true, data: vehicle });
     } catch (error) {
@@ -1444,6 +1529,11 @@ export const adminCreatePlatformVehicle = async (req, res, next) => {
 
 export const adminUpdatePlatformVehicle = async (req, res, next) => {
     try {
+        if (usePostgresAdminWrites()) {
+            const vehicle = await adminRidersRepository.updatePlatformVehicle(req.params.vehicleId, req.body);
+            if (!vehicle) return res.status(404).json({ success: false, message: "Vehicle not found" });
+            return res.status(200).json({ success: true, data: vehicle });
+        }
         const vehicle = await PlatformVehicle.findByIdAndUpdate(req.params.vehicleId, req.body, {
             new: true,
             runValidators: true,
@@ -1458,6 +1548,11 @@ export const adminUpdatePlatformVehicle = async (req, res, next) => {
 export const adminDeletePlatformVehicle = async (req, res, next) => {
     try {
         const { vehicleId } = req.params;
+        if (usePostgresAdminWrites()) {
+            const deleted = await adminRidersRepository.deletePlatformVehicle(vehicleId);
+            if (!deleted) return res.status(404).json({ success: false, message: "Vehicle not found" });
+            return res.status(200).json({ success: true, message: "Vehicle deleted successfully" });
+        }
         const vehicle = await PlatformVehicle.findById(vehicleId);
         if (!vehicle) return res.status(404).json({ success: false, message: "Vehicle not found" });
 
@@ -1479,6 +1574,11 @@ export const adminDeletePlatformVehicle = async (req, res, next) => {
 export const adminUnassignRiderFromVehicle = async (req, res, next) => {
     try {
         const { vehicleId } = req.params;
+        if (usePostgresAdminWrites()) {
+            const vehicle = await adminRidersRepository.unassignPlatformVehicle(vehicleId);
+            if (!vehicle) return res.status(404).json({ success: false, message: "Vehicle not found" });
+            return res.status(200).json({ success: true, message: "Rider unassigned successfully", data: vehicle });
+        }
         const vehicle = await PlatformVehicle.findById(vehicleId);
         if (!vehicle) return res.status(404).json({ success: false, message: "Vehicle not found" });
 
@@ -1502,8 +1602,13 @@ export const adminUnassignRiderFromVehicle = async (req, res, next) => {
 export const adminDeactivateRider = async (req, res, next) => {
     try {
         const { riderId } = req.params;
+        if (usePostgresAdminWrites()) {
+            const response = await adminRidersRepository.deactivateRider(riderId, { softDelete: true });
+            if (!response.success) return res.status(response.status).json(response);
+            return res.status(200).json({ success: true, message: "Rider account deleted successfully" });
+        }
         await riderService.adminDeactivateRider(riderId);
-        res.status(200).json({ success: true, message: "Rider deactivated successfully by admin" });
+        res.status(200).json({ success: true, message: "Rider account deleted successfully" });
     } catch (error) {
         next(error);
     }
@@ -1513,6 +1618,21 @@ export const adminUnassignRiderFromOrder = async (req, res, next) => {
     try {
         const { riderId } = req.params;
         const { reason = "Unassigned by administrator" } = req.body;
+        if (usePostgresRiderAssignmentWrites()) {
+            const result = await riderSelfRepository.terminateAssignment(req.body.orderId, riderId, {
+                reason: "admin_unassigned",
+                note: reason,
+                changedBy: `admin:${req.admin?._id || "unknown"}:unassigned`,
+            });
+            try {
+                const { offerOrderToAvailableRiders } = await import("../services/riderAssignment.service.js");
+                await offerOrderToAvailableRiders({ vendorOrderId: result.vendorOrderId, assignedBy: `admin:${req.admin?._id || "unknown"}:unassigned` });
+            } catch (error) { console.error("Admin unassign rebroadcast failed:", error.message); }
+            let io;
+            try { io = getIO(); } catch (error) {}
+            if (io) io.to(SOCKET_ROOMS.rider(riderId)).emit(SOCKET_EVENTS.ASSIGNMENT_CANCELLED, buildPayload.assignmentCancelled({ orderId: result.orderId, reason: "admin_unassigned", message: "An administrator unassigned you from this order." }));
+            return res.status(200).json({ success: true, message: result.message });
+        }
         const rider = await Rider.findById(riderId);
         if (!rider) return res.status(404).json({ success: false, message: "Rider not found" });
 
@@ -1871,7 +1991,15 @@ export const riderTerminateOrder = async (req, res, next) => {
         const { orderId, riderId } = req.params;
         const { note } = req.body;
 
-        const result = await riderService.terminateOrder(orderId, riderId, note);
+        const result = usePostgresRiderAssignmentWrites()
+            ? await riderSelfRepository.terminateAssignment(orderId, riderId, { reason: "rider_initiated", note })
+            : await riderService.terminateOrder(orderId, riderId, note);
+        if (usePostgresRiderAssignmentWrites()) {
+            try {
+                const { offerOrderToAvailableRiders } = await import("../services/riderAssignment.service.js");
+                await offerOrderToAvailableRiders({ vendorOrderId: result.vendorOrderId, assignedBy: "system:rider_termination" });
+            } catch (error) { console.error("Re-broadcast after termination failed:", error.message); }
+        }
         res.status(200).json(result);
     } catch (error) {
         next(error);
@@ -1888,7 +2016,19 @@ export const riderReportUndeliverable = async (req, res, next) => {
         const { orderId, riderId } = req.params;
         const { reason } = req.body;
 
-        const result = await riderService.reportUndeliverable(orderId, riderId, reason);
+        const result = usePostgresRiderAssignmentWrites()
+            ? await riderSelfRepository.reportUndeliverable(orderId, riderId, reason)
+            : await riderService.reportUndeliverable(orderId, riderId, reason);
+        if (usePostgresRiderAssignmentWrites()) {
+            const remakeWindow = 15 * 60 * 1000;
+            try {
+                await sendNotification(result.vendorDatabaseId, "order_remake_request", { orderId: result.orderId, orderDbId: result.orderDatabaseId, reason: reason || "Previous rider could not deliver", message: "Can you remake this order? Respond YES within 15 minutes.", remakeWindow }, "vendor");
+            } catch (error) { console.error("Vendor remake notify failed:", error.message); }
+            try {
+                const { disputeEscalationQueue } = await import("../config/queue.js");
+                await disputeEscalationQueue.add("escalate-dispute", { orderId: result.orderDatabaseId, vendorOrderId: result.vendorOrderId }, { jobId: `dispute-escalation:${result.orderDatabaseId}`, delay: remakeWindow, attempts: 2, removeOnComplete: true, removeOnFail: false });
+            } catch (error) { console.error("Dispute escalation queue failed:", error.message); }
+        }
         res.status(200).json(result);
     } catch (error) {
         next(error);

@@ -1,5 +1,7 @@
 import State from "../model/location/State.js";
 import City from "../model/location/City.js";
+import { usePostgresAdminWrites, usePostgresReads } from "./postgres/compat.js";
+import { locationMutationRepository } from "./postgres/locationMutation.repository.js";
 
 /**
  * Validates and resolves vendor location during registration
@@ -17,6 +19,7 @@ export const validateVendorLocation = async (stateName, cityName) => {
         if (!normalizedState || !normalizedCity) {
             throw new Error("State and city are required");
         }
+        if (usePostgresReads()) return locationMutationRepository.validateNames(normalizedState, normalizedCity);
 
         // Check if state exists in database
         const state = await State.findOne({
@@ -88,6 +91,7 @@ export const resolveVendorLocation = async (
         if (!normalizedState || !normalizedCity) {
             throw new Error("State and city are required");
         }
+        if (usePostgresAdminWrites()) return locationMutationRepository.resolveNames(normalizedState, normalizedCity, createIfMissing);
 
         // Find or create state
         let state = await State.findOne({

@@ -1,6 +1,7 @@
 import "dotenv/config";
 import mongoose from "mongoose";
 import prisma from "../config/prisma.js";
+import { createMigrationControl } from "../services/postgres/migrationControl.js";
 
 import Order from "../model/order/Order.js";
 
@@ -13,6 +14,7 @@ const stats = {
 
 const toLegacyId = (value) => (value ? String(value) : null);
 const asDate = (value) => (value ? new Date(value) : undefined);
+const toKobo = (value) => Math.round(Number(value || 0) * 100);
 const cleanJson = (value, fallback) => {
   if (value === undefined || value === null) return fallback;
   return JSON.parse(JSON.stringify(value));
@@ -23,6 +25,10 @@ const parseArgs = () => {
   return {
     dryRun: args.has("--dry-run"),
     limit: Number(process.argv.find((arg) => arg.startsWith("--limit="))?.split("=")[1] || 0),
+    batchSize: Math.max(1, Number(process.argv.find((arg) => arg.startsWith("--batch-size="))?.split("=")[1] || 100)),
+    restart: args.has("--restart"),
+    maxErrors: Math.max(1, Number(process.argv.find((arg) => arg.startsWith("--max-errors="))?.split("=")[1] || 25)),
+    id: process.argv.find((arg) => arg.startsWith("--id="))?.split("=")[1] || null,
   };
 };
 
@@ -87,8 +93,9 @@ const orderItemData = async (orderId, orderLegacyId, item, index) => ({
   portionLabel: item.portion_label || "",
   quantity: Number(item.quantity || 1),
   portionQuantity: Number(item.portion_quantity || 1),
-  price: Number(item.price || 0),
+  price: toKobo(item.price),
   note: item.note || "",
+  mealGroupLabel: item.meal_group_label || "",
   dietaryType: mapDietaryType(item.dietary_type),
   itemType: mapItemType(item.item_type),
   selectedOptions: cleanJson(item.selected_options, []),
@@ -97,16 +104,12 @@ const orderItemData = async (orderId, orderLegacyId, item, index) => ({
   updatedAt: asDate(item.updatedAt),
 });
 
-const importOrders = async (dryRun, limit) => {
-  const query = Order.find({}).sort({ createdAt: 1 });
-  if (limit) query.limit(limit);
-  const orders = await query.lean();
-
-  for (const order of orders) {
+const importOrder = async (order, dryRun) => {
     const userId = await resolveId(prisma.user, order.userId);
     if (!userId) {
-      stats.skipped.push(`order:${order._id}: missing user ${order.userId}`);
-      continue;
+      const error = new Error(`missing user ${order.userId}`);
+      error.code = "MISSING_USER";
+      throw error;
     }
 
     const riderId = await resolveId(prisma.rider, order.riderId);
@@ -118,13 +121,14 @@ const importOrders = async (dryRun, limit) => {
       userId,
       deliveryAddress: cleanJson(order.deliveryAddress, {}),
       phone: order.phone || "",
-      subtotal: Number(order.subtotal || 0),
-      deliveryFee: Number(order.deliveryFee || 0),
-      serviceFee: Number(order.serviceFee || 0),
+      restaurantNotes: cleanJson(order.restaurantNotes, {}),
+      subtotal: toKobo(order.subtotal),
+      deliveryFee: toKobo(order.deliveryFee),
+      serviceFee: toKobo(order.serviceFee),
       appliedDiscount: order.appliedDiscount ? cleanJson(order.appliedDiscount, null) : null,
       freeDeliveryPromo: cleanJson(order.freeDeliveryPromo, {}),
       vendorDeliveryPromo: cleanJson(order.vendorDeliveryPromo, {}),
-      total: Number(order.total || 0),
+      total: toKobo(order.total),
       orderCode: order.orderId || orderLegacyId,
       paymentStatus: mapPaymentStatus(order.paymentStatus),
       paymentReference,
@@ -132,8 +136,12 @@ const importOrders = async (dryRun, limit) => {
       orderStatus: mapOrderStatus(order.orderStatus),
       riderId,
       riderAssignment: cleanJson(order.riderAssignment, {}),
-      riderEarnings: order.riderEarnings ?? null,
+      riderEarnings: order.riderEarnings == null ? null : toKobo(order.riderEarnings),
       statusLog: cleanJson(order.statusLog, []),
+      optionStockReservedAt: asDate(order.optionStockReservedAt),
+      optionStockRestoredAt: asDate(order.optionStockRestoredAt),
+      portionStockReservedAt: asDate(order.portionStockReservedAt),
+      portionStockRestoredAt: asDate(order.portionStockRestoredAt),
       createdAt: asDate(order.createdAt),
       updatedAt: asDate(order.updatedAt),
     };
@@ -150,7 +158,7 @@ const importOrders = async (dryRun, limit) => {
     );
     stats.orders += 1;
 
-    if (dryRun || !savedOrder) continue;
+    if (dryRun || !savedOrder) return;
 
     for (const [index, item] of (order.items || []).entries()) {
       const itemData = await orderItemData(savedOrder.id, orderLegacyId, item, index);
@@ -187,12 +195,12 @@ const importOrders = async (dryRun, limit) => {
             create: {
               orderId: savedOrder.id,
               restaurantId,
-              deliveryFee: Number(fee.deliveryFee || 0),
+              deliveryFee: toKobo(fee.deliveryFee),
               createdAt: asDate(order.createdAt),
               updatedAt: asDate(order.updatedAt),
             },
             update: {
-              deliveryFee: Number(fee.deliveryFee || 0),
+              deliveryFee: toKobo(fee.deliveryFee),
               updatedAt: asDate(order.updatedAt),
             },
           }),
@@ -200,20 +208,67 @@ const importOrders = async (dryRun, limit) => {
       );
       stats.vendorDeliveryFees += 1;
     }
+};
+
+const importOrders = async ({ dryRun, limit, batchSize, restart, maxErrors, id }, control) => {
+  if (id) {
+    const order = await Order.findById(id).lean();
+    if (!order) throw new Error(`Order ${id} not found`);
+    await importOrder(order, dryRun);
+    await control.advance(id, 1, { targeted: true });
+    return;
+  }
+  const checkpoint = restart ? null : await control.checkpoint();
+  let lastId = checkpoint?.lastSourceId || null;
+  let remaining = limit || Number.POSITIVE_INFINITY;
+  let errors = 0;
+
+  while (remaining > 0) {
+    const size = Math.min(batchSize, remaining);
+    const filter = lastId ? { _id: { $gt: new mongoose.Types.ObjectId(lastId) } } : {};
+    const orders = await Order.find(filter).sort({ _id: 1 }).limit(size).lean();
+    if (!orders.length) break;
+
+    for (const order of orders) {
+      const sourceId = toLegacyId(order._id);
+      try {
+        await importOrder(order, dryRun);
+      } catch (error) {
+        errors += 1;
+        stats.skipped.push(`order:${sourceId}: ${error.message}`);
+        await control.reject(sourceId, error, {
+          _id: sourceId,
+          orderId: order.orderId || null,
+          userId: toLegacyId(order.userId),
+        });
+        if (errors >= maxErrors) throw new Error(`Stopped after ${errors} rejected orders`);
+      }
+      lastId = sourceId;
+      remaining -= 1;
+      await control.advance(lastId, 1, { errors });
+      if (remaining <= 0) break;
+    }
   }
 };
 
 const importAll = async () => {
-  const { dryRun, limit } = parseArgs();
+  const options = parseArgs();
+  const { dryRun } = options;
 
   if (!process.env.MONGO_URI) throw new Error("MONGO_URI is required");
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
 
   await mongoose.connect(process.env.MONGO_URI);
+  const control = createMigrationControl({ prisma, jobName: "orders-backfill-v2", sourceName: "orders", dryRun });
 
   try {
-    await importOrders(dryRun, limit);
-    console.log(JSON.stringify({ dryRun, stats }, null, 2));
+    await control.start({ batchSize: options.batchSize, limit: options.limit || null, restart: options.restart });
+    await importOrders(options, control);
+    const run = await control.finish("completed", { stats });
+    console.log(JSON.stringify({ dryRun, run, stats }, null, 2));
+  } catch (error) {
+    await control.finish("failed", { error: error.message, stats });
+    throw error;
   } finally {
     await mongoose.disconnect();
     await prisma.$disconnect();

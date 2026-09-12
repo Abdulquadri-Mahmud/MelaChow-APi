@@ -46,6 +46,8 @@ import {
 } from "../../controller/Admin/vendors_management/vendor.controller.js";
 import vendorPromoRoutes from "./vendorPromo.routes.js";
 import platformPromoRoutes from "./platformPromo.routes.js";
+import { getDeliveryPricingConfig, updateGlobalDeliveryPricing, updateVendorDeliveryLocation } from "../../controller/Admin/platform/deliveryPricing.controller.js";
+import { autocompleteDeliveryAddress, getDeliveryPlaceDetails } from "../../controller/location/googleLocation.controller.js";
 
 const router = express.Router();
 
@@ -126,7 +128,12 @@ router.get("/finance/payout-history", adminAuth, getPayoutHistory);
 
 // Platform Configuration
 router.get("/platform-config", adminAuth, getAdminPlatformConfig);
-router.put('/platform-config', superAdminOnly, updateAdminPlatformConfig);
+router.put('/platform-config', adminAuth, updateAdminPlatformConfig);
+router.get("/delivery-pricing", superAdminOnly, getDeliveryPricingConfig);
+router.get("/delivery-pricing/locations/autocomplete", superAdminOnly, autocompleteDeliveryAddress);
+router.get("/delivery-pricing/locations/place/:placeId", superAdminOnly, getDeliveryPlaceDetails);
+router.put("/delivery-pricing/global", superAdminOnly, updateGlobalDeliveryPricing);
+router.put("/delivery-pricing/vendors/:vendorId", superAdminOnly, updateVendorDeliveryLocation);
 
 // Manual payout trigger — admin only, fires the same sweep as the nightly cron
 // POST /api/admin/payouts/trigger?type=rider|vendor|all

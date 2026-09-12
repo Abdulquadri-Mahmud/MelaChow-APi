@@ -1634,8 +1634,20 @@ export const adminDeactivateRider = async (riderId) => {
     if (!rider) {
         throwHttpError("Rider not found", 404);
     }
+    if (rider.currentOrderId) {
+        throwHttpError("Cannot delete a rider with an active delivery. Unassign the order first.", 409);
+    }
     rider.isActive = false;
-    rider.status = "off-duty";
+    rider.status = "offline";
+    rider.deletedAt = new Date();
+    const vehicleId = rider.platformVehicleId;
+    rider.platformVehicleId = null;
     await rider.save();
+    if (vehicleId) {
+        await PlatformVehicle.findByIdAndUpdate(vehicleId, {
+            status: "available",
+            assignedRiderId: null,
+        });
+    }
     return rider;
 };

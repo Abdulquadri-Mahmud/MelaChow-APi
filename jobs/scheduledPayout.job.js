@@ -13,11 +13,84 @@ import PlatformConfig from "../model/platform/PlatformConfig.model.js";
 import { getEffectiveFeeConfig, computeActorPayout } from "../utils/paystackFees.js";
 import { getPlatformConfig } from "../services/platformConfig.service.js";
 import { RIDER_PAYOUT_THRESHOLD, VENDOR_PAYOUT_THRESHOLD } from "../config/payouts.js";
+import prisma from "../config/prisma.js";
+import { usePostgresPayoutWrites } from "../services/postgres/compat.js";
+import { payoutRepository } from "../services/postgres/payout.repository.js";
 
 // ── REDIS CONNECTION ───────────────────────────────────────────────────────────
 import { bullmqRedisConnection } from "../config/redis.js";
 
 const QUEUE_NAME = "scheduled-payout";
+
+const processPostgresPayoutJob = async ({ actorId, actorType, displayName }) => {
+    const context = await payoutRepository.getOwnerContext(actorType, actorId);
+    if (!context) return { skipped: true, reason: "PostgreSQL owner or wallet not found" };
+
+    const thresholdNaira = actorType === "vendor" ? VENDOR_PAYOUT_THRESHOLD : RIDER_PAYOUT_THRESHOLD;
+    const availableKobo = Number(context.wallet.balance || 0);
+    if (availableKobo < thresholdNaira * 100) {
+        return { skipped: true, reason: "balance insufficient at processing time" };
+    }
+
+    const details = context.owner.payoutDetails && typeof context.owner.payoutDetails === "object"
+        ? context.owner.payoutDetails
+        : {};
+    if (!details.payoutEnabled || !details.recipientCode) {
+        return { skipped: true, reason: "verified payout details missing" };
+    }
+
+    // Payout rules accept naira at the application boundary. PostgreSQL and
+    // Paystack both receive integer kobo below.
+    const requestedAmountNaira = Math.floor(availableKobo / 100);
+    const platformConfig = await getPlatformConfig();
+    const payoutCalc = computeActorPayout(
+        actorType,
+        requestedAmountNaira,
+        getEffectiveFeeConfig(actorType, context.owner, platformConfig)
+    );
+    if (payoutCalc.net <= 0) return { skipped: true, reason: "net amount is zero after fees" };
+
+    const amountKobo = Math.round(payoutCalc.net * 100);
+    const localBypass = process.env.NODE_ENV !== "production" && process.env.LOCAL_VENDOR_PAYOUT_BYPASS === "true";
+    if (!localBypass) {
+        const { sufficient } = await checkPaystackBalance(amountKobo);
+        if (!sufficient) throw new Error("Insufficient Paystack platform balance");
+    }
+
+    const reference = `AUTO_${actorType.toUpperCase()}_${randomUUID().replace(/-/g, "").toUpperCase()}`;
+    const reserved = await payoutRepository.reserveWithdrawal({
+        type: actorType,
+        tokenId: actorId,
+        requestedAmountNaira,
+        transferFeeNaira: payoutCalc.feeChargedToActor,
+        netAmountNaira: payoutCalc.net,
+        appliedMarkupNaira: payoutCalc.markupChargedToActor,
+        reference,
+    });
+    if (reserved.error) return { skipped: true, reason: reserved.error };
+
+    if (localBypass) {
+        await payoutRepository.markProcessing(actorType, reference, { transferCode: `local_${reference}`, providerStatus: "local_test" });
+        return { success: true, reference, amount: requestedAmountNaira, amountKobo, localBypass: true };
+    }
+
+    try {
+        const provider = await initiatePaystackTransfer({
+            recipientCode: details.recipientCode,
+            amountKobo,
+            reference,
+            reason: `MelaChow auto-payout — ${displayName || context.owner.storeName || context.owner.name}`,
+        });
+        await payoutRepository.markProcessing(actorType, reference, { transferCode: provider.transferCode, providerStatus: provider.status });
+        return { success: true, reference, amount: requestedAmountNaira, amountKobo };
+    } catch (error) {
+        const definitive = error.response && error.response.status >= 400 && error.response.status < 500;
+        if (definitive) await payoutRepository.restoreFailed(actorType, reference, error.response?.data?.message || "Paystack rejected transfer");
+        else await payoutRepository.markProcessing(actorType, reference, { uncertain: true });
+        if (definitive) throw error;
+        return { success: true, uncertain: true, reference, amountKobo };
+    }
+};
 
 // Reads the minimum payout balance from PlatformConfig.
 // Falls back to ₦500 (rider-friendly default) if the config doc is missing.
@@ -59,6 +132,10 @@ const processPayoutJob = async (job) => {
         accountNumber,
         accountName,
     } = job.data;
+
+    if (usePostgresPayoutWrites()) {
+        return processPostgresPayoutJob({ actorId, actorType, displayName });
+    }
 
     const Model = actorType === "vendor" ? Withdrawal : RiderWithdrawal;
     const idField = actorType === "vendor" ? "vendorId" : "riderId";
@@ -224,6 +301,21 @@ scheduledPayoutWorker.on("failed", (job, err) => {
 const enqueueVendorPayouts = async (today) => {
     let vendorCount = 0;
 
+    if (usePostgresPayoutWrites()) {
+        const wallets = await prisma.wallet.findMany({
+            where: { ownerModel: "Vendor", balance: { gte: Math.round(VENDOR_PAYOUT_THRESHOLD * 100) } },
+            select: { ownerId: true },
+        });
+        for (const wallet of wallets) {
+            const vendor = await prisma.vendor.findUnique({ where: { id: wallet.ownerId }, select: { id: true, storeName: true, payoutDetails: true, deletedAt: true } });
+            const details = vendor?.payoutDetails && typeof vendor.payoutDetails === "object" ? vendor.payoutDetails : {};
+            if (!vendor || vendor.deletedAt || !details.payoutEnabled || !details.recipientCode) continue;
+            await scheduledPayoutQueue.add(`vendor-${vendor.id}`, { actorId: vendor.id, actorType: "vendor", displayName: vendor.storeName || "Vendor" }, { jobId: `vendor-payout-${vendor.id}-${today}` });
+            vendorCount++;
+        }
+        return vendorCount;
+    }
+
     const vendorWallets = await Wallet.find({
         ownerModel: "Vendor",
         balance: { $gte: VENDOR_PAYOUT_THRESHOLD },
@@ -272,6 +364,21 @@ const enqueueVendorPayouts = async (today) => {
 
 const enqueueRiderPayouts = async (today) => {
     let riderCount = 0;
+
+    if (usePostgresPayoutWrites()) {
+        const wallets = await prisma.wallet.findMany({
+            where: { ownerModel: "Rider", balance: { gte: Math.round(RIDER_PAYOUT_THRESHOLD * 100) } },
+            select: { ownerId: true },
+        });
+        for (const wallet of wallets) {
+            const rider = await prisma.rider.findUnique({ where: { id: wallet.ownerId }, select: { id: true, name: true, payoutDetails: true, deletedAt: true, isActive: true } });
+            const details = rider?.payoutDetails && typeof rider.payoutDetails === "object" ? rider.payoutDetails : {};
+            if (!rider || rider.deletedAt || !rider.isActive || !details.payoutEnabled || !details.recipientCode) continue;
+            await scheduledPayoutQueue.add(`rider-${rider.id}`, { actorId: rider.id, actorType: "rider", displayName: rider.name || "Rider" }, { jobId: `rider-payout-${rider.id}-${today}` });
+            riderCount++;
+        }
+        return riderCount;
+    }
 
     const riderWallets = await Wallet.find({
         ownerModel: "Rider",

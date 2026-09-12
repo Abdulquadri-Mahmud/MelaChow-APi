@@ -4,6 +4,8 @@ import VendorOrder from "../model/vendor/VendorOrder.js";
 import Wallet from "../model/wallet/wallet.mode.js";
 import SupportTicket from "../model/supportTicket.model.js";
 import SupportRefundSettlement from "../model/supportRefundSettlement.model.js";
+import { usePostgresSupportWrites } from "./postgres/compat.js";
+import { supportRepository } from "./postgres/support.repository.js";
 
 const round = (amount) => Number(Number(amount || 0).toFixed(2));
 
@@ -21,6 +23,7 @@ async function getWallet(ownerId, ownerModel, session) {
  * called by an authorised admin decision.
  */
 export async function settleSupportRefund({ ticketId, refundAmount, liabilities, reason, evidenceSummary, admin }) {
+  if (usePostgresSupportWrites()) return supportRepository.settleRefund({ ticketId, refundAmount, liabilities, reason, evidenceSummary, admin });
   const existing = await SupportRefundSettlement.findOne({ ticketId });
   if (existing) return existing;
 

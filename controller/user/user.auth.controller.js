@@ -3,6 +3,18 @@ import { generateAccessToken, generateRefreshToken, generateOTP, generateResetTo
 import { sendMail } from '../../config/mailer.js';
 import { sendAuthCookies } from '../../utils/sendTokenCookie.js';
 import { wrapLayout } from '../../services/emailTemplate.service.js';
+import {
+    authenticateIdentity,
+    postgresUserIdentityEnabled,
+    publicUser,
+    registerIdentity,
+    setIdentityPassword,
+    startIdentityPasswordReset,
+    verifyIdentityPasswordResetOtp,
+    completeIdentityPasswordReset,
+    findIdentityByTokenId,
+    verifyIdentity,
+} from '../../services/postgres/userIdentity.repository.js';
 
 // ============================================
 // USER REGISTRATION (with OTP verification)
@@ -15,6 +27,22 @@ export const register = async (req, res) => {
         // Validate input
         if (!email) {
             return res.status(400).json({ message: 'Email is required' });
+        }
+
+        if (postgresUserIdentityEnabled()) {
+            const otp = generateOTP();
+            const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+            const result = await registerIdentity({ email, firstname, lastname, phone, otp, otpExpires });
+            if (result.conflict) return res.status(400).json({ message: 'Email already registered' });
+            await sendMail({
+                to: email,
+                subject: 'Verify Your Email: ' + otp,
+                html: wrapLayout('Welcome to MelaChow', `<p class="p">Use the secure code below to verify your email address.</p><div style="font-size:40px;font-weight:900;letter-spacing:12px;text-align:center;margin:32px 0">${otp}</div><p class="p">This code expires in 10 minutes.</p>`, 'Join the Club')
+            });
+            return res.status(200).json({
+                message: 'Verification code sent to your email', email,
+                ...(process.env.NODE_ENV !== 'production' && !process.env.RESEND_API_KEY ? { devOtp: otp } : {})
+            });
         }
 
         // Check if user exists
@@ -71,7 +99,10 @@ export const register = async (req, res) => {
 
         res.status(200).json({
             message: 'Verification code sent to your email',
-            email
+            email,
+            ...(process.env.NODE_ENV !== 'production' && !process.env.RESEND_API_KEY
+                ? { devOtp: otp }
+                : {})
         });
 
     } catch (error) {
@@ -90,6 +121,14 @@ export const verifyRegistration = async (req, res) => {
 
         if (!email || !otp) {
             return res.status(400).json({ message: 'Email and OTP are required' });
+        }
+
+        if (postgresUserIdentityEnabled()) {
+            const result = await verifyIdentity({ email, otp });
+            if (result.error === 'not_found') return res.status(404).json({ message: 'User not found' });
+            if (result.error === 'invalid_otp') return res.status(400).json({ message: 'Invalid OTP' });
+            if (result.error === 'expired_otp') return res.status(400).json({ message: 'OTP expired. Please request a new one.' });
+            return res.status(200).json({ message: 'Account verified successfully. Please set your password.', email: result.user.email, requiresPassword: !result.user.password });
         }
 
         // Find user with OTP (need to explicitly select OTP fields)
@@ -143,6 +182,17 @@ export const setPassword = async (req, res) => {
             return res.status(400).json({ message: 'Password must be at least 8 characters' });
         }
 
+        if (postgresUserIdentityEnabled()) {
+            const result = await setIdentityPassword({ email, password });
+            if (result.error === 'not_found') return res.status(404).json({ message: 'Verified user not found' });
+            if (result.error === 'already_set') return res.status(400).json({ message: 'Password already set. Use login instead.' });
+            const tokenId = result.user.legacyMongoId || result.user.id;
+            const accessToken = generateAccessToken(tokenId, 'user');
+            const refreshToken = generateRefreshToken(tokenId, 'user');
+            sendAuthCookies(res, accessToken, refreshToken, 'user');
+            return res.status(200).json({ message: 'Password set successfully', user: publicUser(result.user), accessToken });
+        }
+
         const user = await User.findOne({ email, isVerified: true }).select('+password');
 
         if (!user) {
@@ -153,14 +203,15 @@ export const setPassword = async (req, res) => {
             return res.status(400).json({ message: 'Password already set. Use login instead.' });
         }
 
+        // Generate tokens before mutating the user. This prevents a missing or
+        // invalid JWT configuration from saving a password and then returning 500.
+        const accessToken = generateAccessToken(user._id, 'user');
+        const refreshToken = generateRefreshToken(user._id, 'user');
+
         // Set password (will be hashed by pre-save hook)
         user.password = password;
         user.lastLogin = Date.now();
         await user.save();
-
-        // Generate tokens
-        const accessToken = generateAccessToken(user._id, 'user');
-        const refreshToken = generateRefreshToken(user._id, 'user');
 
         // Set HttpOnly cookie
         sendAuthCookies(res, accessToken, refreshToken, 'user');
@@ -191,6 +242,20 @@ export const loginWithPassword = async (req, res) => {
 
         if (!email) {
             return res.status(400).json({ message: 'Email is required' });
+        }
+
+        if (postgresUserIdentityEnabled()) {
+            if (!password) return res.status(400).json({ message: 'Password is required' });
+            const result = await authenticateIdentity({ email, password });
+            if (result.error === 'verification_required') return res.status(403).json({ code: 'ACCOUNT_VERIFICATION_REQUIRED', message: 'Verify your email to continue.', requiresVerification: true, email });
+            if (result.error === 'inactive') return res.status(401).json({ message: 'Account has been deactivated. Please contact support.' });
+            if (result.error === 'locked') return res.status(423).json({ message: 'Account temporarily locked due to multiple failed login attempts.' });
+            if (result.error) return res.status(401).json({ message: result.attemptsLeft ? `Invalid email or password. ${result.attemptsLeft} attempts remaining.` : 'Invalid email or password' });
+            const tokenId = result.user.legacyMongoId || result.user.id;
+            const accessToken = generateAccessToken(tokenId, 'user');
+            const refreshToken = generateRefreshToken(tokenId, 'user');
+            sendAuthCookies(res, accessToken, refreshToken, 'user');
+            return res.status(200).json({ success: true, message: 'Login successful', user: publicUser(result.user), accessToken });
         }
 
         // Find user with password field (explicitly select it)
@@ -313,7 +378,10 @@ export const forgotPasswordNew = async (req, res) => {
             return res.status(400).json({ message: 'Email is required' });
         }
 
-        const user = await User.findOne({ email, isVerified: true }).select('+otp +otpExpires');
+        const otp = generateOTP();
+        const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+        const result = postgresUserIdentityEnabled() ? await startIdentityPasswordReset({ email, otp, otpExpires }) : null;
+        const user = postgresUserIdentityEnabled() ? result?.user : await User.findOne({ email, isVerified: true }).select('+otp +otpExpires');
 
         if (!user) {
             // Don't reveal if user exists (security)
@@ -323,12 +391,7 @@ export const forgotPasswordNew = async (req, res) => {
         }
 
         // Generate OTP
-        const otp = generateOTP();
-        const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
-
-        user.otp = otp;
-        user.otpExpires = otpExpires;
-        await user.save();
+        if (!postgresUserIdentityEnabled()) { user.otp = otp; user.otpExpires = otpExpires; await user.save(); }
 
         await sendMail({
             to: email,
@@ -373,6 +436,14 @@ export const verifyResetCode = async (req, res) => {
             return res.status(400).json({ message: 'Email and code are required' });
         }
 
+        if (postgresUserIdentityEnabled()) {
+            const resetToken = generateResetToken();
+            const result = await verifyIdentityPasswordResetOtp({ email, otp, resetToken, resetPasswordExpires: new Date(Date.now() + 30 * 60 * 1000) });
+            if (result.error === 'not_found') return res.status(404).json({ message: 'User not found' });
+            if (result.error === 'invalid_otp') return res.status(400).json({ message: 'Invalid reset code' });
+            if (result.error === 'expired_otp') return res.status(400).json({ message: 'Reset code expired' });
+            return res.status(200).json({ success: true, message: 'Reset code verified', resetToken });
+        }
         const user = await User.findOne({ email }).select('+otp +otpExpires +resetPasswordToken +resetPasswordExpires');
 
         if (!user) {
@@ -424,6 +495,14 @@ export const resetPasswordNew = async (req, res) => {
             return res.status(400).json({ message: 'Password must be at least 8 characters' });
         }
 
+        if (postgresUserIdentityEnabled()) {
+            const result = await completeIdentityPasswordReset({ email, resetToken, password: newPassword });
+            if (result.error) return res.status(400).json({ message: 'Invalid or expired reset token' });
+            const accessToken = generateAccessToken(result.user.id, 'user');
+            const refreshToken = generateRefreshToken(result.user.id, 'user');
+            sendAuthCookies(res, accessToken, refreshToken, 'user');
+            return res.status(200).json({ success: true, message: 'Password reset successful', user: publicUser(result.user), accessToken });
+        }
         const user = await User.findOne({
             email,
             resetPasswordToken: resetToken,
@@ -486,14 +565,16 @@ export const refreshToken = async (req, res) => {
         }
 
         // Get user
-        const user = await User.findById(decoded.id);
+        const user = postgresUserIdentityEnabled()
+            ? await findIdentityByTokenId(decoded.id)
+            : await User.findById(decoded.id);
 
         if (!user || !user.isActive) {
             return res.status(401).json({ message: 'User not found or inactive' });
         }
 
         // Generate new access token
-        const accessToken = generateAccessToken(user._id, user.role);
+        const accessToken = generateAccessToken(postgresUserIdentityEnabled() ? user.id : user._id, user.role);
         sendAuthCookies(res, accessToken, token, 'user');
 
         res.status(200).json({
@@ -506,4 +587,3 @@ export const refreshToken = async (req, res) => {
         res.status(401).json({ message: 'Token refresh failed', error: error.message });
     }
 };
-

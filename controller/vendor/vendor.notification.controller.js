@@ -1,5 +1,7 @@
 import VendorPushSubscription from '../../model/notification/vendorPushSubscription.model.js';
 import Notification from '../../model/notification/notification.model.js';
+import { usePostgresNotificationWrites } from '../../services/postgres/compat.js';
+import { notificationRepository } from '../../services/postgres/notification.repository.js';
 
 export const subscribeVendor = async (req, res) => {
     try {
@@ -9,6 +11,7 @@ export const subscribeVendor = async (req, res) => {
         if (!subscription || !subscription.endpoint || !subscription.keys) {
             return res.status(400).json({ message: 'Invalid subscription object' });
         }
+        if(usePostgresNotificationWrites()){await notificationRepository.saveSubscription('vendor',vendorId,subscription,deviceType,req.headers['user-agent']);return res.status(201).json({message:'Vendor subscribed successfully'});}
 
         await VendorPushSubscription.findOneAndUpdate(
             { 'subscription.endpoint': subscription.endpoint },
@@ -27,6 +30,7 @@ export const unsubscribeVendor = async (req, res) => {
     try {
         const { endpoint } = req.body;
         if (!endpoint) return res.status(400).json({ message: 'Endpoint is required' });
+        if(usePostgresNotificationWrites()){await notificationRepository.removeSubscription('vendor',req.vendor._id,endpoint);return res.json({success:true,message:'Vendor unsubscribed'});}
 
         await VendorPushSubscription.findOneAndDelete({
             vendorId: req.vendor._id,
@@ -43,6 +47,7 @@ export const getVendorNotifications = async (req, res) => {
     try {
         const { limit = 50, skip = 0, type, unread } = req.query;
         const vendorId = req.vendor._id;
+        if(usePostgresNotificationWrites()){const result=await notificationRepository.list('vendor',vendorId,{limit,skip,type:type==='system'?'system':type,unread});const unreadCount=await notificationRepository.unreadCount('vendor',vendorId);return res.json({success:true,...result,unreadCount,hasMore:result.total>Number(skip)+result.notifications.length});}
 
         // Build query
         let query = { restaurantId: vendorId };
@@ -91,6 +96,7 @@ export const getVendorNotifications = async (req, res) => {
 export const getVendorUnreadCount = async (req, res) => {
     try {
         const vendorId = req.vendor._id;
+        if(usePostgresNotificationWrites())return res.json({success:true,count:await notificationRepository.unreadCount('vendor',vendorId)});
         const count = await Notification.countDocuments({
             restaurantId: vendorId,
             read: false
@@ -108,6 +114,7 @@ export const getVendorUnreadCount = async (req, res) => {
 export const markVendorAsRead = async (req, res) => {
     try {
         const vendorId = req.vendor._id;
+        if(usePostgresNotificationWrites()){const notification=await notificationRepository.markRead('vendor',vendorId,req.params.id);if(!notification)return res.status(404).json({success:false,message:'Notification not found'});return res.json({success:true,notification});}
         const notification = await Notification.findOneAndUpdate(
             {
                 _id: req.params.id,
@@ -133,6 +140,7 @@ export const markVendorAsRead = async (req, res) => {
 export const markAllVendorAsRead = async (req, res) => {
     try {
         const vendorId = req.vendor._id;
+        if(usePostgresNotificationWrites()){const modifiedCount=await notificationRepository.markAllRead('vendor',vendorId);return res.json({success:true,message:'All vendor notifications marked as read',modifiedCount});}
         const result = await Notification.updateMany(
             { restaurantId: vendorId, read: false },
             { read: true }
@@ -154,6 +162,7 @@ export const markAllVendorAsRead = async (req, res) => {
 export const deleteVendorNotification = async (req, res) => {
     try {
         const vendorId = req.vendor._id;
+        if(usePostgresNotificationWrites()){const deletedCount=await notificationRepository.remove('vendor',vendorId,req.params.id);if(!deletedCount)return res.status(404).json({success:false,message:'Notification not found'});return res.json({success:true,message:'Notification deleted'});}
         const notification = await Notification.findOneAndDelete({
             _id: req.params.id,
             restaurantId: vendorId

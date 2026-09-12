@@ -11,6 +11,7 @@ import MenuItem from "../model/menu/MenuItem.js";
 import MenuItemPortion from "../model/menu/MenuItemPortion.js";
 import { MenuItemChoiceGroup, MenuItemChoiceOption } from "../model/menu/MenuItemChoice.js";
 import ComboItem from "../model/menu/ComboItem.js";
+import ChoiceGroupTemplate from "../model/menu/ChoiceGroupTemplate.js";
 
 const stats = {
   states: 0,
@@ -22,6 +23,7 @@ const stats = {
   portions: 0,
   choiceGroups: 0,
   choiceOptions: 0,
+  choiceGroupTemplates: 0,
   combos: 0,
   skipped: [],
 };
@@ -62,6 +64,7 @@ const parseArgs = () => {
   return {
     dryRun: args.has("--dry-run"),
     limit: Number(process.argv.find((arg) => arg.startsWith("--limit="))?.split("=")[1] || 0),
+    only: process.argv.find((arg) => arg.startsWith("--only="))?.split("=")[1] || null,
   };
 };
 
@@ -278,6 +281,8 @@ const vendorData = async (vendor) => {
     password: vendor.password || null,
     resetPasswordToken: vendor.resetPasswordToken || null,
     resetPasswordExpires: asDate(vendor.resetPasswordExpires),
+    passwordSetupToken: vendor.passwordSetupToken || null,
+    passwordSetupExpires: asDate(vendor.passwordSetupExpires),
     loginAttempts: vendor.loginAttempts || 0,
     lockUntil: asDate(vendor.lockUntil),
     lastLogin: asDate(vendor.lastLogin),
@@ -308,6 +313,8 @@ const vendorData = async (vendor) => {
     termsAcceptance: cleanJson(vendor.termsAcceptance, {}),
     suspended: vendor.suspended || false,
     active: vendor.active !== false,
+    isLive: vendor.isLive || false,
+    publishedAt: asDate(vendor.publishedAt),
     hasActiveDeliveryPromo: vendor.hasActiveDeliveryPromo || false,
     suspensionReason: vendor.suspensionReason || "",
     acceptsDelivery: vendor.acceptsDelivery !== false,
@@ -320,13 +327,14 @@ const vendorData = async (vendor) => {
     adminNotes: vendor.adminNotes || "",
     deliveryManagedBy: mapDeliveryManagedBy(vendor.deliveryManagedBy),
     platformDeliveryFeeOverride: vendor.platformDeliveryFeeOverride ?? null,
+    payoutFeeOverride: cleanJson(vendor.payoutFeeOverride, null),
     createdAt: asDate(vendor.createdAt),
     updatedAt: asDate(vendor.updatedAt),
   };
 };
 
 const importVendors = async (dryRun, limit) => {
-  const query = Vendor.find({}).select("+password +resetPasswordToken +resetPasswordExpires +otp +otpExpires +payoutDetails").lean();
+  const query = Vendor.find({}).select("+password +resetPasswordToken +resetPasswordExpires +passwordSetupToken +passwordSetupExpires +otp +otpExpires +payoutDetails").lean();
   if (limit) query.limit(limit);
   const vendors = await query;
 
@@ -438,6 +446,9 @@ const importPortions = async (dryRun) => {
       isDefault: portion.is_default || false,
       isAvailable: portion.is_available !== false,
       isInStock: portion.is_in_stock !== false,
+      trackStock: portion.track_stock === true,
+      stockQuantity: Number(portion.stock_quantity || 0),
+      lowStockThreshold: Number(portion.low_stock_threshold ?? 5),
       maxQuantity: portion.max_quantity ?? null,
       sortOrder: portion.sort_order || 0,
       createdAt: asDate(portion.createdAt),
@@ -467,6 +478,7 @@ const importChoiceGroups = async (dryRun) => {
     const data = {
       legacyMongoId: toLegacyId(group._id),
       menuItemId,
+      sourceTemplateId: toLegacyId(group.source_template_id),
       name: group.name,
       minSelections: group.min_selections || 0,
       maxSelections: group.max_selections ?? 1,
@@ -503,6 +515,10 @@ const importChoiceOptions = async (dryRun) => {
       imageUrl: option.image_url || null,
       priceModifier: option.price_modifier || 0,
       isAvailable: option.is_available !== false,
+      sourceTemplateOptionId: toLegacyId(option.source_template_option_id),
+      trackStock: option.track_stock === true,
+      stockQuantity: option.track_stock === true ? Math.max(0, Number(option.stock_quantity) || 0) : 0,
+      lowStockThreshold: Math.max(0, Number(option.low_stock_threshold) || 5),
       sortOrder: option.sort_order || 0,
       createdAt: asDate(option.createdAt),
       updatedAt: asDate(option.updatedAt),
@@ -515,6 +531,30 @@ const importChoiceOptions = async (dryRun) => {
         update: data,
       }), dryRun);
     stats.choiceOptions += 1;
+  }
+};
+
+const importChoiceGroupTemplates = async (dryRun) => {
+  const templates = await ChoiceGroupTemplate.find({}).lean();
+  for (const template of templates) {
+    const vendorId = await resolveVendorId(template.vendor_id);
+    if (!vendorId) { stats.skipped.push(`choiceGroupTemplate:${template._id}: missing vendor`); continue; }
+    const data = {
+      legacyMongoId: toLegacyId(template._id), vendorId, name: template.name,
+      isRequired: template.is_required === true, minSelections: template.min_selections || 0,
+      maxSelections: template.max_selections || 1, sortOrder: template.sort_order || 0,
+      isArchived: template.is_archived === true, createdAt: asDate(template.createdAt), updatedAt: asDate(template.updatedAt),
+    };
+    const saved = await write(`choiceGroupTemplate ${template._id}`, () => prisma.choiceGroupTemplate.upsert({ where: { legacyMongoId: data.legacyMongoId }, create: data, update: data }), dryRun);
+    if (!dryRun && saved) {
+      const sourceIds = (template.options || []).map((option) => toLegacyId(option._id)).filter(Boolean);
+      await prisma.choiceGroupTemplateOption.deleteMany({ where: { templateId: saved.id, ...(sourceIds.length ? { legacyMongoId: { notIn: sourceIds } } : {}) } });
+      for (const option of template.options || []) {
+        const optionData = { legacyMongoId: toLegacyId(option._id), templateId: saved.id, label: option.label, priceModifier: option.price_modifier || 0, imageUrl: option.image_url || null, isAvailable: option.is_available !== false, trackStock: option.track_stock === true, stockQuantity: option.track_stock === true ? Math.max(0, Number(option.stock_quantity) || 0) : 0, lowStockThreshold: Math.max(0, Number(option.low_stock_threshold) || 5), sortOrder: option.sort_order || 0 };
+        await prisma.choiceGroupTemplateOption.upsert({ where: { legacyMongoId: optionData.legacyMongoId }, create: optionData, update: optionData });
+      }
+    }
+    stats.choiceGroupTemplates += 1;
   }
 };
 
@@ -576,7 +616,7 @@ const importCombos = async (dryRun) => {
 };
 
 const importAll = async () => {
-  const { dryRun, limit } = parseArgs();
+  const { dryRun, limit, only } = parseArgs();
 
   if (!process.env.MONGO_URI) throw new Error("MONGO_URI is required");
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
@@ -584,6 +624,13 @@ const importAll = async () => {
   await mongoose.connect(process.env.MONGO_URI);
 
   try {
+    if (only === "categories") {
+      await importCategories(dryRun);
+      console.log(JSON.stringify({ dryRun, only, stats }, null, 2));
+      return;
+    }
+    if (only) throw new Error(`Unsupported --only target: ${only}`);
+
     await importStates(dryRun);
     await importCities(dryRun);
     await importCategories(dryRun);
@@ -591,6 +638,7 @@ const importAll = async () => {
     await importSections(dryRun);
     await importMenuItems(dryRun);
     await importPortions(dryRun);
+    await importChoiceGroupTemplates(dryRun);
     await importChoiceGroups(dryRun);
     await importChoiceOptions(dryRun);
     await importCombos(dryRun);

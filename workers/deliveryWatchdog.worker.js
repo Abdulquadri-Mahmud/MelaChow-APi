@@ -10,9 +10,24 @@ import OrderTermination from "../model/OrderTermination.js";
 import { offerOrderToAvailableRiders } from "../services/riderAssignment.service.js";
 import logger from "../config/logger.js";
 import { getPlatformConfig } from "../services/platformConfig.service.js";
+import { usePostgresRiderAssignmentWrites } from "../services/postgres/compat.js";
+import { riderSelfRepository } from "../services/postgres/riderSelf.repository.js";
+import { riderBroadcastRepository } from "../services/postgres/riderBroadcast.repository.js";
 
 new Worker("delivery-watchdog", async (job) => {
     const { orderId, vendorOrderId, riderId } = job.data;
+    if (usePostgresRiderAssignmentWrites()) {
+        const context = await riderBroadcastRepository.timeoutContext(vendorOrderId, orderId);
+        if (!context?.userOrder || ["delivered", "cancelled"].includes(context.userOrder.orderStatus)) return;
+        const result = await riderSelfRepository.terminateAssignment(context.userOrder.id, riderId, { reason: "system_timeout", changedBy: "system:watchdog" });
+        try {
+            const { sendNotification, sendRiderNotification } = await import("../services/notification.service.js");
+            await sendNotification(context.userOrder.userId, "rider_timeout_reassigning", { orderId: context.userOrder.orderCode, message: "We are finding you a new rider. Hang tight." }, "user");
+            await sendRiderNotification(riderId, result.orderId, "delivery_timed_out", { message: "Your delivery was timed out by the system." });
+        } catch (error) { logger.warn({ error: error.message }, "Watchdog PostgreSQL notification failed"); }
+        await offerOrderToAvailableRiders({ vendorOrderId: context.id, assignedBy: "system:watchdog" }).catch((error) => logger.error({ error: error.message }, "Watchdog PostgreSQL re-broadcast failed"));
+        return;
+    }
     logger.info({ orderId, riderId }, "⏰ Delivery watchdog fired");
 
     const vendorOrder = await VendorOrder.findById(vendorOrderId).populate("userOrderId");

@@ -63,6 +63,7 @@ import cron from "node-cron";
 import { reconcileStaleWithdrawals } from "./services/transferReconciliation.service.js";
 import { RIDER_SWEEP_CRON, VENDOR_SWEEP_CRON } from "./config/payouts.js";
 import { releaseExpiredOptionStockReservations, releaseExpiredPortionStockReservations } from "./services/optionStock.service.js";
+import { cancelStalePostgresOrders } from "./jobs/postgresOrderTimeout.job.js";
 
 // Environment loaded via ./config/env.js import above
 
@@ -97,6 +98,8 @@ const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:3001',
   'http://localhost:3002',
+  'http://localhost:3003',
+  'http://localhost:3004',
   'https://melachow-admin.vercel.app',
   'https://admin.melachow.com',
   'https://vendor.melachow.com',
@@ -113,7 +116,7 @@ const corsOptions = {
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
-      console.log('Ã¢Å¡Â Ã¯Â¸Â Blocked by CORS:', origin);
+      console.log('Blocked by CORS:', origin);
       callback(new Error('Not allowed by CORS'));
     }
   },
@@ -292,6 +295,10 @@ const walletLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   message: { success: false, message: 'Too many wallet requests, please slow down.' },
+  // The bank directory is read-only reference data needed to render onboarding.
+  // Account-resolution attempts remain limited, but they must not prevent the
+  // vendor from loading the bank selector and correcting their details.
+  skip: (req) => req.path === '/public/banks' || req.path.endsWith('/public/banks'),
 });
 
 const orderLimiter = rateLimit({
@@ -518,7 +525,7 @@ const startServer = async () => {
     try {
       await seedCategories();
     } catch (seedErr) {
-      logger.warn({ err: seedErr.message }, "Ã¢Å¡Â Ã¯Â¸Â Category seed skipped");
+      logger.warn({ err: seedErr.message }, "Category seed skipped");
     }
 
     // 2b. Connect Redis main client
@@ -526,10 +533,13 @@ const startServer = async () => {
     // redisClient (used for caching in notification.service and vendor.controller)
     // requires its own explicit connect call because lazyConnect: true is set
     try {
-      await redisClient.connect();
+      await Promise.race([
+        redisClient.connect(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error("Redis connection timed out")), 3000)),
+      ]);
       logger.info('Ã¢Å“â€¦ Redis main client connected and ready');
     } catch (redisErr) {
-      logger.warn({ err: redisErr.message }, 'Ã¢Å¡Â Ã¯Â¸Â Redis unavailable Ã¢â‚¬â€ caching disabled, falling back to MongoDB');
+      logger.warn({ err: redisErr.message }, 'Redis unavailable Ã¢â‚¬â€ caching disabled, falling back to MongoDB');
       // Non-fatal: platform continues without caching
     }
 
@@ -542,8 +552,8 @@ const startServer = async () => {
 
     // 4. Start listening
     server.listen(PORT, () => {
-      logger.info({ port: PORT, env: process.env.NODE_ENV || "development" }, 'Ã°Å¸Å¡â‚¬ Server running');
-      logger.info('Ã°Å¸â€Å’ Socket.IO ready for connections');
+      logger.info({ port: PORT, env: process.env.NODE_ENV || "development" }, 'Server running');
+      logger.info('Socket.IO ready for connections');
     });
     // Ã¢â€â‚¬Ã¢â€â‚¬ Scheduled Payouts: T+1 settlement timing Ã¢â‚¬â€ both sweeps run the next
     // morning at 7:30 AM WAT (06:30 UTC), after Paystack has settled the
@@ -551,7 +561,7 @@ const startServer = async () => {
     cron.schedule(
         RIDER_SWEEP_CRON,
         async () => {
-            console.log("Ã°Å¸â€¢Â¢ [CRON] Rider payout sweep triggered (06:30 UTC / 7:30 AM WAT)...");
+            console.log("[CRON] Rider payout sweep triggered (06:30 UTC / 7:30 AM WAT)...");
             await triggerScheduledPayouts("rider");
         },
         { scheduled: true }
@@ -560,13 +570,13 @@ const startServer = async () => {
     cron.schedule(
         VENDOR_SWEEP_CRON,
         async () => {
-            console.log("Ã°Å¸â€¢â€” [CRON] Vendor payout sweep triggered (06:30 UTC / 7:30 AM WAT)...");
+            console.log("[CRON] Vendor payout sweep triggered (06:30 UTC / 7:30 AM WAT)...");
             await triggerScheduledPayouts("vendor");
         },
         { scheduled: true }
     );
 
-    console.log(`Ã¢Å“â€¦ Scheduled payout crons registered (RIDER_SWEEP_CRON: ${RIDER_SWEEP_CRON}, VENDOR_SWEEP_CRON: ${VENDOR_SWEEP_CRON})`);
+    console.log(`Scheduled payout crons registered (RIDER_SWEEP_CRON: ${RIDER_SWEEP_CRON}, VENDOR_SWEEP_CRON: ${VENDOR_SWEEP_CRON})`);
 
     cron.schedule(
         "*/5 * * * *",
@@ -595,6 +605,23 @@ const startServer = async () => {
     );
 
     console.log("Rider assignment timeout sweep registered (every minute)");
+
+    cron.schedule(
+        "* * * * *",
+        async () => {
+            try {
+                await cancelStalePostgresOrders();
+            } catch (err) {
+                logger.error({ err: err.message }, "PostgreSQL order timeout sweep failed");
+            }
+        },
+        { timezone: "Africa/Lagos" }
+    );
+
+    cancelStalePostgresOrders().catch((err) =>
+      logger.error({ err: err.message }, "Initial PostgreSQL order timeout sweep failed")
+    );
+    console.log("PostgreSQL order timeout sweep registered (every minute)");
 
     cron.schedule(
         "*/5 * * * *",
@@ -631,21 +658,21 @@ const startServer = async () => {
     // 5. Graceful shutdown
     // Render sends SIGTERM before stopping the instance
     process.on("SIGTERM", () => {
-      logger.info("SIGTERM received Ã¢â‚¬â€ shutting down gracefully...");
+      logger.info("SIGTERM received, shutting down gracefully...");
       server.close(async () => {
         try {
           await redisClient.quit();
-          logger.info("Ã¢Å“â€¦ Redis main client disconnected");
+          logger.info("Redis main client disconnected");
         } catch (e) {
-          logger.warn({ err: e.message }, "Ã¢Å¡Â Ã¯Â¸Â Redis quit error");
+          logger.warn({ err: e.message }, "Redis quit error");
         }
-        logger.info("Ã¢Å“â€¦ Server closed");
+        logger.info("Server closed");
         process.exit(0);
       });
     });
 
     process.on("SIGINT", () => {
-      logger.info("SIGINT received Ã¢â‚¬â€ shutting down...");
+      logger.info("SIGINT received‚ shutting down...");
       server.close(async () => {
         try {
           await redisClient.quit();
@@ -655,7 +682,7 @@ const startServer = async () => {
     });
 
   } catch (error) {
-    logger.error({ err: error.message }, "Ã¢ÂÅ’ Failed to start server");
+    logger.error({ err: error.message }, "Failed to start server");
     process.exit(1);
   }
 };
@@ -663,6 +690,6 @@ const startServer = async () => {
 startServer();
 
 // # Required for production error tracking
-// # Get DSN from: https://sentry.io Ã¢â€ â€™ New Project Ã¢â€ â€™ Node.js
+// # Get DSN from: https://sentry.io New Project Node.js
 // SENTRY_DSN=your_dsn_here
 

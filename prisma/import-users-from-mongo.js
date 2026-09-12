@@ -1,6 +1,7 @@
 import "dotenv/config";
 import mongoose from "mongoose";
 import prisma from "../config/prisma.js";
+import { createMigrationControl } from "../services/postgres/migrationControl.js";
 
 import User from "../model/user.model.js";
 
@@ -22,6 +23,10 @@ const parseArgs = () => {
   return {
     dryRun: args.has("--dry-run"),
     limit: Number(process.argv.find((arg) => arg.startsWith("--limit="))?.split("=")[1] || 0),
+    batchSize: Math.max(1, Number(process.argv.find((arg) => arg.startsWith("--batch-size="))?.split("=")[1] || 250)),
+    restart: args.has("--restart"),
+    maxErrors: Math.max(1, Number(process.argv.find((arg) => arg.startsWith("--max-errors="))?.split("=")[1] || 100)),
+    id: process.argv.find((arg) => arg.startsWith("--id="))?.split("=")[1] || null,
   };
 };
 
@@ -79,26 +84,38 @@ const userData = (user) => ({
   updatedAt: asDate(user.updatedAt),
 });
 
-const importUsers = async (dryRun, limit) => {
-  const query = User.find({}).sort({ createdAt: 1 });
-  if (limit) query.limit(limit);
-  const users = await query.lean();
-
-  for (const user of users) {
+const importUser = async (user, dryRun) => {
     const data = userData(user);
+    const existingByLegacyId = dryRun
+      ? null
+      : await prisma.user.findUnique({ where: { legacyMongoId: data.legacyMongoId } });
+    const existingByEmail = dryRun || existingByLegacyId
+      ? null
+      : await prisma.user.findUnique({ where: { email: data.email } });
+
+    // A local test database may recreate an account with the same email but a
+    // different Mongo ObjectId than the production snapshot already in PG.
+    // Reconcile by email while preserving the snapshot's legacy Mongo ID.
+    const updateData = existingByEmail
+      ? { ...data, legacyMongoId: existingByEmail.legacyMongoId }
+      : { ...data };
+    // Mongoose hides password by default and some legacy accounts genuinely
+    // have no password. Never erase a usable PostgreSQL hash with null.
+    if (!data.password) delete updateData.password;
     const savedUser = await write(
       `user ${user._id}`,
       () =>
-        prisma.user.upsert({
-          where: { legacyMongoId: data.legacyMongoId },
-          create: data,
-          update: data,
-        }),
+        existingByLegacyId || existingByEmail
+          ? prisma.user.update({
+              where: { id: (existingByLegacyId || existingByEmail).id },
+              data: updateData,
+            })
+          : prisma.user.create({ data }),
       dryRun
     );
     stats.users += 1;
 
-    if (dryRun || !savedUser) continue;
+    if (dryRun || !savedUser) return;
 
     for (const address of user.addresses || []) {
       const legacyMongoId = toLegacyId(address._id);
@@ -142,20 +159,63 @@ const importUsers = async (dryRun, limit) => {
       );
       stats.addresses += 1;
     }
+};
+
+const importUsers = async ({ dryRun, limit, batchSize, restart, maxErrors, id }, control) => {
+  if (id) {
+    const user = await User.findById(id).select("+password").lean();
+    if (!user) throw new Error(`User ${id} not found`);
+    await importUser(user, dryRun);
+    await control.advance(id, 1, { targeted: true });
+    return;
+  }
+  const checkpoint = restart ? null : await control.checkpoint();
+  let lastId = checkpoint?.lastSourceId || null;
+  let remaining = limit || Number.POSITIVE_INFINITY;
+  let errors = 0;
+
+  while (remaining > 0) {
+    const size = Math.min(batchSize, remaining);
+    const filter = lastId ? { _id: { $gt: new mongoose.Types.ObjectId(lastId) } } : {};
+    const users = await User.find(filter).select("+password").sort({ _id: 1 }).limit(size).lean();
+    if (!users.length) break;
+
+    for (const user of users) {
+      const sourceId = toLegacyId(user._id);
+      try {
+        await importUser(user, dryRun);
+      } catch (error) {
+        errors += 1;
+        stats.skipped.push(`user:${sourceId}: ${error.message}`);
+        await control.reject(sourceId, error, { _id: sourceId, email: user.email || null });
+        if (errors >= maxErrors) throw new Error(`Stopped after ${errors} rejected users`);
+      }
+      lastId = sourceId;
+      remaining -= 1;
+      await control.advance(lastId, 1, { errors });
+      if (remaining <= 0) break;
+    }
   }
 };
 
 const importAll = async () => {
-  const { dryRun, limit } = parseArgs();
+  const options = parseArgs();
+  const { dryRun } = options;
 
   if (!process.env.MONGO_URI) throw new Error("MONGO_URI is required");
   if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
 
   await mongoose.connect(process.env.MONGO_URI);
+  const control = createMigrationControl({ prisma, jobName: "users-backfill-v2", sourceName: "users", dryRun });
 
   try {
-    await importUsers(dryRun, limit);
-    console.log(JSON.stringify({ dryRun, stats }, null, 2));
+    await control.start({ batchSize: options.batchSize, limit: options.limit || null, restart: options.restart });
+    await importUsers(options, control);
+    const run = await control.finish("completed", { stats });
+    console.log(JSON.stringify({ dryRun, run, stats }, null, 2));
+  } catch (error) {
+    await control.finish("failed", { error: error.message, stats });
+    throw error;
   } finally {
     await mongoose.disconnect();
     await prisma.$disconnect();

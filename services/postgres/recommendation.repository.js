@@ -1,4 +1,5 @@
 import prisma from "../../config/prisma.js";
+import { getGlobalDeliveryConfig } from "../deliveryPricing.service.js";
 
 const legacyId = (record) => record?.legacyMongoId || record?.id || null;
 
@@ -84,13 +85,15 @@ const baseComboWhere = (vendorIds = []) => ({
   ...(vendorIds.length > 0 ? { vendorId: { in: vendorIds } } : {}),
 });
 
-const resolveDeliveryFee = (vendor) => {
+const resolveDeliveryFee = (vendor, config) => {
   if (!vendor) return 0;
-  if (vendor.platformDeliveryFeeOverride > 0) return vendor.platformDeliveryFeeOverride;
-  return vendor.city?.platformDeliveryFee || 0;
+  const feeKobo = vendor.deliveryManagedBy === "vendor"
+    ? Number(vendor.flatRateDeliveryFee || 0)
+    : Number(vendor.platformDeliveryFeeOverride ?? Number(config?.fallbackFlatFeeNaira ?? 400) * 100);
+  return feeKobo / 100;
 };
 
-const recommendationItemShape = (item) => {
+const recommendationItemShape = (item, deliveryConfig) => {
   const isCombo = item.item_type === "combo";
   const vendor = item.vendor || {};
   const cheapest = item.portions?.[0];
@@ -106,7 +109,7 @@ const recommendationItemShape = (item) => {
     tags: item.tags || [],
     rating: item.rating || 0,
     ratingCount: item.ratingCount || 0,
-    deliveryFee: resolveDeliveryFee(vendor),
+    deliveryFee: resolveDeliveryFee(vendor, deliveryConfig),
     restaurant: {
       _id: legacyId(vendor),
       storeName: vendor.storeName,
@@ -171,7 +174,7 @@ const findLocationVendorIds = async ({ city, state }) => {
   return vendors.map((vendor) => vendor.id);
 };
 
-const listTaggedRecommendations = async ({ tags, vendorIds, sortField, limit }) => {
+const listTaggedRecommendations = async ({ tags, vendorIds, sortField, limit, deliveryConfig }) => {
   const [menuItems, combos] = await Promise.all([
     prisma.menuItem.findMany({
       where: baseMenuWhere(vendorIds),
@@ -191,10 +194,10 @@ const listTaggedRecommendations = async ({ tags, vendorIds, sortField, limit }) 
   ]
     .sort((left, right) => (right[sortField] || 0) - (left[sortField] || 0))
     .slice(0, limit)
-    .map(recommendationItemShape);
+    .map((item) => recommendationItemShape(item, deliveryConfig));
 };
 
-const listUnderratedRecommendations = async ({ vendorIds }) => {
+const listUnderratedRecommendations = async ({ vendorIds, deliveryConfig }) => {
   const [menuItems, combos] = await Promise.all([
     prisma.menuItem.findMany({
       where: {
@@ -221,10 +224,10 @@ const listUnderratedRecommendations = async ({ vendorIds }) => {
   return [...menuItems, ...combos.map((combo) => ({ ...combo, item_type: "combo" }))]
     .sort((left, right) => (right.rating || 0) - (left.rating || 0))
     .slice(0, 6)
-    .map(recommendationItemShape);
+    .map((item) => recommendationItemShape(item, deliveryConfig));
 };
 
-const listTrendingNearby = async ({ city }) => {
+const listTrendingNearby = async ({ city, deliveryConfig }) => {
   if (!city?.trim()) return [];
 
   const twoDaysAgo = new Date();
@@ -280,10 +283,10 @@ const listTrendingNearby = async ({ city }) => {
 
   return items
     .sort((left, right) => (orderMap[left.id] ?? 99) - (orderMap[right.id] ?? 99))
-    .map(recommendationItemShape);
+    .map((item) => recommendationItemShape(item, deliveryConfig));
 };
 
-const listBudgetFriendly = async ({ vendorIds }) => {
+const listBudgetFriendly = async ({ vendorIds, deliveryConfig }) => {
   const [menuItems, combos] = await Promise.all([
     prisma.menuItem.findMany({
       where: {
@@ -314,13 +317,14 @@ const listBudgetFriendly = async ({ vendorIds }) => {
   ]
     .sort((left, right) => left.finalPrice - right.finalPrice)
     .slice(0, 8)
-    .map(recommendationItemShape);
+    .map((item) => recommendationItemShape(item, deliveryConfig));
 };
 
 export const recommendationRepository = {
   async getRecommendations({ city, state, weather } = {}) {
     const timeContext = getTimeOfDayContext();
     const vendorIds = await findLocationVendorIds({ city, state });
+    const deliveryConfig = await getGlobalDeliveryConfig();
 
     if (vendorIds.length === 0 && (city || state)) {
       return {
@@ -342,13 +346,13 @@ export const recommendationRepository = {
 
     const weatherTags = getWeatherTags(weather);
     const [timeOfDay, underrated, weatherBased, trendingNearby, budgetFriendly] = await Promise.all([
-      listTaggedRecommendations({ tags: timeContext.tags, vendorIds, sortField: "ratingCount", limit: 6 }),
-      listUnderratedRecommendations({ vendorIds }),
+      listTaggedRecommendations({ tags: timeContext.tags, vendorIds, sortField: "ratingCount", limit: 6, deliveryConfig }),
+      listUnderratedRecommendations({ vendorIds, deliveryConfig }),
       weatherTags.length
-        ? listTaggedRecommendations({ tags: weatherTags, vendorIds, sortField: "ratingCount", limit: 6 })
+        ? listTaggedRecommendations({ tags: weatherTags, vendorIds, sortField: "ratingCount", limit: 6, deliveryConfig })
         : Promise.resolve([]),
-      listTrendingNearby({ city }),
-      listBudgetFriendly({ vendorIds }),
+      listTrendingNearby({ city, deliveryConfig }),
+      listBudgetFriendly({ vendorIds, deliveryConfig }),
     ]);
 
     return {

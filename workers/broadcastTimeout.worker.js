@@ -6,10 +6,27 @@ import Order from "../model/order/Order.js";
 import OrderBroadcastQueue from "../model/OrderBroadcastQueue.js";
 import { offerOrderToAvailableRiders } from "../services/riderAssignment.service.js";
 import logger from "../config/logger.js";
+import { usePostgresRiderAssignmentWrites } from "../services/postgres/compat.js";
+import { riderBroadcastRepository } from "../services/postgres/riderBroadcast.repository.js";
 
 export const broadcastTimeoutWorker = new Worker("broadcast-timeout", async (job) => {
     const { vendorOrderId, orderId } = job.data;
     const attempt = job.attemptsMade + 1;
+    if (usePostgresRiderAssignmentWrites()) {
+        const context = await riderBroadcastRepository.timeoutContext(vendorOrderId, orderId);
+        if (!context?.userOrder || context.riderId || ["cancelled", "delivered"].includes(context.userOrder.orderStatus)) return;
+        logger.warn({ vendorOrderId, orderId, attempt }, "PostgreSQL broadcast timeout - attempting re-broadcast");
+        await offerOrderToAvailableRiders({ vendorOrderId: context.id, assignedBy: `system:timeout_attempt_${attempt}` });
+        if (attempt === 2) {
+            const { sendNotification } = await import("../services/notification.service.js");
+            await sendNotification(context.restaurantId, "order_rider_delay", { orderId: context.userOrder.orderCode, message: "We are still finding a rider for this order." }, "vendor").catch(() => {});
+        }
+        if (attempt === 3) {
+            const { sendNotification } = await import("../services/notification.service.js");
+            await sendNotification(context.userOrder.userId, "order_rider_delay_customer", { orderId: context.userOrder.orderCode, message: "We are working on assigning a rider. Thank you for your patience." }, "user").catch(() => {});
+        }
+        return;
+    }
 
     const vendorOrder = await VendorOrder.findById(vendorOrderId);
     if (!vendorOrder || vendorOrder.riderId) return; // already assigned

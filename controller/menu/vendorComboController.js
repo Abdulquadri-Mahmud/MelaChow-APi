@@ -1,7 +1,8 @@
 import mongoose from "mongoose";
 import ComboItem from "../../model/menu/ComboItem.js";
 import ChoiceGroupTemplate from "../../model/menu/ChoiceGroupTemplate.js";
-import { usePostgresMenuReads } from "../../services/postgres/compat.js";
+import { usePostgresMenuReads, usePostgresMenuWrites } from "../../services/postgres/compat.js";
+import { menuMutationRepository } from "../../services/postgres/menuMutation.repository.js";
 
 const getPostgresMenuRepository = async () => {
     const { menuCatalogRepository } = await import("../../services/postgres/menuCatalog.repository.js");
@@ -65,6 +66,12 @@ export const createComboItem = async (req, res) => {
         } = req.body;
 
         const vendor_id = req.vendor._id;
+
+        if (usePostgresMenuWrites()) {
+            const comboItem = await menuMutationRepository.createCombo(vendor_id, req.body);
+            if (!comboItem) return res.status(400).json({ success: false, message: "Vendor or platform category not found" });
+            return res.status(201).json({ success: true, comboItem });
+        }
 
         // Validation: Required fields
         if (!name || name.trim() === "") {
@@ -310,6 +317,12 @@ export const updateComboItem = async (req, res) => {
         const { comboId } = req.params;
         const updateData = { ...req.body };
 
+        if (usePostgresMenuWrites()) {
+            const combo = await menuMutationRepository.updateCombo(req.vendor._id, comboId, req.body);
+            if (!combo) return res.status(404).json({ success: false, message: "Combo item not found or does not belong to vendor" });
+            return res.status(200).json({ success: true, combo });
+        }
+
         // Convert price_naira to kobo if provided
         if (updateData.price_naira !== undefined) {
             updateData.price = updateData.price_naira * 100;
@@ -401,6 +414,12 @@ export const toggleComboAvailability = async (req, res) => {
             return res.status(400).json({ success: false, message: "is_available field is required" });
         }
 
+        if (usePostgresMenuWrites()) {
+            const combo = await menuMutationRepository.updateCombo(req.vendor._id, comboId, { is_available });
+            if (!combo) return res.status(404).json({ success: false, message: "Combo item not found or does not belong to vendor" });
+            return res.status(200).json({ success: true, combo });
+        }
+
         const combo = await ComboItem.findOneAndUpdate(
             { _id: new mongoose.Types.ObjectId(comboId), vendor_id: req.vendor._id },
             { is_available },
@@ -444,6 +463,12 @@ export const archiveComboItem = async (req, res) => {
 
         if (is_archived === undefined) {
              return res.status(400).json({ success: false, message: "is_archived field is required" });
+        }
+
+        if (usePostgresMenuWrites()) {
+            const combo = await menuMutationRepository.updateCombo(req.vendor._id, comboId, { is_archived, is_available: !is_archived });
+            if (!combo) return res.status(404).json({ success: false, message: "Combo item not found or does not belong to vendor" });
+            return res.status(200).json({ success: true, message: is_archived ? "Combo item archived successfully" : "Combo item restored successfully", combo });
         }
 
         const combo = await ComboItem.findOneAndUpdate(
