@@ -27,6 +27,9 @@ const activityLogSchema = new mongoose.Schema(
                 "CREATE_LOCATION",
                 "DELETE_ADMIN",
                 "UPDATE_VENDOR_HOURS",
+                "UPDATE_PENDING_VENDOR",
+                "UPDATE_VENDOR_PAYOUT_DETAILS",
+                "SEND_VENDOR_ONBOARDING_REMINDER",
             ],
         },
         targetType: {
