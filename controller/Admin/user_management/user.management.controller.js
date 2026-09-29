@@ -3,6 +3,8 @@ import { sendUserReactivationEmail } from "../../../config/Admin/user_mailer/sen
 import { sendUserSuspensionEmail } from "../../../config/Admin/user_mailer/sendUser.suspension.email.js";
 import User from "../../../model/user.model.js";
 import ActivityLog from "../../../model/ActivityLog.js";
+import { usePostgresAdminWrites } from "../../../services/postgres/compat.js";
+import { adminMutationRepository } from "../../../services/postgres/adminMutation.repository.js";
 import Order from "../../../model/order/Order.js";
 
 const escapeRegex = (value = "") => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -109,6 +111,7 @@ export const getUserDetails = async (req, res) => {
 export const suspendUser = async (req, res) => {
   try {
     const { userId, reason } = req.query;
+    if(usePostgresAdminWrites()){const result=await adminMutationRepository.mutateUser({userToken:userId,adminToken:req.admin._id,action:"suspend",reason});if(result.error)return res.status(result.error==="not_found"?404:400).json({success:false,message:result.error==="already_suspended"?"User already suspended":"User not found"});await sendUserSuspensionEmail(result.user,reason);return res.status(200).json({success:true,message:result.message,user:result.user});}
     const user = await User.findById(userId);
 
     if (!user)
@@ -155,6 +158,7 @@ export const suspendUser = async (req, res) => {
 export const banUser = async (req, res) => {
   try {
     const { userId, reason } = req.query;
+    if(usePostgresAdminWrites()){const result=await adminMutationRepository.mutateUser({userToken:userId,adminToken:req.admin._id,action:"ban",reason});if(result.error)return res.status(result.error==="not_found"?404:400).json({success:false,message:result.error==="already_banned"?"User already banned":"User not found"});await sendUserBanEmail(result.user,reason);return res.status(200).json({success:true,message:result.message,user:result.user});}
     const user = await User.findById(userId);
 
     if (!user)
@@ -201,6 +205,7 @@ export const banUser = async (req, res) => {
 export const reactivateUser = async (req, res) => {
   try {
     const { userId } = req.query;
+    if(usePostgresAdminWrites()){const result=await adminMutationRepository.mutateUser({userToken:userId,adminToken:req.admin._id,action:"reactivate"});if(result.error)return res.status(result.error==="not_found"?404:400).json({success:false,message:result.error==="already_active"?"User is already active":"User not found"});await sendUserReactivationEmail(result.user);return res.status(200).json({success:true,message:result.message,user:result.user});}
     const user = await User.findById(userId);
 
     if (!user)

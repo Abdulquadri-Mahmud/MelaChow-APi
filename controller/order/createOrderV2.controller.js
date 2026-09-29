@@ -2215,19 +2215,6 @@ export const createOrderController = async (req, res) => {
         const userId = req.userId; // From auth middleware
 
         if (usePostgresOrderWrites()) {
-            if (useWallet) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Postgres wallet order creation is blocked until wallet debit writes are migrated.",
-                });
-            }
-            if (discountCode) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Postgres discount order creation is blocked until discount usage writes are migrated.",
-                });
-            }
-
             const result = await postgresOrderCreationRepository.createPendingOrder({
                 userId,
                 items,
@@ -2235,7 +2222,17 @@ export const createOrderController = async (req, res) => {
                 deliveryAddress,
                 phone,
                 idempotencyKey: idempotencyKey || null,
+                discountCode: discountCode || null,
+                promoIdentity: buildPromoIdentity({ deviceId: deviceId || req.headers["x-melachow-device-id"], phone: req.user?.phone }),
+                rawIp: clientIp,
             });
+
+            if (useWallet) {
+                reference = `WALLET_${result.order.orderId}`;
+                await postgresPaymentRepository.initializeOrderPaymentReference({ orderId: result.order.id, reference, cartSnapshot: { items, vendorDeliveryFees, deliveryAddress, phone, discountCode, useWallet: true, idempotencyKey, deviceId: deviceId || req.headers["x-melachow-device-id"] || null } });
+                const fulfilled = await postgresPaymentRepository.fulfillPaidOrder(reference, { walletPayment: true });
+                return res.status(result.idempotent ? 200 : 201).json({ success: true, message: "Order created and paid successfully from wallet.", reference, order: fulfilled.order, payment: { provider: "wallet", status: "paid" } });
+            }
 
             if (!usePostgresPaymentWrites()) {
                 return res.status(result.idempotent ? 200 : 201).json({

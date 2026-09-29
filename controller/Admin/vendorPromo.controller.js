@@ -2,6 +2,8 @@ import mongoose from "mongoose";
 import VendorDeliveryPromo from "../../model/promo/VendorDeliveryPromo.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 import logger from "../../config/logger.js";
+import { usePostgresPromoWrites } from "../../services/postgres/compat.js";
+import { promoRepository } from "../../services/postgres/promo.repository.js";
 
 const parseAdminLocalDate = (value) => {
   if (!value) return null;
@@ -19,6 +21,7 @@ const parseAdminLocalDate = (value) => {
  */
 export const listVendorDeliveryPromos = async (req, res) => {
   try {
+    if (usePostgresPromoWrites()) return res.json({ success: true, promos: await promoRepository.listVendor() });
     const promos = await VendorDeliveryPromo.find()
       .sort({ createdAt: -1 })
       .populate("vendorId", "storeName logo")
@@ -41,6 +44,19 @@ export const listVendorDeliveryPromos = async (req, res) => {
  * at a time. If one already exists and is active, reject the request.
  */
 export const createVendorDeliveryPromo = async (req, res) => {
+  if (usePostgresPromoWrites()) {
+    try {
+      const { vendorId, startsAt, endsAt, maxOrders, adminNote } = req.body;
+      if (!vendorId || !startsAt || !endsAt) return res.status(400).json({ success: false, message: "vendorId, startsAt, and endsAt are required" });
+      const parsedStartsAt = parseAdminLocalDate(startsAt), parsedEndsAt = parseAdminLocalDate(endsAt);
+      if (!parsedStartsAt || !parsedEndsAt || Number.isNaN(parsedStartsAt.getTime()) || Number.isNaN(parsedEndsAt.getTime())) return res.status(400).json({ success: false, message: "startsAt and endsAt must be valid dates" });
+      if (parsedEndsAt <= parsedStartsAt) return res.status(400).json({ success: false, message: "endsAt must be after startsAt" });
+      const result = await promoRepository.createVendor({ vendorId, startsAt: parsedStartsAt, endsAt: parsedEndsAt, maxOrders, adminNote });
+      if (result.error === "vendor_not_found") return res.status(404).json({ success: false, message: "Vendor not found" });
+      if (result.error === "active_exists") return res.status(409).json({ success: false, message: "This vendor already has an active delivery promo. Deactivate it before creating a new one." });
+      return res.status(201).json({ success: true, message: "Vendor delivery promo created and activated", promo: result.promo });
+    } catch (err) { return res.status(500).json({ success: false, message: err.message }); }
+  }
   const session = await mongoose.startSession();
   session.startTransaction();
 
@@ -144,6 +160,13 @@ export const createVendorDeliveryPromo = async (req, res) => {
  * Also clears the denormalized flag on the vendor.
  */
 export const deactivateVendorDeliveryPromo = async (req, res) => {
+  if (usePostgresPromoWrites()) {
+    try {
+      const promo = await promoRepository.deactivateVendor(req.params.promoId);
+      if (!promo) return res.status(404).json({ success: false, message: "Promo not found" });
+      return res.json({ success: true, message: "Promo deactivated", promo });
+    } catch (err) { return res.status(500).json({ success: false, message: err.message }); }
+  }
   const session = await mongoose.startSession();
   session.startTransaction();
 
@@ -203,6 +226,11 @@ export const deactivateVendorDeliveryPromo = async (req, res) => {
  */
 export const getVendorDeliveryPromo = async (req, res) => {
   try {
+    if (usePostgresPromoWrites()) {
+      const promo = await promoRepository.getVendorPromo(req.params.promoId);
+      if (!promo) return res.status(404).json({ success: false, message: "Promo not found" });
+      return res.json({ success: true, promo });
+    }
     const promo = await VendorDeliveryPromo.findById(req.params.promoId)
       .populate("vendorId", "storeName logo address")
       .lean();
@@ -235,6 +263,10 @@ export const getVendorDeliveryPromo = async (req, res) => {
 export const getVendorOwnPromoStatus = async (req, res) => {
   try {
     const vendorId = req.vendor._id;
+    if (usePostgresPromoWrites()) {
+      const promo = await promoRepository.getVendorActive(vendorId);
+      return res.json({ success: true, hasPromo: !!promo, promo });
+    }
 
     const promo = await VendorDeliveryPromo.findOne({
       vendorId,

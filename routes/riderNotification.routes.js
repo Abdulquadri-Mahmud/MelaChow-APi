@@ -6,7 +6,8 @@ import {
     markRiderNotificationAsRead,
     clearAllRiderNotifications,
     getVapidPublicKey,
-    subscribeRider
+    subscribeRider,
+    unsubscribeRider
 } from '../controller/notification/riderNotification.controller.js';
 import { requireRiderAuth } from '../middleware/riderAuth.middleware.js';
 
@@ -15,7 +16,7 @@ const router = express.Router();
 // Push subscription routes must be registered before /:id.
 router.get('/vapid-public-key', requireRiderAuth, getVapidPublicKey);
 router.post('/subscribe', requireRiderAuth, subscribeRider);
-router.post('/unsubscribe', requireRiderAuth, (req, res) => res.json({ success: true })); // Simple stub
+router.post('/unsubscribe', requireRiderAuth, unsubscribeRider);
 
 // Clear all
 router.delete('/clear-all', requireRiderAuth, clearAllRiderNotifications);

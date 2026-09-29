@@ -1,8 +1,9 @@
 import prisma from "../../config/prisma.js";
 
-const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const legacyId = (record) => record?.legacyMongoId || record?.id || null;
+const naira = (kobo) => Number(kobo || 0) / 100;
 
 const resolveId = async (model, id) => {
   if (!id) return null;
@@ -27,10 +28,10 @@ const resolveOwnerId = async (ownerModel, id) => {
 const transactionShape = (transaction) => ({
   _id: legacyId(transaction),
   type: transaction.type,
-  amount: transaction.amount,
+  amount: naira(transaction.amount),
   transactionType: transaction.transactionType,
   description: transaction.description,
-  reportingAmount: transaction.reportingAmount,
+  reportingAmount: transaction.reportingAmount == null ? null : naira(transaction.reportingAmount),
   orderId: transaction.order?.legacyMongoId || transaction.metadata?.legacyOrderId || transaction.orderId,
   date: transaction.date,
 });
@@ -39,9 +40,9 @@ const walletShape = (wallet) => ({
   _id: legacyId(wallet),
   ownerId: wallet.owner?.legacyMongoId || wallet.ownerId,
   ownerModel: wallet.ownerModel,
-  balance: wallet.balance,
-  totalEarned: wallet.totalEarned,
-  totalWithdrawn: wallet.totalWithdrawn,
+  balance: naira(wallet.balance),
+  totalEarned: naira(wallet.totalEarned),
+  totalWithdrawn: naira(wallet.totalWithdrawn),
   transactions: (wallet.transactions || []).map(transactionShape),
   createdAt: wallet.createdAt,
   updatedAt: wallet.updatedAt,
@@ -77,9 +78,9 @@ const withdrawalShape = (withdrawal) => ({
   vendorId: withdrawal.vendor?.legacyMongoId || withdrawal.vendorId,
   riderId: withdrawal.rider?.legacyMongoId || withdrawal.riderId,
   walletId: withdrawal.wallet?.legacyMongoId || withdrawal.walletId,
-  requestedAmount: withdrawal.requestedAmount,
-  transferFee: withdrawal.transferFee,
-  netAmount: withdrawal.netAmount,
+  requestedAmount: naira(withdrawal.requestedAmount),
+  transferFee: naira(withdrawal.transferFee),
+  netAmount: naira(withdrawal.netAmount),
   status: withdrawal.status,
   paystackReference: withdrawal.paystackReference,
   paystackTransferCode: withdrawal.paystackTransferCode,
@@ -149,7 +150,7 @@ export const walletRepository = {
       success: true,
       data: {
         ...(wallet ? walletShape(wallet) : { ownerId: vendorId, ownerModel: "Vendor", balance: 0, transactions: [] }),
-        pendingBalance: aggregate._sum.escrowAmount || 0,
+        pendingBalance: naira(aggregate._sum.escrowAmount),
       },
     };
   },

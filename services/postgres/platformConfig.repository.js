@@ -1,9 +1,13 @@
 import prisma from "../../config/prisma.js";
 
 const defaultPlatformConfig = {
+  riderPayoutType: "flat",
+  riderPayoutValue: 600,
   riderFixedPayout: 600,
+  riderMinPayoutBalance: 500,
   riderAssignmentMode: "manual",
   riderTerminationPenaltyHours: 24,
+  riderPayoutHour: 10,
   commissionEnabled: false,
   commissionRate: 0,
   serviceFeeEnabled: false,
@@ -15,10 +19,14 @@ const defaultPlatformConfig = {
 
 const legacyId = (record) => record?.legacyMongoId || record?.id || null;
 
-const configValue = (config) => ({
-  ...defaultPlatformConfig,
-  ...(config?.value && typeof config.value === "object" && !Array.isArray(config.value) ? config.value : {}),
-});
+const configValue = (config) => {
+  const stored = config?.value && typeof config.value === "object" && !Array.isArray(config.value) ? config.value : {};
+  return {
+    ...defaultPlatformConfig,
+    ...stored,
+    riderPayoutValue: stored.riderPayoutValue ?? stored.riderFixedPayout ?? defaultPlatformConfig.riderPayoutValue,
+  };
+};
 
 const adminShape = (config) => {
   if (!config) {
@@ -76,6 +84,16 @@ const getSingleton = () =>
   });
 
 export const platformConfigRepository = {
+  async getRuntimeConfig() {
+    return configValue(await getSingleton());
+  },
+  async updateAdminConfig(adminToken, changes) {
+    const existing = await getSingleton();
+    const admin = adminToken ? await prisma.admin.findFirst({ where: { OR: [{ id: /^[0-9a-f-]{36}$/i.test(String(adminToken)) ? String(adminToken) : undefined }, { legacyMongoId: String(adminToken) }] }, select: { id: true } }) : null;
+    const value = { ...configValue(existing), ...changes };
+    const config = await prisma.platformConfig.upsert({ where: { type: "singleton" }, create: { type: "singleton", value, lastUpdatedBy: admin?.id || null }, update: { value, lastUpdatedBy: admin?.id || null }, include: { lastUpdatedByAdmin: { select: { id: true, legacyMongoId: true, email: true, name: true } } } });
+    return { success: true, message: "Platform configuration updated. Changes take effect on the next order.", data: adminShape(config) };
+  },
   async getAdminConfig() {
     const config = await getSingleton();
     return {

@@ -1,4 +1,5 @@
 import prisma from "../../config/prisma.js";
+import { DEFAULT_DISTANCE_DELIVERY_CONFIG, getGlobalDeliveryConfig } from "../deliveryPricing.service.js";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -90,6 +91,7 @@ const choiceOptionShape = (option) => ({
 const choiceGroupShape = (group) => ({
   _id: legacyId(group),
   menu_item_id: group.menuItem?.legacyMongoId || group.menuItemId,
+  source_template_id: group.sourceTemplateId,
   name: group.name,
   min_selections: group.minSelections,
   max_selections: group.maxSelections,
@@ -248,7 +250,12 @@ const marketplaceItemShape = (item) => ({
     : item.vendorId,
   portions: (item.portions || []).map((portion) => {
     const { price_naira, ...shaped } = portionShape(portion);
-    return shaped;
+    return {
+      ...shaped,
+      track_stock: portion.trackStock,
+      stock_quantity: portion.trackStock ? portion.stockQuantity : null,
+      low_stock_threshold: portion.lowStockThreshold,
+    };
   }),
 });
 
@@ -302,8 +309,7 @@ const vendorMenuListItemShape = (item) => {
 const vendorStorefrontShape = (vendor) => {
   if (!vendor) return null;
 
-  const cityDeliveryFee = vendor.city?.platformDeliveryFee || 0;
-  const deliveryFeeKobo = vendor.platformDeliveryFeeOverride ?? cityDeliveryFee;
+  const deliveryFeeKobo = vendor.resolvedDeliveryFeeKobo ?? vendor.platformDeliveryFeeOverride ?? DEFAULT_DISTANCE_DELIVERY_CONFIG.fallbackFlatFeeNaira * 100;
 
   return {
     _id: legacyId(vendor),
@@ -324,6 +330,15 @@ const vendorStorefrontShape = (vendor) => {
     hasActiveDeliveryPromo: vendor.hasActiveDeliveryPromo || false,
     activeDeliveryPromo: null,
   };
+};
+
+const applyGlobalDeliveryFallback = (vendor, config) => {
+  if (!vendor) return vendor;
+  const fallbackKobo = Number(config?.fallbackFlatFeeNaira ?? DEFAULT_DISTANCE_DELIVERY_CONFIG.fallbackFlatFeeNaira) * 100;
+  vendor.resolvedDeliveryFeeKobo = vendor.deliveryManagedBy === "vendor"
+    ? Number(vendor.flatRateDeliveryFee || 0)
+    : Number(vendor.platformDeliveryFeeOverride ?? fallbackKobo);
+  return vendor;
 };
 
 const itemInclude = ({ vendorView = false } = {}) => ({
@@ -366,7 +381,7 @@ const itemInclude = ({ vendorView = false } = {}) => ({
     orderBy: { sortOrder: "asc" },
     include: {
       options: {
-        where: vendorView ? {} : { isAvailable: true },
+        where: { isAvailable: true },
         orderBy: { sortOrder: "asc" },
       },
     },
@@ -411,12 +426,12 @@ export const menuCatalogRepository = {
       },
       include: {
         city: {
-          select: {
-            platformDeliveryFee: true,
-          },
+          include: { state: { select: { name: true, isActive: true } } },
         },
       },
     });
+
+    applyGlobalDeliveryFallback(vendor, await getGlobalDeliveryConfig());
 
     return vendorStorefrontShape(vendor);
   },
@@ -564,6 +579,8 @@ export const menuCatalogRepository = {
       include: itemInclude(),
     });
 
+    const deliveryConfig = await getGlobalDeliveryConfig();
+    items.forEach((item) => applyGlobalDeliveryFallback(item.vendor, deliveryConfig));
     return items.map(fullMenuItemShape);
   },
 
@@ -581,6 +598,8 @@ export const menuCatalogRepository = {
       include: comboInclude,
     });
 
+    const deliveryConfig = await getGlobalDeliveryConfig();
+    combos.forEach((combo) => applyGlobalDeliveryFallback(combo.vendor, deliveryConfig));
     return combos.map(comboShape);
   },
 
@@ -593,6 +612,7 @@ export const menuCatalogRepository = {
       include: itemInclude({ vendorView }),
     });
 
+    if (item) applyGlobalDeliveryFallback(item.vendor, await getGlobalDeliveryConfig());
     return item ? fullMenuItemShape(item) : null;
   },
 
@@ -606,6 +626,7 @@ export const menuCatalogRepository = {
       include: comboInclude,
     });
 
+    if (combo) applyGlobalDeliveryFallback(combo.vendor, await getGlobalDeliveryConfig());
     return combo ? comboDetailShape(combo) : null;
   },
 
@@ -704,6 +725,9 @@ export const menuCatalogRepository = {
       }),
       prisma.menuItem.count({ where }),
     ]);
+
+    const deliveryConfig = await getGlobalDeliveryConfig();
+    items.forEach((item) => applyGlobalDeliveryFallback(item.vendor, deliveryConfig));
 
     return {
       items: items.map(marketplaceItemShape),

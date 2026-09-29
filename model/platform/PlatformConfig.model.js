@@ -29,6 +29,17 @@ const platformConfigSchema = new mongoose.Schema(
       default: 600,
       min: [0, "Rider payout cannot be negative"],
     },
+    riderPayoutType: {
+      type: String,
+      enum: ["flat", "percentage"],
+      default: "flat",
+    },
+    riderPayoutValue: {
+      type: Number,
+      default: 600,
+      min: [0, "Rider payout value cannot be negative"],
+      max: [1000000, "Rider payout value is too large"],
+    },
 
     // Minimum wallet balance a rider must accumulate before the nightly
     // payout sweep will initiate a transfer. Defaults to ₦500 so riders

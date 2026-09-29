@@ -1,9 +1,16 @@
+const postgresMigrationEnabled = () =>
+  String(process.env.POSTGRES_MIGRATION_ENABLED || "")
+    .trim()
+    .toLowerCase() === "true";
+
 const usesPostgres = (key) =>
+  postgresMigrationEnabled() &&
   String(process.env[key] || "").trim().toLowerCase() === "postgres";
 
 export const usePostgresReads = () => usesPostgres("DB_READ_PROVIDER");
 
 export const usePostgresMenuReads = () => usesPostgres("DB_MENU_READ_PROVIDER");
+export const usePostgresMenuWrites = () => usesPostgres("DB_MENU_WRITE_PROVIDER");
 
 export const usePostgresSearchReads = () => usesPostgres("DB_SEARCH_READ_PROVIDER");
 
@@ -14,6 +21,12 @@ export const usePostgresRecommendationReads = () => usesPostgres("DB_RECOMMENDAT
 export const usePostgresPublicReviewReads = () => usesPostgres("DB_PUBLIC_REVIEW_READ_PROVIDER");
 
 export const usePostgresReviewReads = () => usesPostgres("DB_REVIEW_READ_PROVIDER");
+export const usePostgresReviewWrites = () => usesPostgres("DB_REVIEW_WRITE_PROVIDER");
+export const usePostgresNotificationWrites = () => usesPostgres("DB_NOTIFICATION_WRITE_PROVIDER");
+export const usePostgresDiscountWrites = () => usesPostgres("DB_DISCOUNT_WRITE_PROVIDER");
+export const usePostgresPromoWrites = () => usesPostgres("DB_PROMO_WRITE_PROVIDER");
+export const usePostgresSupportWrites = () => usesPostgres("DB_SUPPORT_WRITE_PROVIDER");
+export const usePostgresAdminWrites = () => usesPostgres("DB_ADMIN_WRITE_PROVIDER");
 
 export const usePostgresCategoryMetricsReads = () => usesPostgres("DB_CATEGORY_METRICS_READ_PROVIDER");
 
@@ -36,13 +49,13 @@ export const usePostgresPlatformConfigReads = () => usesPostgres("DB_PLATFORM_CO
 export const usePostgresRiderReads = () => usesPostgres("DB_RIDER_READ_PROVIDER");
 
 export const usePostgresWalletReads = () => usesPostgres("DB_WALLET_READ_PROVIDER");
+export const usePostgresPayoutWrites = () => usesPostgres("DB_PAYOUT_WRITE_PROVIDER");
 
 export const usePostgresAdminFinanceReads = () => usesPostgres("DB_ADMIN_FINANCE_READ_PROVIDER");
 
 export const usePostgresCartReads = () => usesPostgres("DB_CART_READ_PROVIDER");
 
 export const usePostgresCartWrites = () => usesPostgres("DB_CART_WRITE_PROVIDER");
-
 export const usePostgresOrderWrites = () => usesPostgres("DB_ORDER_WRITE_PROVIDER");
 
 export const usePostgresPaymentWrites = () => usesPostgres("DB_PAYMENT_WRITE_PROVIDER");

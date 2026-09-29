@@ -8,10 +8,13 @@ import { getPlatformConfig } from "./platformConfig.service.js";
 import OrderBroadcastQueue from "../model/OrderBroadcastQueue.js";
 import { RIDER_FIXED_PAYOUT, BROADCAST_TTL_SECONDS } from "../config/payouts.js";
 import logger from "../config/logger.js";
+import { usePostgresRiderAssignmentWrites } from "./postgres/compat.js";
+import { riderBroadcastRepository } from "./postgres/riderBroadcast.repository.js";
 
 const getBroadcastExpiresAt = () => new Date(Date.now() + BROADCAST_TTL_SECONDS * 1_000);
 
 export const expireStaleRiderAssignmentOffers = async (riderIds = []) => {
+    if (usePostgresRiderAssignmentWrites()) return riderBroadcastRepository.expire(riderIds);
     const ids = [...new Set(riderIds.map((id) => id?.toString()).filter(Boolean))];
     if (!ids.length) return { expiredCount: 0, riderIds: [] };
 
@@ -45,6 +48,24 @@ export const expireStaleRiderAssignmentOffers = async (riderIds = []) => {
 };
 
 export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = null }) => {
+    if (usePostgresRiderAssignmentWrites()) {
+        const result = await riderBroadcastRepository.offer(vendorOrderId, { assignedBy });
+        if (!result.success) return result;
+        // Live job-board offers remain visible until accepted or the order is
+        // closed, so PostgreSQL broadcasts do not require Redis rebroadcasts.
+        try {
+            const { emitToRider, emitToAdmin } = await import("../socket/socketServer.js");
+            const { SOCKET_EVENTS, buildPayload } = await import("../socket/rider.events.js");
+            const { sendRiderNotification, sendNotification } = await import("./notification.service.js");
+            await Promise.all(result.riders.map(async (rider) => {
+                emitToRider(rider._id, SOCKET_EVENTS.ORDER_ASSIGNED_TO_RIDER, buildPayload.orderAssigned({ orderId: result.order._id, riderId: rider._id, vendorId: result.vendor._id, vendorName: result.vendor.storeName, items: result.order.items, deliveryAddress: result.order.deliveryAddress, customerName: result.order.deliveryAddress?.name || "Customer", customerPhone: result.order.deliveryAddress?.phone, payout: result.riderPayout, assignmentMode: "automatic", assignmentExpiresAt: result.assignmentExpiresAt }));
+                await sendRiderNotification(rider._id, result.order._id, "order_assigned", { restaurantName: result.vendor.storeName, orderDatabaseId: result.order._id, payout: result.riderPayout, assignmentMode: "automatic", assignmentExpiresAt: result.assignmentExpiresAt });
+            }));
+            emitToAdmin(null, "rider_assignment_confirmed", { vendorOrderId: result.vendorOrderId, riderIds: result.riderIds, restaurantName: result.vendor.storeName, assignmentMode: "automatic", confirmedAt: new Date().toISOString() });
+            await sendNotification(null, "rider_assignment_needed", { orderId: result.order.orderCode || result.order._id, orderDatabaseId: result.order._id, vendorOrderId: result.vendorOrderId, message: `Automatic assignment sent to ${result.riderCount} rider(s). Waiting for first acceptance.` }, "admin");
+        } catch (error) { logger.warn({ error: error.message }, "PostgreSQL automatic assignment notification failed"); }
+        return result;
+    }
     const vendorOrder = await VendorOrder.findById(vendorOrderId).populate("userOrderId");
     if (!vendorOrder?.userOrderId) {
         return { success: false, reason: "order_not_found", riderCount: 0 };
@@ -343,6 +364,7 @@ export const offerOrderToAvailableRiders = async ({ vendorOrderId, assignedBy = 
  * Catch-up: Instant broadcast of all pending orders to a newly available rider.
  */
 export const catchupRiderWithPendingOrders = async (riderId) => {
+    if (usePostgresRiderAssignmentWrites()) return riderBroadcastRepository.catchup(riderId);
     try {
         const rider = await Rider.findById(riderId);
         if (!rider || (rider.status !== "available" && rider.status !== "pending_assignment") || rider.currentOrderId) {

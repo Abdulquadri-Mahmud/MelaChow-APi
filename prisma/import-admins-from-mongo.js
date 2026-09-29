@@ -52,7 +52,7 @@ const importAdmins = async ({ dryRun, limit }) => {
     const data = {
       legacyMongoId: toLegacyId(admin._id),
       name: admin.name || admin.email,
-      email: admin.email,
+      email: admin.email.trim().toLowerCase(),
       password: admin.password || "",
       role: mapRole(admin.role),
       resetPasswordToken: admin.resetPasswordToken || null,
@@ -69,11 +69,12 @@ const importAdmins = async ({ dryRun, limit }) => {
     };
 
     if (!dryRun) {
-      await prisma.admin.upsert({
-        where: { legacyMongoId: data.legacyMongoId },
-        create: data,
-        update: data,
+      const existing = await prisma.admin.findFirst({
+        where: { OR: [{ legacyMongoId: data.legacyMongoId }, { email: data.email }] },
+        select: { id: true },
       });
+      if (existing) await prisma.admin.update({ where: { id: existing.id }, data });
+      else await prisma.admin.create({ data });
     }
 
     stats.admins += 1;

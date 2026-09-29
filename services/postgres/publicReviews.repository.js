@@ -1,6 +1,7 @@
 import prisma from "../../config/prisma.js";
+import { getGlobalDeliveryConfig } from "../deliveryPricing.service.js";
 
-const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const legacyId = (record) => record?.legacyMongoId || record?.id || null;
 
@@ -257,10 +258,10 @@ export const publicReviewsRepository = {
 
     const stats = calculateRatingStats(allReviewsForStats);
     const cheapestPortion = food.portions?.[0];
-    const deliveryFeeKobo =
-      food.vendor?.platformDeliveryFeeOverride && food.vendor.platformDeliveryFeeOverride > 0
-        ? food.vendor.platformDeliveryFeeOverride
-        : food.vendor?.city?.platformDeliveryFee || 0;
+    const deliveryConfig = await getGlobalDeliveryConfig();
+    const deliveryFeeKobo = food.vendor?.deliveryManagedBy === "vendor"
+      ? Number(food.vendor?.flatRateDeliveryFee || 0)
+      : Number(food.vendor?.platformDeliveryFeeOverride ?? Number(deliveryConfig.fallbackFlatFeeNaira || 400) * 100);
     const accurateAverageRating = stats.totalReviews ? stats.averageRating : food.rating || 0;
     const accurateTotalReviews = stats.totalReviews || food.ratingCount || 0;
 
@@ -273,7 +274,7 @@ export const publicReviewsRepository = {
           price_naira: cheapestPortion ? cheapestPortion.price / 100 : null,
           portion_label: cheapestPortion?.label ?? null,
           image: food.imageUrl || "",
-          deliveryFee: deliveryFeeKobo,
+          deliveryFee: deliveryFeeKobo / 100,
           platform_category: categoryShape(food.platformCategory),
           averageRating: accurateAverageRating,
           totalReviews: accurateTotalReviews,

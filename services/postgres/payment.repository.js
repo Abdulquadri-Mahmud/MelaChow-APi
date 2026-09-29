@@ -151,10 +151,24 @@ const postgresOrderShape = (order) => ({
   subtotal: order?.subtotal,
   deliveryFee: order?.deliveryFee,
   serviceFee: order?.serviceFee,
+  moneyUnit: "kobo",
   deliveryAddress: order?.deliveryAddress,
   phone: order?.phone,
   createdAt: order?.createdAt,
   updatedAt: order?.updatedAt,
+});
+
+const paidNotificationContext = (order) => ({
+  userId: order?.user?.legacyMongoId || order?.userId,
+  customerName: order?.user?.fullName || `${order?.user?.firstname || ""} ${order?.user?.lastname || ""}`.trim() || "a customer",
+  location: order?.deliveryAddress?.addressLine || order?.deliveryAddress?.address || "specified location",
+  vendors: (order?.vendorOrders || []).map((vendorOrder) => ({
+    vendorId: vendorOrder.restaurant?.legacyMongoId || vendorOrder.restaurantId,
+    vendorOrderId: vendorOrder.legacyMongoId || vendorOrder.id,
+    restaurantName: vendorOrder.restaurant?.storeName || "Restaurant",
+    items: (order?.items || []).filter((item) => item.restaurantId === vendorOrder.restaurantId),
+  })),
+  totalKobo: Number(order?.total || 0),
 });
 
 export const postgresPaymentRepository = {
@@ -597,7 +611,7 @@ export const postgresPaymentRepository = {
     return postgresOrderShape(updated);
   },
 
-  async fulfillPaidOrder(reference) {
+  async fulfillPaidOrder(reference, { walletPayment = false } = {}) {
     if (!reference) throw new Error("Payment reference is required");
 
     return prisma.$transaction(async (tx) => {
@@ -616,6 +630,7 @@ export const postgresPaymentRepository = {
         return {
           order: postgresOrderShape(order),
           idempotent: true,
+          notificationContext: paidNotificationContext(order),
           walletTransactions: [],
           creditedKobo: 0,
         };
@@ -681,6 +696,18 @@ export const postgresPaymentRepository = {
           walletTransactions: [],
           creditedKobo: 0,
         };
+      }
+
+      if (walletPayment) {
+        const customerWallet = await tx.wallet.findUnique({ where: { ownerId_ownerModel: { ownerId: order.userId, ownerModel: "User" } } });
+        if (!customerWallet) {
+          const error = new Error("Wallet not found. Please fund your wallet first."); error.code = "POSTGRES_CUSTOMER_WALLET_MISSING"; error.statusCode = 400; throw error;
+        }
+        const debited = await tx.wallet.updateMany({ where: { id: customerWallet.id, balance: { gte: order.total } }, data: { balance: { decrement: order.total } } });
+        if (debited.count !== 1) {
+          const error = new Error(`Insufficient wallet balance (₦${customerWallet.balance / 100}) for total ₦${order.total / 100}`); error.code = "POSTGRES_WALLET_INSUFFICIENT"; error.statusCode = 400; throw error;
+        }
+        await tx.walletTransaction.create({ data: { walletId: customerWallet.id, type: "debit", amount: order.total, transactionType: "order_payment", orderId: order.id, description: `Payment for order ${order.orderCode}`, metadata: { source: "postgres_wallet_order_payment", reference } } });
       }
 
       const walletTransactions = [];
@@ -820,6 +847,7 @@ export const postgresPaymentRepository = {
       return {
         order: postgresOrderShape(fulfilledOrder),
         idempotent: false,
+        notificationContext: paidNotificationContext(order),
         walletTransactions,
         invoice: {
           id: invoice.id,

@@ -1,53 +1,44 @@
 // import axios from 'axios'; // Removed Termii dependency
-import mongoose from 'mongoose';
 import { safeRedisSet, safeRedisGet } from '../config/redis.js';
 import { sendMail } from '../config/mailer.js';
-import User from '../model/user.model.js';
 import logger from '../config/logger.js';
 import { wrapLayout } from './emailTemplate.service.js';
+import {
+    deleteDeliveryOtpSession,
+    getDeliveryOtpSession,
+    storeDeliveryOtpSession,
+} from './postgres/riderOtp.repository.js';
 
-// MongoDB OTP fallback collection Ã¢â‚¬â€ used when Redis is unavailable.
-// TTL index on expiresAt auto-deletes documents after 10 minutes.
-// Defined inline to avoid a separate model file for a simple structure.
-const otpFallbackSchema = new mongoose.Schema({
-    redisKey:  { type: String, required: true, unique: true },
-    data:      { type: String, required: true }, // JSON stringified OTP payload
-    expiresAt: { type: Date,   required: true, index: { expires: 0 } },
-});
-const OtpFallback = mongoose.models.OtpFallback ||
-    mongoose.model('OtpFallback', otpFallbackSchema);
-
+// Delivery OTPs use Redis as a fast cache and PostgreSQL as the durable fallback.
 const OTP_TTL_SECONDS = 600; // 10 minutes
 const OTP_RESEND_COOLDOWN_SECONDS = 60;
 const OTP_REDIS_PREFIX = 'delivery_otp:';
 
 /**
- * Store OTP payload with Redis primary and MongoDB fallback.
+ * Store OTP payload with Redis primary and PostgreSQL fallback.
  * Called by sendDeliveryOTP. Guarantees OTP is persisted even
  * when Redis free tier is unavailable.
  */
 const storeOtpPayload = async (redisKey, payload) => {
     const serialized = JSON.stringify(payload);
     const expiresAt = new Date(Date.now() + OTP_TTL_SECONDS * 1000);
-    // MongoDB is durable; Redis is an optional cache.
-    await OtpFallback.findOneAndUpdate(
-        { redisKey },
-        { redisKey, data: serialized, expiresAt },
-        { upsert: true, new: true }
-    );
+    await storeDeliveryOtpSession(redisKey, payload, expiresAt);
     await safeRedisSet(redisKey, serialized, { EX: OTP_TTL_SECONDS });
 };
 
 const retrieveOtpPayload = async (redisKey) => {
-    const fallback = await OtpFallback.findOne({ redisKey });
-    if (fallback) {
-        if (fallback.expiresAt < new Date()) {
-            await OtpFallback.deleteOne({ _id: fallback._id });
-            return null;
-        }
-        return fallback.data;
-    }
-    return safeRedisGet(redisKey);
+    const cached = await safeRedisGet(redisKey);
+    if (cached) return cached;
+
+    const fallback = await getDeliveryOtpSession(redisKey);
+    if (!fallback) return null;
+    const serialized = JSON.stringify(fallback);
+    const remainingSeconds = Math.max(
+        1,
+        Math.ceil((new Date(fallback.expiresAt || 0).getTime() - Date.now()) / 1000)
+    );
+    await safeRedisSet(redisKey, serialized, { EX: remainingSeconds });
+    return serialized;
 };
 /**
  * Delete OTP payload from both stores after successful verification.
@@ -56,10 +47,15 @@ const deleteOtpPayload = async (redisKey) => {
     // Redis delete Ã¢â‚¬â€ safeRedisSet with immediate expiry is not a true delete,
     // so we overwrite with a 1-second TTL to flush it as fast as possible
     await safeRedisSet(redisKey, JSON.stringify({ expired: true }), { EX: 1 });
-    await OtpFallback.deleteOne({ redisKey }).catch(() => null);
+    await deleteDeliveryOtpSession(redisKey);
 };
 
-export const sendDeliveryOTP = async (orderId, customerPhone, customerUserId, { forceResend = false } = {}) => {
+export const sendDeliveryOTP = async (
+    orderId,
+    customerPhone,
+    customerUserId,
+    { forceResend = false, customerEmail, readableOrderId = orderId } = {}
+) => {
     const redisKey = `${OTP_REDIS_PREFIX}${orderId}`;
     const existing = await retrieveOtpPayload(redisKey);
     if (existing) {
@@ -93,19 +89,7 @@ export const sendDeliveryOTP = async (orderId, customerPhone, customerUserId, { 
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Production: Email via Resend Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
     try {
-        const VendorOrder = mongoose.model('VendorOrder');
-        const Order = mongoose.model('Order');
-        let vendorOrder = await VendorOrder.findById(orderId).populate('userOrderId');
-        let orderDoc = null;
-        if (vendorOrder) {
-            orderDoc = vendorOrder.userOrderId;
-        } else {
-            orderDoc = await Order.findById(orderId);
-        }
-
-        const resolvedCustomerUserId = customerUserId || orderDoc?.userId;
-        const user = await User.findById(resolvedCustomerUserId).select('email firstname');
-        if (!user?.email) throw new Error('Customer email not found');
+        if (!customerEmail) throw new Error('Customer email not found');
 
         const otp = Math.floor(100000 + Math.random() * 900000).toString();
 
@@ -118,10 +102,8 @@ export const sendDeliveryOTP = async (orderId, customerPhone, customerUserId, { 
             expiresAt: new Date(Date.now() + OTP_TTL_SECONDS * 1000).toISOString(),
         });
 
-        const readableOrderId = orderDoc?.orderId || orderId;
-
         await sendMail({
-            to: user.email,
+            to: customerEmail,
             subject: `Delivery Confirmation Code for Order ${readableOrderId}: ${otp}`,
             html: wrapLayout(
                 'Verification Required',
@@ -140,7 +122,7 @@ export const sendDeliveryOTP = async (orderId, customerPhone, customerUserId, { 
             ),
         });
 
-        logger.info({ orderId, email: user.email, readableOrderId }, 'Ã¢Å“â€¦ Delivery OTP sent via Resend email');
+        logger.info({ orderId, email: customerEmail, readableOrderId }, 'Delivery OTP sent via Resend email');
         return { success: true, method: 'email' };
 
     } catch (err) {
@@ -155,14 +137,14 @@ export const sendDeliveryOTP = async (orderId, customerPhone, customerUserId, { 
  * Verify delivery OTP submitted by rider.
  * Handles locally-stored OTP (email/dev).
  *
- * @param {string} orderId - MongoDB Order _id
+ * @param {string} orderId - PostgreSQL order identifier
  * @param {string} otp - 6-digit code entered by rider
  * @returns {{ verified: boolean }}
  */
 export const verifyDeliveryOTP = async (orderId, otp) => {
     const redisKey = `${OTP_REDIS_PREFIX}${orderId}`;
 
-    // Retrieve from Redis first, MongoDB fallback second
+    // Retrieve from Redis first, PostgreSQL fallback second.
     const stored = await retrieveOtpPayload(redisKey);
     if (!stored) {
         throw new Error('OTP expired or not found. Please request a new code.');

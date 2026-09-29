@@ -1,6 +1,6 @@
 import prisma from "../../config/prisma.js";
 
-const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const legacyId = (record) => record?.legacyMongoId || record?.id || null;
 
@@ -142,6 +142,44 @@ const buildAdminWhere = async ({ vendorId, rating, search } = {}) => {
 };
 
 export const reviewManagementRepository = {
+  async createReview({ userId, vendorId, foodId, rating, comment }) {
+    const [resolvedUserId, resolvedVendorId, resolvedFoodId] = await Promise.all([
+      resolveId(prisma.user, userId), resolveId(prisma.vendor, vendorId), foodId ? resolveId(prisma.menuItem, foodId) : Promise.resolve(null),
+    ]);
+    if (!resolvedUserId) return { error: "user_not_found" };
+    if (!resolvedVendorId) return { error: "vendor_not_found" };
+    if (foodId && !resolvedFoodId) return { error: "food_not_found" };
+    const numericRating = Number(rating);
+    if (!Number.isInteger(numericRating) || numericRating < 1 || numericRating > 5) return { error: "invalid_rating" };
+    const review = await prisma.$transaction(async (tx) => {
+      const created = await tx.review.create({ data: { userId: resolvedUserId, vendorId: resolvedVendorId, foodId: resolvedFoodId, rating: numericRating, comment: comment || null }, include: reviewInclude });
+      const vendorStats = await tx.review.aggregate({ where: { vendorId: resolvedVendorId }, _avg: { rating: true }, _count: { rating: true } });
+      await tx.vendor.update({ where: { id: resolvedVendorId }, data: { rating: vendorStats._avg.rating || 0, ratingCount: vendorStats._count.rating } });
+      if (resolvedFoodId) {
+        const foodStats = await tx.review.aggregate({ where: { foodId: resolvedFoodId }, _avg: { rating: true }, _count: { rating: true } });
+        await tx.menuItem.update({ where: { id: resolvedFoodId }, data: { rating: foodStats._avg.rating || 0, ratingCount: foodStats._count.rating } });
+      }
+      return created;
+    });
+    return { review: reviewShape(review, { foodMode: "id" }) };
+  },
+
+  async deleteReview(reviewId) {
+    const id = await resolveId(prisma.review, reviewId);
+    if (!id) return null;
+    return prisma.$transaction(async (tx) => {
+      const review = await tx.review.findUnique({ where: { id } });
+      if (!review) return null;
+      await tx.review.delete({ where: { id } });
+      const vendorStats = await tx.review.aggregate({ where: { vendorId: review.vendorId }, _avg: { rating: true }, _count: { rating: true } });
+      await tx.vendor.update({ where: { id: review.vendorId }, data: { rating: vendorStats._avg.rating || 0, ratingCount: vendorStats._count.rating } });
+      if (review.foodId) {
+        const foodStats = await tx.review.aggregate({ where: { foodId: review.foodId }, _avg: { rating: true }, _count: { rating: true } });
+        await tx.menuItem.update({ where: { id: review.foodId }, data: { rating: foodStats._avg.rating || 0, ratingCount: foodStats._count.rating } });
+      }
+      return review;
+    });
+  },
   async getUserReviews(userId) {
     const resolvedUserId = await resolveId(prisma.user, userId);
     if (!resolvedUserId) return [];

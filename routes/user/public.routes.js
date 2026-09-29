@@ -18,6 +18,8 @@ import {
     addAddress, getUserAddresses, updateAddress, deleteAddress
 } from "../../controller/user/user.controller.js";
 import { getPlatformConfig } from "../../services/platformConfig.service.js";
+import { autocompleteDeliveryAddress, getDeliveryPlaceDetails } from "../../controller/location/googleLocation.controller.js";
+import { getDeliveryQuotes } from "../../services/deliveryPricing.service.js";
 
 const router = express.Router();
 
@@ -52,6 +54,14 @@ router.get("/platform-config", async (req, res) => {
 // Locations first
 router.get("/locations", getVendorLocations);
 router.get("/locations/legacy", getLegacyVendorLocations);
+router.get("/locations/autocomplete", auth, autocompleteDeliveryAddress);
+router.get("/locations/place/:placeId", auth, getDeliveryPlaceDetails);
+router.post("/delivery-quotes", auth, async (req, res) => {
+    try {
+        const quotes = await getDeliveryQuotes({ addressId: req.body.addressId, vendorIds: req.body.vendorIds, userId: req.postgresUserId, checkout: Boolean(req.body.checkout) });
+        return res.json({ success: true, data: { moneyUnit: "kobo", quotes } });
+    } catch (error) { return res.status(error.statusCode || 400).json({ success: false, message: error.message }); }
+});
 
 router.get("/foods", getFoodsByLocation);
 
@@ -74,7 +84,7 @@ router.get("/vendors/nearby", optionalAuth, getNearbyVendorsForUser);
  * @route GET /api/user/vendors/:id
  * @access Public
  */
-router.get("/vendors/:id", getVendorForUserDisplay);
+router.get("/vendors/:id", optionalAuth, getVendorForUserDisplay);
 
 /**
  * @description Get trending searches (location-aware if authenticated)

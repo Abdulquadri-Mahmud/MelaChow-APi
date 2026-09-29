@@ -1,7 +1,7 @@
 import PlatformConfig from "../../../model/platform/PlatformConfig.model.js";
 import "../../../model/Admin/admin.model.js";
 import logger from "../../../config/logger.js";
-import { usePostgresPlatformConfigReads } from "../../../services/postgres/compat.js";
+import { usePostgresAdminWrites, usePostgresPlatformConfigReads } from "../../../services/postgres/compat.js";
 import { platformConfigRepository } from "../../../services/postgres/platformConfig.repository.js";
 
 /**
@@ -26,6 +26,8 @@ export const getAdminPlatformConfig = async (req, res) => {
         success: true,
         data: {
           riderFixedPayout: 600,
+          riderPayoutType: "flat",
+          riderPayoutValue: 600,
           riderMinPayoutBalance: 500,
           riderAssignmentMode: "manual",
           riderTerminationPenaltyHours: 24,
@@ -74,6 +76,8 @@ export const updateAdminPlatformConfig = async (req, res) => {
     const adminId = req.admin?._id;
     const {
       riderFixedPayout,
+      riderPayoutType,
+      riderPayoutValue,
       riderMinPayoutBalance,
       riderAssignmentMode,
       riderTerminationPenaltyHours,
@@ -141,9 +145,26 @@ export const updateAdminPlatformConfig = async (req, res) => {
       return res.status(400).json({ success: false, errors });
     }
 
+    if (riderPayoutType !== undefined && !["flat", "percentage"].includes(riderPayoutType)) {
+      errors.push("riderPayoutType must be 'flat' or 'percentage'");
+    }
+    if (riderPayoutValue !== undefined && (typeof riderPayoutValue !== "number" || riderPayoutValue < 0)) {
+      errors.push("riderPayoutValue must be a non-negative number");
+    }
+    if (riderPayoutType === "percentage" && riderPayoutValue > 100) {
+      errors.push("Percentage rider payout cannot exceed 100%");
+    }
+
+    if(usePostgresAdminWrites()){
+      const changes={};for(const key of ["riderFixedPayout","riderPayoutType","riderPayoutValue","riderMinPayoutBalance","riderAssignmentMode","riderTerminationPenaltyHours","commissionEnabled","commissionRate","serviceFeeEnabled","serviceFeeType","serviceFeeValue","serviceFeeCap","paystackFeeBearer"])if(req.body[key]!==undefined)changes[key]=req.body[key];
+      return res.json(await platformConfigRepository.updateAdminConfig(adminId,changes));
+    }
+
     // ── Build update payload (only provided fields) ─────────────────────
     const update = { lastUpdatedBy: adminId };
     if (riderFixedPayout !== undefined) update.riderFixedPayout = riderFixedPayout;
+    if (riderPayoutType !== undefined) update.riderPayoutType = riderPayoutType;
+    if (riderPayoutValue !== undefined) update.riderPayoutValue = riderPayoutValue;
     if (riderMinPayoutBalance !== undefined) update.riderMinPayoutBalance = riderMinPayoutBalance;
     if (riderAssignmentMode !== undefined) update.riderAssignmentMode = riderAssignmentMode;
     if (riderTerminationPenaltyHours !== undefined) update.riderTerminationPenaltyHours = riderTerminationPenaltyHours;

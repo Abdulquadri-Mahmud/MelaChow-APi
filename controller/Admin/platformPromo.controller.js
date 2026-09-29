@@ -1,10 +1,13 @@
 import FreeDeliveryPromo from "../../model/promo/FreeDeliveryPromo.js";
 import FreeDeliveryClaim from "../../model/promo/FreeDeliveryClaim.js";
 import logger from "../../config/logger.js";
+import { usePostgresPromoWrites } from "../../services/postgres/compat.js";
+import { promoRepository } from "../../services/postgres/promo.repository.js";
 
 // List platform delivery promos
 export const listPlatformDeliveryPromos = async (req, res) => {
   try {
+    if (usePostgresPromoWrites()) return res.status(200).json({ success: true, promos: await promoRepository.listPlatform() });
     const promos = await FreeDeliveryPromo.find().sort({ createdAt: -1 });
     res.status(200).json({ success: true, promos });
   } catch (error) {
@@ -31,6 +34,11 @@ export const createPlatformDeliveryPromo = async (req, res) => {
 
     if (parsedEndsAt && (isNaN(parsedEndsAt.getTime()) || parsedEndsAt <= parsedStartsAt)) {
       return res.status(400).json({ success: false, message: "endsAt must be after startsAt" });
+    }
+    if (usePostgresPromoWrites()) {
+      const result = await promoRepository.createPlatform({ name, totalSlots, startsAt: parsedStartsAt, endsAt: parsedEndsAt });
+      if (result.error === "active_exists") return res.status(400).json({ success: false, message: "A platform delivery promo is already active. Deactivate it first." });
+      return res.status(201).json({ success: true, promo: result.promo });
     }
 
     // We only support one active promo for the entire platform at a time.
@@ -62,6 +70,11 @@ export const createPlatformDeliveryPromo = async (req, res) => {
 export const deactivatePlatformDeliveryPromo = async (req, res) => {
   try {
     const { promoId } = req.params;
+    if (usePostgresPromoWrites()) {
+      const result = await promoRepository.setPlatformActive(promoId, false);
+      if (result.error) return res.status(404).json({ success: false, message: "Promo not found" });
+      return res.status(200).json({ success: true, promo: result.promo });
+    }
 
     const promo = await FreeDeliveryPromo.findByIdAndUpdate(
       promoId,
@@ -83,6 +96,11 @@ export const deactivatePlatformDeliveryPromo = async (req, res) => {
 export const getPlatformPromoStats = async (req, res) => {
   try {
     const { promoId } = req.params;
+    if (usePostgresPromoWrites()) {
+      const stats = await promoRepository.platformStats(promoId);
+      if (!stats) return res.status(404).json({ success: false, message: "Promotion not found" });
+      return res.status(200).json({ success: true, stats });
+    }
 
     // 1. Fetch the promo details
     const promo = await FreeDeliveryPromo.findById(promoId);
@@ -141,6 +159,16 @@ export const updatePlatformDeliveryPromo = async (req, res) => {
   try {
     const { promoId } = req.params;
     const { totalSlots, startsAt, endsAt, name } = req.body;
+    if (usePostgresPromoWrites()) {
+      if (totalSlots !== undefined && (!Number.isFinite(Number(totalSlots)) || Number(totalSlots) < 1)) return res.status(400).json({ success: false, message: "totalSlots must be a positive number" });
+      if (endsAt !== undefined && (Number.isNaN(new Date(endsAt).getTime()) || new Date(endsAt) <= new Date())) return res.status(400).json({ success: false, message: "endsAt must be a future date" });
+      if (startsAt !== undefined && Number.isNaN(new Date(startsAt).getTime())) return res.status(400).json({ success: false, message: "Invalid startsAt date" });
+      const result = await promoRepository.updatePlatform(promoId, { totalSlots, startsAt, endsAt, name });
+      if (result.error === "not_found") return res.status(404).json({ success: false, message: "Promo not found" });
+      if (result.error === "inactive") return res.status(400).json({ success: false, message: "Cannot update a deactivated promo. Reactivate it first." });
+      if (result.error === "below_used") return res.status(400).json({ success: false, message: `Cannot reduce totalSlots below ${result.usedSlots} claimed slots` });
+      return res.status(200).json({ success: true, promo: result.promo });
+    }
 
     const promo = await FreeDeliveryPromo.findById(promoId);
     if (!promo) {
@@ -225,6 +253,14 @@ export const reactivatePlatformDeliveryPromo = async (req, res) => {
   try {
     const { promoId } = req.params;
     const { resetSlots = false } = req.body;
+    if (usePostgresPromoWrites()) {
+      const current = await promoRepository.getPlatform(promoId);
+      if (!current) return res.status(404).json({ success: false, message: "Promo not found" });
+      if (current.isActive) return res.status(400).json({ success: false, message: "Promo is already active" });
+      const result = await promoRepository.setPlatformActive(promoId, true, resetSlots);
+      if (result.error === "active_exists") return res.status(400).json({ success: false, message: "Another platform promo is already active. Deactivate it first." });
+      return res.status(200).json({ success: true, promo: result.promo });
+    }
 
     const promo = await FreeDeliveryPromo.findById(promoId);
     if (!promo) {
