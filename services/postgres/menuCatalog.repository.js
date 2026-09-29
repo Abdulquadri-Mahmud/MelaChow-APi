@@ -253,7 +253,7 @@ const marketplaceItemShape = (item) => ({
     return {
       ...shaped,
       track_stock: portion.trackStock,
-      stock_quantity: portion.trackStock ? portion.stockQuantity : null,
+      stock_quantity: portion.stockQuantity,
       low_stock_threshold: portion.lowStockThreshold,
     };
   }),
