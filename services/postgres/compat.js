@@ -9,6 +9,10 @@ const usesPostgres = (key) =>
 
 export const usePostgresReads = () => usesPostgres("DB_READ_PROVIDER");
 
+export const usePostgresBannerReads = () =>
+  String(process.env.DB_PRIMARY_PROVIDER || "").trim().toLowerCase() === "postgres" ||
+  usesPostgres("DB_BANNER_READ_PROVIDER");
+
 export const usePostgresMenuReads = () => usesPostgres("DB_MENU_READ_PROVIDER");
 export const usePostgresMenuWrites = () => usesPostgres("DB_MENU_WRITE_PROVIDER");
 
