@@ -31,8 +31,8 @@ const main = async () => {
       checks.push(compare(`${label} count`, await db.collection(collection).countDocuments(), await model.count()));
     }
 
-    checks.push(compare("order total", await sumMongo(db.collection("orders"), "total"), await sumPostgres(prisma.order, "total")));
-    checks.push(compare("wallet balance", await sumMongo(db.collection("wallets"), "balance"), await sumPostgres(prisma.wallet, "balance")));
+    checks.push(compare("order total (kobo)", (await sumMongo(db.collection("orders"), "total")) * 100, await sumPostgres(prisma.order, "total")));
+    checks.push(compare("wallet balance (kobo)", (await sumMongo(db.collection("wallets"), "balance")) * 100, await sumPostgres(prisma.wallet, "balance")));
     checks.push(compare("refund amount (kobo)", (await sumMongo(db.collection("refunds"), "amount")) * 100, await sumPostgres(prisma.refund, "amount")));
     checks.push(compare("invoice total (kobo)", (await sumMongo(db.collection("invoices"), "total")) * 100, await sumPostgres(prisma.invoice, "amount")));
 
