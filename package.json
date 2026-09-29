@@ -73,6 +73,7 @@
     "prisma:repair-legacy-money": "node prisma/repair-legacy-money-units.js",
     "prisma:import-finance-payments": "node prisma/import-finance-payments-from-mongo.js",
     "prisma:import-logistics-support": "node prisma/import-logistics-support-from-mongo.js",
+    "prisma:import-engagement-support": "node prisma/import-engagement-support-from-mongo.js",
     "prisma:check-menu-parity": "node prisma/check-menu-response-parity.js",
     "prisma:check-search-parity": "node prisma/check-search-response-parity.js",
     "prisma:check-foods-location-parity": "node prisma/check-foods-by-location-parity.js",
