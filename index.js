@@ -4,6 +4,8 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import mongoSanitize from 'express-mongo-sanitize';
 import connectDB from './config/db.js';
+import prisma from './config/prisma.js';
+import mongoose from 'mongoose';
 import userRoutes from './routes/user.routes.js';
 import userPublicRoutes from './routes/user/public.routes.js';
 import helmet from 'helmet';
@@ -60,6 +62,7 @@ import { scheduledPayoutWorker, triggerScheduledPayouts } from "./jobs/scheduled
 import { expireStaleRiderAssignments } from "./jobs/riderAssignmentTimeout.job.js";
 import { retryPendingRiderAssignments } from "./jobs/riderAssignmentRetry.job.js";
 import cron from "node-cron";
+import { processSamkaLogistics, usesSamkaLogistics } from "./services/logistics/samkaLogistics.service.js";
 import { reconcileStaleWithdrawals } from "./services/transferReconciliation.service.js";
 import { RIDER_SWEEP_CRON, VENDOR_SWEEP_CRON } from "./config/payouts.js";
 import { releaseExpiredOptionStockReservations, releaseExpiredPortionStockReservations } from "./services/optionStock.service.js";
@@ -100,6 +103,14 @@ const allowedOrigins = [
   'http://localhost:3002',
   'http://localhost:3003',
   'http://localhost:3004',
+  'http://localhost:3100',
+  'http://localhost:3101',
+  'http://localhost:3102',
+  'http://localhost:3103',
+  'http://127.0.0.1:3100',
+  'http://127.0.0.1:3101',
+  'http://127.0.0.1:3102',
+  'http://127.0.0.1:3103',
   'https://melachow-admin.vercel.app',
   'https://admin.melachow.com',
   'https://vendor.melachow.com',
@@ -515,17 +526,30 @@ app.use((err, req, res, next) => {
 // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 const startServer = async () => {
   try {
-    // 1. Connect to MongoDB
-    await connectDB();
+    // Connect only to the selected primary database. This prevents local
+    // PostgreSQL testing from reading or mutating the production MongoDB.
+    const dbProvider = (process.env.DB_PRIMARY_PROVIDER || "mongo").toLowerCase();
+    if (dbProvider === "postgres") {
+      // Fail any legacy migration mirror call immediately instead of buffering
+      // it for an absent MongoDB connection.
+      mongoose.set("bufferCommands", false);
+      if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
+      await prisma.$queryRaw`SELECT 1`;
+      logger.info("PostgreSQL connected as primary database");
+    } else {
+      await connectDB();
+    }
 
     const PORT = process.env.PORT || 5000;
 
     // 2. Run category seeder
     // Wrapped so a seed failure never blocks startup
-    try {
-      await seedCategories();
-    } catch (seedErr) {
-      logger.warn({ err: seedErr.message }, "Category seed skipped");
+    if (dbProvider === "mongo") {
+      try {
+        await seedCategories();
+      } catch (seedErr) {
+        logger.warn({ err: seedErr.message }, "Category seed skipped");
+      }
     }
 
     // 2b. Connect Redis main client
@@ -592,19 +616,20 @@ const startServer = async () => {
         { timezone: "Africa/Lagos" }
     );
 
-    cron.schedule(
-        "* * * * *",
-        async () => {
-            try {
-                await expireStaleRiderAssignments();
-            } catch (err) {
-                logger.warn({ err: err.message }, "Rider assignment timeout sweep failed");
-            }
-        },
-        { timezone: "Africa/Lagos" }
-    );
-
-    console.log("Rider assignment timeout sweep registered (every minute)");
+    if (dbProvider === "mongo") {
+      cron.schedule(
+          "* * * * *",
+          async () => {
+              try {
+                  await expireStaleRiderAssignments();
+              } catch (err) {
+                  logger.warn({ err: err.message }, "Rider assignment timeout sweep failed");
+              }
+          },
+          { timezone: "Africa/Lagos" }
+      );
+      console.log("Rider assignment timeout sweep registered (every minute)");
+    }
 
     cron.schedule(
         "* * * * *",
@@ -623,37 +648,57 @@ const startServer = async () => {
     );
     console.log("PostgreSQL order timeout sweep registered (every minute)");
 
-    cron.schedule(
-        "*/5 * * * *",
+    if (usesSamkaLogistics()) {
+      cron.schedule(
+        "* * * * *",
         async () => {
-            try {
-                const [releasedOptions, releasedPortions] = await Promise.all([
-                    releaseExpiredOptionStockReservations(),
-                    releaseExpiredPortionStockReservations(),
-                ]);
-                if (releasedOptions > 0) logger.info({ released: releasedOptions }, "Expired option-stock reservations released");
-                if (releasedPortions > 0) logger.info({ released: releasedPortions }, "Expired portion-stock reservations released");
-            } catch (err) {
-                logger.warn({ err: err.message }, "Option-stock reservation sweep failed");
-            }
+          try {
+            const summary = await processSamkaLogistics();
+            if (summary.dispatched || summary.reconciled || summary.failed) logger.info(summary, "Samka logistics synchronization completed");
+          } catch (err) {
+            logger.error({ err: err.message }, "Samka logistics synchronization failed");
+          }
         },
         { timezone: "Africa/Lagos" }
-    );
+      );
+      processSamkaLogistics().catch((err) => logger.error({ err: err.message }, "Initial Samka logistics synchronization failed"));
+      console.log("Samka logistics synchronization registered (every minute)");
+    }
+
+    if (dbProvider === "mongo") {
+      cron.schedule(
+          "*/5 * * * *",
+          async () => {
+              try {
+                  const [releasedOptions, releasedPortions] = await Promise.all([
+                      releaseExpiredOptionStockReservations(),
+                      releaseExpiredPortionStockReservations(),
+                  ]);
+                  if (releasedOptions > 0) logger.info({ released: releasedOptions }, "Expired option-stock reservations released");
+                  if (releasedPortions > 0) logger.info({ released: releasedPortions }, "Expired portion-stock reservations released");
+              } catch (err) {
+                  logger.warn({ err: err.message }, "Option-stock reservation sweep failed");
+              }
+          },
+          { timezone: "Africa/Lagos" }
+      );
+    }
 
     // Ã°Å¸Å¡â‚¬ NEW: Continuous Assignment Retry Loop (Every 30 seconds)
-    cron.schedule(
-        "*/30 * * * * *",
-        async () => {
-            try {
-                await retryPendingRiderAssignments();
-            } catch (err) {
-                logger.warn({ err: err.message }, "Assignment retry sweep failed");
-            }
-        },
-        { timezone: "Africa/Lagos" }
-    );
-
-    console.log("Continuous assignment retry loop registered (every 30 seconds)");
+    if (dbProvider === "mongo") {
+      cron.schedule(
+          "*/30 * * * * *",
+          async () => {
+              try {
+                  await retryPendingRiderAssignments();
+              } catch (err) {
+                  logger.warn({ err: err.message }, "Assignment retry sweep failed");
+              }
+          },
+          { timezone: "Africa/Lagos" }
+      );
+      console.log("Continuous assignment retry loop registered (every 30 seconds)");
+    }
 
     // 5. Graceful shutdown
     // Render sends SIGTERM before stopping the instance

@@ -60,6 +60,8 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "prisma:seed": "node prisma/seed.js",
+    "prisma:seed-superadmin": "node prisma/seed-superadmin.js",
+    "prisma:seed-samka-integration": "node prisma/seed-samka-integration.js",
     "prisma:import-admins": "node prisma/import-admins-from-mongo.js",
     "prisma:import-users": "node prisma/import-users-from-mongo.js",
     "prisma:backfill-user-passwords": "node prisma/backfill-user-password-hashes.js",

@@ -1011,6 +1011,7 @@ export const adminOrdersRepository = {
         orderId: vendorOrder.userOrder.orderCode,
         orderLegacyId: vendorOrder.userOrder.legacyMongoId,
         vendorOrderLegacyId: legacyId(vendorOrder),
+        vendorOrderDatabaseId: vendorOrder.id,
         restaurantId: legacyId(vendor),
         restaurantName: vendor.storeName,
         totalAmount: vendorOrder.userOrder.total,

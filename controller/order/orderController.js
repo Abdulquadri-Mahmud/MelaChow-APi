@@ -36,6 +36,7 @@ import { adminOrdersRepository } from "../../services/postgres/adminOrders.repos
 import { vendorOrdersRepository } from "../../services/postgres/vendorOrders.repository.js";
 import { postgresPaymentRepository } from "../../services/postgres/payment.repository.js";
 import { applyTransferOutcome } from "../../services/transferReconciliation.service.js";
+import { queueSamkaDelivery, usesSamkaLogistics } from "../../services/logistics/samkaLogistics.service.js";
 
 // Helper function to normalize metadata from Paystack (Object or String)
 // Kept for backward compatibility if needed, though pendingOrder strategy supercedes it.
@@ -1665,7 +1666,14 @@ export const updateVendorOrderStatus = async (req, res) => {
         console.error('❌ Customer Notification error:', notifError.message);
       }
 
-      if (notificationContext.isReadyTransition && usePostgresRiderAssignmentWrites()) {
+      if (notificationContext.isReadyTransition && usesSamkaLogistics()) {
+        try {
+          const delivery = await queueSamkaDelivery(notificationContext.vendorOrderDatabaseId);
+          console.log(`Samka delivery queued for Order ${notificationContext.orderId}: ${delivery.id}`);
+        } catch (logisticsError) {
+          console.error("Samka delivery queue error:", logisticsError.message);
+        }
+      } else if (notificationContext.isReadyTransition && usePostgresRiderAssignmentWrites()) {
         try {
           const assignmentResult = await adminOrdersRepository.offerReadyVendorOrderToAvailableRiders({
             vendorOrderLegacyId: vendorOrderId,
