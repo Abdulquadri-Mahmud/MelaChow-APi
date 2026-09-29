@@ -1252,6 +1252,10 @@ export const reconcilePaymentReference = async (req, res) => {
  */
 export const getDailyFinancialSnapshot = async (req, res) => {
     try {
+        if (usePostgresAdminFinanceReads()) {
+            const response = await adminFinanceRepository.getDailyFinancialSnapshot();
+            return res.status(200).json(response);
+        }
         const now = new Date();
         const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
         const endOfToday = new Date(startOfToday);
@@ -1428,6 +1432,10 @@ export const getDailyFinancialSnapshot = async (req, res) => {
  */
 export const getOrderProfitBreakdown = async (req, res) => {
     try {
+        if (usePostgresAdminFinanceReads()) {
+            const response = await adminFinanceRepository.getOrderProfitBreakdown(req.query);
+            return res.status(200).json(response);
+        }
         const { startDate, endDate, page = 1, limit = 25 } = req.query;
         const dateMatch = {};
         if (startDate) dateMatch.$gte = new Date(startDate);
@@ -1534,6 +1542,10 @@ export const getOrderProfitBreakdown = async (req, res) => {
  */
 export const getReconciliationSnapshot = async (req, res) => {
     try {
+        if (usePostgresAdminFinanceReads()) {
+            const response = await adminFinanceRepository.getReconciliationSnapshot();
+            return res.status(200).json(response);
+        }
         const [ledgerBalance, escrowHeld, vendorWalletTotal, riderWalletTotal, pendingVendorWithdrawals, pendingRiderWithdrawals] = await Promise.all([
             getAdminWalletBalance(),
             VendorOrder.aggregate([
@@ -1610,6 +1622,9 @@ const currency = (value) => Number(value || 0);
 
 const getDailyFinanceReportData = async (date) => {
     const { reportDate, start, end } = reportWindow(date);
+    if (usePostgresAdminFinanceReads()) {
+        return adminFinanceRepository.getDailyFinanceReport({ reportDate, start, end });
+    }
     const orders = await Order.find({
         paymentStatus: "paid",
         orderStatus: { $in: completedStatuses },
@@ -1705,6 +1720,14 @@ export const getDailyFinanceReport = async (req, res) => {
 export const exportDailyFinanceReport = async (req, res) => {
     try {
         const report = await getDailyFinanceReportData(req.query.date);
+        if (report.moneyUnit === "kobo") {
+            const moneyFields = ["grossMerchandiseValue", "grossDeliveryFees", "serviceFees", "commission", "vendorEarnings", "deliverySpread", "platformRevenue", "customerPayments"];
+            moneyFields.forEach((field) => { report.summary[field] = Number(report.summary[field] || 0) / 100; });
+            report.restaurants = report.restaurants.map((row) => ({ ...row, foodSales: row.foodSales / 100, commission: row.commission / 100, vendorEarnings: row.vendorEarnings / 100 }));
+            const orderFields = ["foodSubtotal", "deliveryFee", "serviceFee", "totalPaid", "commission", "vendorEarnings", "deliverySpread", "platformRevenue"];
+            report.orders = report.orders.map((row) => ({ ...row, ...Object.fromEntries(orderFields.map((field) => [field, Number(row[field] || 0) / 100])) }));
+            report.moneyUnit = "naira";
+        }
         const workbook = new ExcelJS.Workbook();
         workbook.creator = "MelaChow";
         workbook.created = new Date();

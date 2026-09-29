@@ -6,19 +6,30 @@ import walletMode from "../../model/wallet/wallet.mode.js";
 import VendorOrder from "../../model/vendor/VendorOrder.js";
 import Order from "../../model/order/Order.js";
 import User from "../../model/user.model.js";
+import "../../model/rider.model.js";
 import { validateVendorLocation } from "../../services/locationService.js";
 import { redisClient, isRedisReady } from "../../config/redis.js";
 import City from "../../model/location/City.js";
 import VendorDeliveryPromo from "../../model/promo/VendorDeliveryPromo.js";
 import VendorDeliveryClaim from "../../model/promo/VendorDeliveryClaim.js";
 import { buildPromoIdentity } from "../../utils/promoIdentity.js";
-import { usePostgresVendorOrderReads } from "../../services/postgres/compat.js";
+import { usePostgresMenuReads, usePostgresRiderAssignmentWrites, usePostgresVendorOrderReads } from "../../services/postgres/compat.js";
+import { menuCatalogRepository } from "../../services/postgres/menuCatalog.repository.js";
+import { disputeRepository } from "../../services/postgres/dispute.repository.js";
+import {
+  postgresVendorIdentityEnabled, publicVendor, setVendorDeletedIdentity,
+  setVendorLiveStatusIdentity, updateVendorProfileIdentity,
+  updateVendorTodayHoursIdentity,
+  getVendorDashboardIdentity,
+} from "../../services/postgres/vendorIdentity.repository.js";
 import { vendorOrdersRepository } from "../../services/postgres/vendorOrders.repository.js";
+import { runShadowComparison } from "../../services/postgres/shadowCompare.js";
 import { usePostgresWalletReads } from "../../services/postgres/compat.js";
 import { walletRepository } from "../../services/postgres/wallet.repository.js";
 import MenuItem from "../../model/menu/MenuItem.js";
 import MenuItemPortion from "../../model/menu/MenuItemPortion.js";
 import { PUBLIC_VENDOR_FILTER } from "../../utils/vendorAvailability.js";
+import { getDeliveryQuotes } from "../../services/deliveryPricing.service.js";
 
 const stripRecipientCode = (value) => {
   if (!value || typeof value !== "object") return value;
@@ -212,6 +223,16 @@ export const getVendorById = async (req, res) => {
 
     const id = req.vendor._id;
 
+    if (postgresVendorIdentityEnabled()) {
+      const dashboard = await getVendorDashboardIdentity(id);
+      if (!dashboard) return res.status(404).json({ success: false, message: "Vendor not found" });
+      const [walletResult, vendorOrders] = await Promise.all([
+        walletRepository.getVendorWallet(dashboard.vendor.id),
+        vendorOrdersRepository.listVendorOrders(dashboard.vendor.id),
+      ]);
+      return res.status(200).json({ success: true, data: stripRecipientCode({ ...publicVendor(dashboard.vendor), wallet: walletResult.data || null, vendorOrders, liveReadiness: dashboard.liveReadiness }) });
+    }
+
     // 1. Find vendor by MongoDB ObjectId
     const vendor = await vendorModel.findById(id).select("+payoutDetails").lean();
 
@@ -289,6 +310,22 @@ export const setVendorLiveStatus = async (req, res) => {
       return res.status(400).json({ success: false, message: "A live status is required." });
     }
 
+    if (postgresVendorIdentityEnabled()) {
+      const result = await setVendorLiveStatusIdentity(vendorId, isLive);
+      if (result.error === "not_found") return res.status(404).json({ success: false, message: "Vendor not found." });
+      if (result.error === "not_eligible") return res.status(403).json({ success: false, message: "Your account must be verified and approved before going live." });
+      if (result.error === "menu_required") return res.status(400).json({ success: false, message: "Add at least one available menu item with an in-stock priced portion before going live." });
+      vendorModel.updateOne(
+        { _id: result.vendor.legacyMongoId || vendorId },
+        { $set: { isLive: result.vendor.isLive, publishedAt: result.vendor.publishedAt } },
+      ).catch((error) => console.error("Vendor live-status Mongo mirror failed:", error.message));
+      return res.json({
+        success: true,
+        message: isLive ? "Your store is now live and visible to customers." : "Your store is paused and no longer accepting new orders.",
+        data: { isLive: result.vendor.isLive, publishedAt: result.vendor.publishedAt },
+      });
+    }
+
     const vendor = await vendorModel.findById(vendorId);
     if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found." });
 
@@ -340,6 +377,31 @@ export const setVendorLiveStatus = async (req, res) => {
 export const getVendorForUserDisplay = async (req, res) => {
   try {
     const id = req.params.id || req.query.id;
+
+    if (usePostgresMenuReads()) {
+      const menu = await menuCatalogRepository.getFullVendorMenu(id);
+      if (!menu?.vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
+      const quote = req.query.addressId && req.postgresUserId
+        ? (await getDeliveryQuotes({ addressId: req.query.addressId, vendorIds: [menu.vendor._id], userId: req.postgresUserId, checkout: false }))[0]
+        : null;
+      const vendor = quote ? {
+        ...menu.vendor,
+        deliveryFee: quote.deliveryFeeKobo / 100,
+        distanceKm: quote.distanceKm,
+        estimatedDeliveryTime: quote.estimatedDurationMinutes || menu.vendor.estimatedDeliveryTime,
+        deliveryQuote: { ...quote, deliveryFee: quote.deliveryFeeKobo / 100, deliveryFeeKobo: undefined },
+        deliverable: quote.deliverable,
+      } : menu.vendor;
+      return res.status(200).json({
+        success: true,
+        data: {
+          vendor,
+          foods: (menu.sections || []).flatMap((section) => section.items || []),
+          combos: menu.combos || [],
+          moneyUnit: "naira",
+        },
+      });
+    }
 
     // Find vendor by ObjectId or slug
     const vendor = await vendorModel
@@ -407,6 +469,19 @@ export const updateVendor = async (req, res) => {
 
     const id = req.vendor._id;
     const updates = req.body;
+
+    if (postgresVendorIdentityEnabled()) {
+      const vendor = await updateVendorProfileIdentity(id, updates);
+      if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
+      const mirrorId = vendor.legacyMongoId || id;
+      const mirrorUpdates = {};
+      ["name", "phone", "storeName", "storeDescription", "logo", "coverImage", "address", "cuisineTypes", "openingHours", "acceptsDelivery", "flatRateDeliveryFee", "deliveryRadiusKm", "tags"].forEach((key) => {
+        if (updates[key] !== undefined) mirrorUpdates[key] = updates[key];
+      });
+      vendorModel.updateOne({ _id: mirrorId }, { $set: mirrorUpdates }, { runValidators: true })
+        .catch((error) => console.error("Vendor profile Mongo mirror failed:", error.message));
+      return res.status(200).json({ success: true, message: "Vendor updated successfully", data: publicVendor(vendor) });
+    }
 
     // Handle nested payoutDetails to prevent overwriting the whole object
     if (updates.payoutDetails) {
@@ -480,6 +555,22 @@ export const updateVendorTodayHours = async (req, res) => {
     const today = days.includes(weekday) ? weekday : days[new Date().getDay()];
 
     const { closed, close, open } = req.body || {};
+
+    if (postgresVendorIdentityEnabled()) {
+      const identity = await import("../../services/postgres/vendorIdentity.repository.js").then(({ findVendorByTokenId }) => findVendorByTokenId(req.vendor._id));
+      if (!identity) return res.status(404).json({ success: false, message: "Vendor not found" });
+      const currentDayHours = identity.openingHours?.[today] || {};
+      const nextDayHours = {
+        open: open || currentDayHours.open || "09:00",
+        close: close || currentDayHours.close || "17:00",
+        closed: typeof closed === "boolean" ? closed : !!currentDayHours.closed,
+      };
+      if (!nextDayHours.closed && (!nextDayHours.open || !nextDayHours.close)) return res.status(400).json({ success: false, message: "Opening and closing time are required when the restaurant is open." });
+      const vendor = await updateVendorTodayHoursIdentity(req.vendor._id, today, nextDayHours);
+      vendorModel.updateOne({ _id: vendor.legacyMongoId || req.vendor._id }, { $set: { [`openingHours.${today}`]: nextDayHours } })
+        .catch((error) => console.error("Vendor hours Mongo mirror failed:", error.message));
+      return res.status(200).json({ success: true, message: nextDayHours.closed ? "Restaurant marked closed for today." : "Today's closing time updated.", data: publicVendor(vendor), day: today, todayHours: nextDayHours });
+    }
     const vendor = await vendorModel.findById(req.vendor._id);
 
     if (!vendor) {
@@ -540,6 +631,14 @@ export const deleteVendor = async (req, res) => {
 
     const id = req.vendor._id;
 
+    if (postgresVendorIdentityEnabled()) {
+      const vendor = await setVendorDeletedIdentity(id, true);
+      if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
+      vendorModel.updateOne({ _id: vendor.legacyMongoId || id }, { $set: { deletedAt: vendor.deletedAt, active: false, isLive: false, publishedAt: null } })
+        .catch((error) => console.error("Vendor deletion Mongo mirror failed:", error.message));
+      return res.status(200).json({ success: true, message: "Vendor soft-deleted successfully" });
+    }
+
     // mark as deleted instead of permanent removal
     const vendor = await vendorModel.findByIdAndUpdate(
       id,
@@ -577,6 +676,14 @@ export const restoreVendor = async (req, res) => {
     }
 
     const id = req.vendor._id;
+
+    if (postgresVendorIdentityEnabled()) {
+      const vendor = await setVendorDeletedIdentity(id, false);
+      if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
+      vendorModel.updateOne({ _id: vendor.legacyMongoId || id }, { $set: { deletedAt: null, active: true } })
+        .catch((error) => console.error("Vendor restoration Mongo mirror failed:", error.message));
+      return res.status(200).json({ success: true, message: "Vendor restored successfully", data: publicVendor(vendor) });
+    }
 
     // restore by nulling deletedAt
     const vendor = await vendorModel.findByIdAndUpdate(
@@ -769,19 +876,19 @@ export const getVendorOrders = async (req, res) => {
 
     const id = req.vendor._id;
 
-    const vendor = await vendorModel.findById(id);
-    if (!vendor) {
-      return res.status(404).json({
-        success: false,
-        message: "Vendor not found",
-      });
-    }
-
     if (usePostgresVendorOrderReads()) {
       const vendorOrders = await vendorOrdersRepository.listVendorOrders(id);
       return res.status(200).json({
         success: true,
         data: vendorOrders,
+      });
+    }
+
+    const vendor = await vendorModel.findById(id);
+    if (!vendor) {
+      return res.status(404).json({
+        success: false,
+        message: "Vendor not found",
       });
     }
 
@@ -805,6 +912,13 @@ export const getVendorOrders = async (req, res) => {
       })
       .sort({ createdAt: -1 }) // Newest first
       .lean();
+
+    runShadowComparison({
+      domain: "vendor-orders",
+      operation: "list",
+      primary: vendorOrders,
+      shadow: () => vendorOrdersRepository.listVendorOrders(id),
+    });
 
     res.status(200).json({
       success: true,
@@ -843,7 +957,7 @@ export const getVendorOrderById = async (req, res) => {
     }
 
     // ✅ Validate MongoDB ObjectId format (24 hex characters)
-    if (!vendorOrderId.match(/^[0-9a-fA-F]{24}$/)) {
+    if (!usePostgresVendorOrderReads() && !vendorOrderId.match(/^[0-9a-fA-F]{24}$/)) {
       console.error('❌ Invalid vendorOrderId format:', {
         received: vendorOrderId,
         length: vendorOrderId.length,
@@ -906,6 +1020,13 @@ export const getVendorOrderById = async (req, res) => {
         message: "Vendor order not found",
       });
     }
+
+    runShadowComparison({
+      domain: "vendor-orders",
+      operation: "detail",
+      primary: vendorOrder,
+      shadow: () => vendorOrdersRepository.getVendorOrder(vendorOrderId),
+    });
 
     // Security check: Ensure order belongs to authenticated vendor
     if (req.vendor && vendorOrder.restaurantId.toString() !== req.vendor._id.toString()) {
@@ -1059,6 +1180,23 @@ export const respondToRemakeRequest = async (req, res) => {
         success: false,
         message: "decision must be 'yes' or 'no'",
       });
+    }
+
+    if (usePostgresRiderAssignmentWrites()) {
+      const result = await disputeRepository.respondToRemake(vendorOrderId, req.vendor._id, decision);
+      if (!result.success) return res.status(result.status).json(result);
+      try {
+        const { disputeEscalationQueue } = await import("../../config/queue.js");
+        const job = await disputeEscalationQueue.getJob(`dispute-escalation:${result.orderDatabaseId}`);
+        if (job) await job.remove();
+      } catch (error) { console.warn("Dispute timer cancellation failed - non-fatal", error.message); }
+      const { sendNotification } = await import("../../services/notification.service.js");
+      if (result.accepted && result.riderId) {
+        sendNotification(result.riderId, "order_status_update", { orderId: result.orderId, orderDatabaseId: result.orderDatabaseId, newStatus: "preparing", message: "Good news! The vendor is remaking the food. Please wait for the new pickup notification." }, "rider").catch((error) => console.warn("Rider remake notify failed - non-fatal", error.message));
+      } else if (!result.accepted) {
+        sendNotification(null, "dispute_escalation_admin", { orderId: result.orderId, orderDatabaseId: result.orderDatabaseId, message: `Vendor declined to remake Order #${result.orderId}. Admin resolution required.`, vendorDecision: "declined" }, "admin").catch((error) => console.warn("Admin dispute notify failed - non-fatal", error.message));
+      }
+      return res.status(200).json({ success: true, message: result.message });
     }
 
     if (!vendorOrderId?.match(/^[0-9a-fA-F]{24}$/)) {

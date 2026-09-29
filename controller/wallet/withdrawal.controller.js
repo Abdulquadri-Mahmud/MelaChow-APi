@@ -4,13 +4,59 @@ import Vendor from "../../model/vendor/vendor.model.js";
 import Wallet from "../../model/wallet/wallet.mode.js";
 import Withdrawal from "../../model/wallet/Withdrawal.model.js";
 import RiderWithdrawal from "../../model/wallet/RiderWithdrawal.model.js";
-import { usePostgresWalletReads } from "../../services/postgres/compat.js";
+import { usePostgresPayoutWrites, usePostgresWalletReads } from "../../services/postgres/compat.js";
 import { walletRepository } from "../../services/postgres/wallet.repository.js";
+import { payoutRepository } from "../../services/postgres/payout.repository.js";
 import { calculatePaystackTransferFee, getEffectiveFeeConfig, computeActorPayout } from "../../utils/paystackFees.js";
 import { checkPaystackBalance, initiatePaystackTransfer } from "../../services/paystackTransfer.service.js";
 import { applyTransferOutcome, findWithdrawal, reconcileWithdrawal } from "../../services/transferReconciliation.service.js";
 import { getNextPayoutWindowMessage } from "../../utils/payoutSchedule.js";
 import { getPlatformConfig } from "../../services/platformConfig.service.js";
+
+const initiatePostgresVendorWithdrawal = async (req, res, amount) => {
+  const context = await payoutRepository.getOwnerContext("vendor", req.vendor._id);
+  if (!context) return res.status(404).json({ message: "Vendor or wallet not found" });
+  const details = context.owner.payoutDetails && typeof context.owner.payoutDetails === "object" ? context.owner.payoutDetails : {};
+  if (!details.payoutEnabled || !details.recipientCode) return res.status(400).json({ message: "No verified bank account on file. Please add a bank account before withdrawing." });
+  const platformConfig = await getPlatformConfig();
+  const payoutCalc = computeActorPayout("vendor", amount, getEffectiveFeeConfig("vendor", { ...context.owner, payoutFeeOverride: context.owner.payoutFeeOverride }, platformConfig));
+  if (payoutCalc.net <= 0) return res.status(400).json({ message: "Withdrawal amount too small after fees" });
+
+  const localBypass = process.env.NODE_ENV !== "production" && process.env.LOCAL_VENDOR_PAYOUT_BYPASS === "true";
+  if (!localBypass) {
+    try {
+      const { sufficient } = await checkPaystackBalance(Math.round(payoutCalc.net * 100));
+      if (!sufficient) return res.status(400).json({ success: false, code: "PAYSTACK_BALANCE_PENDING_SETTLEMENT", message: getNextPayoutWindowMessage().message });
+    } catch {
+      return res.status(503).json({ success: false, message: "Could not verify payout availability right now. Please try again shortly." });
+    }
+  }
+
+  const reference = `WD_${randomUUID().replace(/-/g, "").toUpperCase()}`;
+  const reserved = await payoutRepository.reserveWithdrawal({ type: "vendor", tokenId: req.vendor._id, requestedAmountNaira: amount, transferFeeNaira: payoutCalc.feeChargedToActor, netAmountNaira: payoutCalc.net, appliedMarkupNaira: payoutCalc.markupChargedToActor, reference });
+  if (reserved.error === "insufficient_balance") return res.status(400).json({ message: `Insufficient balance. Available: ₦${reserved.balance.toLocaleString()}` });
+  if (reserved.error === "payout_in_progress") return res.status(400).json({ message: "You already have a withdrawal in progress. Please wait for it to complete." });
+  if (reserved.error === "cooldown") return res.status(429).json({ message: `Withdrawal cooldown active. You can withdraw again in ${reserved.hoursRemaining} hour${reserved.hoursRemaining !== 1 ? "s" : ""}.` });
+  if (reserved.error) return res.status(400).json({ message: "Unable to reserve withdrawal" });
+
+  if (localBypass) {
+    const withdrawal = await payoutRepository.markProcessing("vendor", reference, { transferCode: `local_${reference}`, providerStatus: "local_test" });
+    return res.json({ message: "Local test withdrawal reserved successfully", withdrawal });
+  }
+  try {
+    const provider = await initiatePaystackTransfer({ recipientCode: details.recipientCode, amountKobo: Math.round(payoutCalc.net * 100), reference, reason: `MelaChow vendor payout — ${context.owner.storeName}` });
+    const withdrawal = await payoutRepository.markProcessing("vendor", reference, { transferCode: provider.transferCode, providerStatus: provider.status });
+    return res.json({ message: "Withdrawal initiated successfully", withdrawal });
+  } catch (error) {
+    const definitive = error.response && error.response.status >= 400 && error.response.status < 500;
+    if (definitive) {
+      await payoutRepository.restoreFailed("vendor", reference, error.response?.data?.message || "Paystack rejected transfer");
+      return res.status(502).json({ message: "Transfer initiation failed. Your balance has been restored." });
+    }
+    await payoutRepository.markProcessing("vendor", reference, { uncertain: true });
+    return res.status(202).json({ message: "Transfer status is uncertain. Funds remain reserved while Paystack reconciliation runs.", reference });
+  }
+};
 
 /**
  * ─── FUNCTION 1: initiateWithdrawal ───
@@ -25,6 +71,8 @@ export const initiateWithdrawal = async (req, res) => {
     if (amount > 1000000) {
       return res.status(400).json({ message: "Maximum withdrawal amount is ₦1,000,000" });
     }
+
+    if (usePostgresPayoutWrites()) return initiatePostgresVendorWithdrawal(req, res, amount);
 
     // STEP 2 — Fetch vendor with payout details
     const vendor = await Vendor.findById(req.vendor._id).select("+payoutDetails");
@@ -410,8 +458,47 @@ export const getAdminWithdrawals = async (req, res) => {
 };
 
 // PATCH /api/admin/finance/withdrawals/:id/approve
+const approvePostgresWithdrawal = async (req, res) => {
+  const found = await payoutRepository.findById(req.params.id);
+  if (!found) return res.status(404).json({ success: false, message: "Withdrawal not found" });
+  const { type, withdrawal } = found;
+  if (withdrawal.status !== "pending") return res.status(400).json({ success: false, message: `Only pending withdrawals can be approved. Current status: ${withdrawal.status}` });
+  if (!withdrawal.walletDebitedAt) return res.status(409).json({ success: false, message: "Approval blocked: no matching PostgreSQL wallet debit exists for this withdrawal." });
+
+  const localBypass = process.env.NODE_ENV !== "production" && process.env.LOCAL_VENDOR_PAYOUT_BYPASS === "true";
+  if (!localBypass) {
+    try {
+      const { sufficient } = await checkPaystackBalance(Math.round(withdrawal.netAmount * 100));
+      if (!sufficient) return res.status(400).json({ success: false, code: "PAYSTACK_BALANCE_PENDING_SETTLEMENT", message: `Approval blocked: ${getNextPayoutWindowMessage().message}` });
+    } catch {
+      return res.status(503).json({ success: false, message: "Could not verify Paystack balance. Approval deferred — try again shortly." });
+    }
+  }
+
+  const claimed = await payoutRepository.claimPending(type, withdrawal.paystackReference);
+  if (!claimed) return res.status(409).json({ success: false, message: "Withdrawal is already being processed or has no confirmed wallet debit." });
+  if (localBypass) {
+    const completed = await payoutRepository.markCompleted(type, withdrawal.paystackReference, { status: "success" });
+    return res.json({ success: true, message: "Local withdrawal approved and completed", withdrawal: completed });
+  }
+  try {
+    const provider = await initiatePaystackTransfer({ recipientCode: withdrawal.recipientCode, amountKobo: Math.round(withdrawal.netAmount * 100), reference: withdrawal.paystackReference, reason: `MelaChow ${type} payout approved — ${withdrawal.accountName}` });
+    const updated = await payoutRepository.markProcessing(type, withdrawal.paystackReference, { transferCode: provider.transferCode, providerStatus: provider.status });
+    return res.json({ success: true, message: "Withdrawal approved and sent to Paystack", withdrawal: updated });
+  } catch (error) {
+    const definitive = error.response && error.response.status >= 400 && error.response.status < 500;
+    if (definitive) {
+      const restored = await payoutRepository.restoreFailed(type, withdrawal.paystackReference, error.response?.data?.message || "Paystack rejected transfer");
+      return res.status(502).json({ success: false, message: "Paystack rejected the transfer and funds were restored.", withdrawal: restored });
+    }
+    const uncertain = await payoutRepository.markProcessing(type, withdrawal.paystackReference, { uncertain: true });
+    return res.status(202).json({ success: true, message: "Transfer status is uncertain. Funds remain reserved for reconciliation.", withdrawal: uncertain });
+  }
+};
+
 export const approvePendingWithdrawal = async (req, res) => {
   try {
+    if (usePostgresPayoutWrites()) return await approvePostgresWithdrawal(req, res);
     const { id } = req.params;
 
     // Check Withdrawal
@@ -588,6 +675,42 @@ export const forceFailWithdrawal = async (req, res) => {
 export const retryWithdrawal = async (req, res) => {
   try {
     const { id } = req.params;
+    if (usePostgresPayoutWrites()) {
+      const found = await payoutRepository.findById(id);
+      if (!found) return res.status(404).json({ success: false, message: "Withdrawal not found" });
+      if (!["failed", "reversed"].includes(found.withdrawal.status) || !found.withdrawal.fundsRestoredAt) return res.status(409).json({ success: false, message: "Retry blocked: the original PostgreSQL withdrawal is not safely restored." });
+      const reference = `WD_RETRY_${randomUUID().replace(/-/g, "").toUpperCase()}`;
+      const reserved = await payoutRepository.reserveRetry(found.type, id, reference);
+      if (reserved.error) return res.status(409).json({ success: false, message: reserved.error === "insufficient_balance" ? "Insufficient wallet balance." : "This withdrawal cannot be retried or already has a retry." });
+      const retry = reserved.withdrawal;
+      const localBypass = process.env.NODE_ENV !== "production" && process.env.LOCAL_VENDOR_PAYOUT_BYPASS === "true";
+      if (!localBypass) {
+        try {
+          const { sufficient } = await checkPaystackBalance(Math.round(retry.netAmount * 100));
+          if (!sufficient) {
+            await payoutRepository.restoreFailed(found.type, reference, "Paystack balance pending settlement");
+            return res.status(400).json({ success: false, code: "PAYSTACK_BALANCE_PENDING_SETTLEMENT", message: `Retry blocked: ${getNextPayoutWindowMessage().message}` });
+          }
+        } catch {
+          await payoutRepository.restoreFailed(found.type, reference, "Paystack balance could not be verified");
+          return res.status(503).json({ success: false, message: "Could not verify Paystack balance. Reserved funds were restored." });
+        }
+      }
+      if (localBypass) {
+        const completed = await payoutRepository.markCompleted(found.type, reference, { status: "success" });
+        return res.json({ success: true, message: "Local withdrawal retry completed", withdrawal: completed });
+      }
+      try {
+        const provider = await initiatePaystackTransfer({ recipientCode: retry.recipientCode, amountKobo: Math.round(retry.netAmount * 100), reference, reason: `MelaChow ${found.type} payout retry — ${retry.accountName}` });
+        const updated = await payoutRepository.markProcessing(found.type, reference, { transferCode: provider.transferCode, providerStatus: provider.status });
+        return res.json({ success: true, message: "Withdrawal retry submitted safely", withdrawal: updated });
+      } catch (error) {
+        const definitive = error.response && error.response.status >= 400 && error.response.status < 500;
+        if (definitive) await payoutRepository.restoreFailed(found.type, reference, error.response?.data?.message || "Paystack rejected retry");
+        else await payoutRepository.markProcessing(found.type, reference, { uncertain: true });
+        return res.status(502).json({ success: false, message: definitive ? "Paystack rejected the retry and funds were restored." : "Transfer status is uncertain. Funds remain reserved for reconciliation." });
+      }
+    }
     const found = await findWithdrawal({ id });
     if (!found) return res.status(404).json({ success: false, message: "Withdrawal not found" });
 

@@ -1,6 +1,8 @@
 import Discount from "../model/discount/Discount.js";
 import Order from "../model/order/Order.js";
 import { getPlatformConfig } from "./platformConfig.service.js";
+import { usePostgresDiscountWrites } from "./postgres/compat.js";
+import { discountRepository } from "./postgres/discount.repository.js";
 
 /**
  * 🛡️ Service to handle all Discount Logic
@@ -16,12 +18,12 @@ class DiscountService {
      */
     async validateDiscount(code, context) {
         try {
-            const discount = await Discount.findOne({
+            const discount = usePostgresDiscountWrites() ? await discountRepository.byCode(code) : await Discount.findOne({
                 code: code.toUpperCase(),
                 isActive: true
             }).select("+usedBy.hashedDeviceId +usedBy.phoneHash");
 
-            if (!discount) {
+            if (!discount || !discount.isActive) {
                 return { valid: false, error: "Invalid discount code" };
             }
 
@@ -41,12 +43,13 @@ class DiscountService {
 
             // 3. 👤 User Usage Limits
             if (context.userId && discount.userUsageLimit !== null) {
-                const userUsageCount = await Order.countDocuments({
+                const postgresCounts = usePostgresDiscountWrites() ? await discountRepository.usageCounts(discount._id, context) : null;
+                const userUsageCount = postgresCounts ? postgresCounts.identity : await Order.countDocuments({
                     userId: context.userId,
                     "appliedDiscount.code": discount.code,
                     orderStatus: { $ne: "cancelled" },
                 });
-                const usedBy = discount.usedBy || [];
+                const usedBy = usePostgresDiscountWrites() ? [] : (discount.usedBy || []);
                 const matchingIdentityUsageCount = usedBy.filter((usage) => {
                     const sameUser =
                         usage.userId &&
@@ -247,6 +250,7 @@ class DiscountService {
     }
 
     async recordDiscountUsage(discountId, usage, session) {
+        if (usePostgresDiscountWrites()) return discountRepository.recordUsage(discountId, usage);
         return Discount.updateOne(
             {
                 _id: discountId,

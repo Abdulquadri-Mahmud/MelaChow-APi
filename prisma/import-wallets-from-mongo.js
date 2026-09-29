@@ -16,6 +16,7 @@ const stats = {
 
 const toLegacyId = (value) => (value ? String(value) : null);
 const asDate = (value) => (value ? new Date(value) : undefined);
+const toKobo = (value) => Math.round(Number(value || 0) * 100);
 
 const parseArgs = () => {
   const args = new Set(process.argv.slice(2));
@@ -89,10 +90,10 @@ const importWalletTransactions = async ({ wallet, walletId, dryRun }) => {
       legacyMongoId: toLegacyId(transaction._id),
       walletId,
       type: transaction.type === "debit" ? "debit" : "credit",
-      amount: transaction.amount || 0,
+      amount: toKobo(transaction.amount),
       transactionType: mapTransactionType(transaction.transactionType),
       description: transaction.description || null,
-      reportingAmount: transaction.reportingAmount ?? null,
+      reportingAmount: transaction.reportingAmount == null ? null : toKobo(transaction.reportingAmount),
       orderId,
       date: asDate(transaction.date) || new Date(),
       metadata: {
@@ -132,9 +133,9 @@ const importWallets = async (dryRun, limit) => {
       legacyMongoId: toLegacyId(wallet._id),
       ownerId,
       ownerModel: wallet.ownerModel,
-      balance: wallet.balance || 0,
-      totalEarned: wallet.totalEarned || 0,
-      totalWithdrawn: wallet.totalWithdrawn || 0,
+      balance: toKobo(wallet.balance),
+      totalEarned: toKobo(wallet.totalEarned),
+      totalWithdrawn: toKobo(wallet.totalWithdrawn),
       createdAt: asDate(wallet.createdAt),
       updatedAt: asDate(wallet.updatedAt),
     };
@@ -176,9 +177,9 @@ const importVendorWithdrawals = async (dryRun, limit) => {
       legacyMongoId: toLegacyId(withdrawal._id),
       vendorId,
       walletId: wallet.id,
-      requestedAmount: withdrawal.requestedAmount || 0,
-      transferFee: withdrawal.transferFee || 0,
-      netAmount: withdrawal.netAmount || 0,
+      requestedAmount: toKobo(withdrawal.requestedAmount),
+      transferFee: toKobo(withdrawal.transferFee),
+      netAmount: toKobo(withdrawal.netAmount),
       status: withdrawal.status || "pending",
       paystackReference: withdrawal.paystackReference,
       paystackTransferCode: withdrawal.paystackTransferCode || null,
@@ -227,9 +228,9 @@ const importRiderWithdrawals = async (dryRun, limit) => {
       legacyMongoId: toLegacyId(withdrawal._id),
       riderId,
       walletId: wallet.id,
-      requestedAmount: withdrawal.requestedAmount || 0,
-      transferFee: withdrawal.transferFee || 0,
-      netAmount: withdrawal.netAmount || 0,
+      requestedAmount: toKobo(withdrawal.requestedAmount),
+      transferFee: toKobo(withdrawal.transferFee),
+      netAmount: toKobo(withdrawal.netAmount),
       status: withdrawal.status || "pending",
       paystackReference: withdrawal.paystackReference,
       paystackTransferCode: withdrawal.paystackTransferCode || null,

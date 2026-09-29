@@ -6,6 +6,10 @@ import jwt from "jsonwebtoken";
 import { blockToken } from "../../middleware/tokenBlocklist.js";
 import crypto from "crypto";
 import ActivityLog from "../../model/ActivityLog.js";
+import { usePostgresAdminWrites } from "../../services/postgres/compat.js";
+import { adminAccountRepository } from "../../services/postgres/adminAccount.repository.js";
+
+const apiAdmin = (row) => ({ ...row, _id: row.id, role: row.role === "super_admin" ? "super-admin" : row.role === "finance_admin" ? "finance-admin" : row.role });
 
 const hashLoginOtp = (otp) => crypto.createHash("sha256").update(String(otp)).digest("hex");
 const signMfaChallenge = (admin) => jwt.sign(
@@ -59,6 +63,29 @@ export const loginAdmin = async (req, res) => {
 
         if (!email || !password) {
             return res.status(400).json({ message: 'Email and password are required' });
+        }
+
+        if (usePostgresAdminWrites()) {
+            const raw = await adminAccountRepository.findByEmail(email, { raw: true });
+            if (!raw) return res.status(401).json({ message: 'Invalid credentials' });
+            const admin = apiAdmin(raw);
+            if (!raw.isActive) return res.status(401).json({ message: 'Account deactivated. Please contact super admin.' });
+            if (raw.lockUntil && raw.lockUntil > new Date()) return res.status(423).json({ message: 'Account temporarily locked due to multiple failed login attempts. Try again in 15 minutes.' });
+            if (!await adminAccountRepository.comparePassword(raw, password)) {
+                const failed = await adminAccountRepository.recordPasswordFailure(raw);
+                const attemptsLeft = failed.lockUntil ? 0 : 5 - failed.loginAttempts;
+                return res.status(attemptsLeft > 0 ? 401 : 423).json({ message: attemptsLeft > 0 ? `Invalid credentials. ${attemptsLeft} attempts remaining.` : 'Account locked due to multiple failed attempts. Try again in 15 minutes.' });
+            }
+            await adminAccountRepository.resetLoginAttempts(raw.id);
+            if (admin.role === 'super-admin') {
+                const otp = generateOTP();
+                await adminAccountRepository.setLoginOtp(raw.id, { hash: hashLoginOtp(otp), expires: new Date(Date.now() + 10 * 60 * 1000) });
+                await sendMail({ to: raw.email, subject: 'Your MelaChow Super-Admin Login Code', html: `<div><h2>Super-admin sign-in verification</h2><p>Enter this code: <strong>${otp}</strong></p><p>It expires in 10 minutes.</p></div>` });
+                return res.status(200).json({ success: true, requiresMfa: true, challengeToken: signMfaChallenge(admin), message: 'A verification code was sent to your super-admin email.' });
+            }
+            const accessToken = generateAccessToken(raw.id, admin.role), refreshToken = generateRefreshToken(raw.id, admin.role);
+            sendAuthCookies(res, accessToken, refreshToken, 'admin');
+            return res.status(200).json({ success: true, message: 'Login successful', admin: await adminAccountRepository.get(raw.id) });
         }
 
         // Find admin with password field
@@ -152,6 +179,21 @@ export const verifyAdminLoginOtp = async (req, res) => {
             return res.status(401).json({ message: 'Invalid login challenge' });
         }
 
+        if (usePostgresAdminWrites()) {
+            const publicAdmin = await adminAccountRepository.get(challenge.id);
+            const raw = publicAdmin ? await adminAccountRepository.findByEmail(publicAdmin.email, { raw: true }) : null;
+            if (!raw || !raw.isActive || raw.role !== 'super_admin') return res.status(401).json({ message: 'Invalid login challenge' });
+            if (!raw.loginOtpHash || !raw.loginOtpExpires || raw.loginOtpExpires < new Date()) return res.status(401).json({ message: 'Verification code expired. Sign in again.' });
+            if (raw.loginOtpAttempts >= 5) return res.status(423).json({ message: 'Too many verification attempts. Sign in again.' });
+            const submitted = Buffer.from(hashLoginOtp(otp), 'hex'), expected = Buffer.from(raw.loginOtpHash, 'hex');
+            if (submitted.length !== expected.length || !crypto.timingSafeEqual(submitted, expected)) { await adminAccountRepository.failLoginOtp(raw.id, raw.loginOtpAttempts + 1); return res.status(401).json({ message: 'Invalid verification code' }); }
+            const loginContext = getLoginContext(req);
+            const admin = await adminAccountRepository.completeMfa(raw.id, { details: `Super-admin login verified from ${loginContext.device.label}; ${loginContext.location.label}`, ipAddress: loginContext.ipAddress, userAgent: loginContext.userAgent, authentication: 'password+email-otp', device: loginContext.device, location: loginContext.location, requestId: req.id || req.headers['x-request-id'] || null });
+            const accessToken = generateAccessToken(raw.id, admin.role), refreshToken = generateRefreshToken(raw.id, admin.role);
+            sendAuthCookies(res, accessToken, refreshToken, 'admin');
+            return res.status(200).json({ success: true, message: 'Login verified', admin });
+        }
+
         const admin = await Admin.findById(challenge.id).select('+loginOtpHash +loginOtpExpires +loginOtpAttempts');
         if (!admin || !admin.isActive || admin.role !== 'super-admin') return res.status(401).json({ message: 'Invalid login challenge' });
         if (!admin.loginOtpHash || !admin.loginOtpExpires || admin.loginOtpExpires < new Date()) {
@@ -213,6 +255,15 @@ export const forgotAdminPassword = async (req, res) => {
 
         if (!email) {
             return res.status(400).json({ message: 'Email is required' });
+        }
+
+        if (usePostgresAdminWrites()) {
+            const admin = await adminAccountRepository.findByEmail(email, { raw: true });
+            if (!admin) return res.status(200).json({ message: 'If an account exists with this email, a reset code will be sent.' });
+            const otp = generateOTP();
+            await adminAccountRepository.setResetOtp(admin.id, otp, new Date(Date.now() + 10 * 60 * 1000));
+            await sendMail({ to: email, subject: 'Reset Your Admin Password - MelaChow', html: `<div><h2>Reset Password OTP</h2><p>Your code is <strong>${otp}</strong>. It expires in 10 minutes.</p></div>` });
+            return res.status(200).json({ message: 'Password reset code sent to your email', email });
         }
 
         const admin = await Admin.findOne({ email }).select('+otp +otpExpires');
@@ -278,6 +329,16 @@ export const verifyAdminResetCode = async (req, res) => {
             return res.status(400).json({ message: 'Email and code are required' });
         }
 
+        if (usePostgresAdminWrites()) {
+            const admin = await adminAccountRepository.findByEmail(email, { raw: true });
+            if (!admin) return res.status(404).json({ message: 'Admin not found' });
+            if (String(admin.otp || '').trim() !== String(otp).trim()) return res.status(400).json({ message: 'Invalid reset code' });
+            if (!admin.otpExpires || admin.otpExpires < new Date()) return res.status(400).json({ message: 'Reset code expired' });
+            const resetToken = generateResetToken();
+            await adminAccountRepository.setResetToken(admin.id, resetToken, new Date(Date.now() + 30 * 60 * 1000));
+            return res.status(200).json({ success: true, message: 'Reset code verified', resetToken });
+        }
+
         const admin = await Admin.findOne({ email }).select('+otp +otpExpires');
 
         if (!admin) {
@@ -327,6 +388,15 @@ export const resetAdminPassword = async (req, res) => {
 
         if (newPassword.length < 8) {
             return res.status(400).json({ message: 'Password must be at least 8 characters' });
+        }
+
+        if (usePostgresAdminWrites()) {
+            const admin = await adminAccountRepository.resetPassword(email, resetToken, newPassword);
+            if (!admin) return res.status(400).json({ message: 'Invalid or expired reset token' });
+            if (admin.role === 'super-admin') return res.status(200).json({ success: true, requiresLogin: true, message: 'Password reset successful. Sign in with your new password and verification code.' });
+            const accessToken = generateAccessToken(admin._id, admin.role), refreshToken = generateRefreshToken(admin._id, admin.role);
+            sendAuthCookies(res, accessToken, refreshToken, 'admin');
+            return res.status(200).json({ success: true, message: 'Password reset successful', admin, accessToken });
         }
 
         const admin = await Admin.findOne({
@@ -402,7 +472,7 @@ export const refreshAdminToken = async (req, res) => {
             return res.status(401).json({ message: 'Invalid token type' });
         }
 
-        const admin = await Admin.findById(decoded.id);
+        const admin = usePostgresAdminWrites() ? await adminAccountRepository.get(decoded.id) : await Admin.findById(decoded.id);
 
         if (!admin || !admin.isActive) {
             return res.status(401).json({ message: 'Admin not found or inactive' });

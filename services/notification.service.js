@@ -7,6 +7,8 @@ import RiderPushSubscription from '../model/notification/riderPushSubscription.m
 import { emitToUser, emitToRestaurant, emitToAdmin, emitToRider } from '../socket/socketServer.js';
 import { redisClient, isRedisReady, safeRedisGet, safeRedisSet } from '../config/redis.js';
 import dotenv from 'dotenv';
+import { usePostgresNotificationWrites } from './postgres/compat.js';
+import { notificationRepository } from './postgres/notification.repository.js';
 
 dotenv.config();
 
@@ -116,14 +118,14 @@ const NOTIFICATION_CONFIGS = {
     },
     order_assigned: {
         title: 'New Job Assigned!',
-        getBody: (data) => `Head to ${data.restaurantName || 'the store'} for pickup. Earn â‚¦${data.payout || 600}. Order #${data.orderId}`,
+        getBody: (data) => `Head to ${data.restaurantName || 'the store'} for pickup. Earn,${data.payout || 600}. Order #${data.orderId}`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: true,
         vibrate: [200, 100, 200, 100, 200]
     },
     rider_payout_credited: {
-        title: 'Earnings Credited! ðŸ’°',
-        getBody: (data) => `Order #${data.orderId} delivered. â‚¦${data.payout || 600} has been added to your wallet.`,
+        title: 'Earnings Credited!',
+        getBody: (data) => `Order #${data.orderId} delivered.,${data.payout || 600} has been added to your wallet.`,
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
@@ -318,7 +320,9 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
         // Broadcast admin notifications are saved with recipientId = null but marked with role = 'admin'
         if (recipientId || role === 'admin') {
             try {
-                savedNotification = await Notification.create(notificationData);
+                savedNotification = usePostgresNotificationWrites()
+                    ? await notificationRepository.create(notificationData)
+                    : await Notification.create(notificationData);
                 console.log(`Notification saved successfully for ${role}${recipientId ? `: ID ${savedNotification._id}` : ' (Broadcast)'}`);
             } catch (dbError) {
                 console.error('Database save error:', dbError.message);
@@ -349,10 +353,10 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
                         unreadCount = await redisClient.incr(redisKey);
                         await redisClient.expire(redisKey, 604800);
                     } catch (err) {
-                        unreadCount = await Notification.countDocuments({ userId: recipientId, read: false });
+                        unreadCount = usePostgresNotificationWrites() ? await notificationRepository.unreadCount('user', recipientId) : await Notification.countDocuments({ userId: recipientId, read: false });
                     }
                 } else {
-                    unreadCount = await Notification.countDocuments({ userId: recipientId, read: false });
+                    unreadCount = usePostgresNotificationWrites() ? await notificationRepository.unreadCount('user', recipientId) : await Notification.countDocuments({ userId: recipientId, read: false });
                 }
                 emitToUser(recipientId, 'notification_count_update', { count: unreadCount });
             }
@@ -398,7 +402,9 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
                     createdAt: savedNotification?.createdAt || new Date(),
                     read: false
                 });
-                const count = await Notification.countDocuments({ riderId: recipientId, read: false });
+                const count = usePostgresNotificationWrites()
+                    ? await notificationRepository.unreadCount('rider', recipientId)
+                    : await Notification.countDocuments({ riderId: recipientId, read: false });
                 emitToRider(recipientId, 'notification_count_update', { count });
             }
         } catch (socketError) {
@@ -425,7 +431,9 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
 
             // Find subscriptions (either for specific recipient or all if role is admin and no ID)
             const query = recipientId ? { [queryField]: recipientId } : {};
-            const subscriptions = await subModel.find(query);
+            const subscriptions = usePostgresNotificationWrites()
+                ? await notificationRepository.listSubscriptions(role, recipientId)
+                : await subModel.find(query);
 
             if (subscriptions.length > 0) {
                 console.log(`Sending push to ${subscriptions.length} ${role} device(s)`);
@@ -462,7 +470,11 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
                         console.error(`Failed to send push to ${sub.deviceType}:`, error.message);
 
                         if (error.statusCode === 410 || error.statusCode === 404) {
-                            await subModel.findByIdAndDelete(sub._id);
+                            if (usePostgresNotificationWrites()) {
+                                await notificationRepository.removeSubscriptionById(sub._id);
+                            } else {
+                                await subModel.findByIdAndDelete(sub._id);
+                            }
                             console.log(`Removed expired subscription for ${sub.deviceType} (${role})`);
                         }
                     }
@@ -585,6 +597,12 @@ export async function sendVendorNotification(restaurantId, orderId, type, data =
     // If orderDatabaseId is missing, we auto-resolve it from the parent Order.
     if (!data.orderDatabaseId && orderId) {
         try {
+            if (usePostgresNotificationWrites()) {
+                data.orderDatabaseId = await notificationRepository.resolveVendorOrderId(restaurantIdString, orderId);
+            }
+            if (data.orderDatabaseId) {
+                // PostgreSQL resolved the vendor-order deep link; no Mongo lookup is needed.
+            } else {
             const VendorOrder = (await import('../model/vendor/VendorOrder.js')).default;
             const Order = (await import('../model/order/Order.js')).default;
             let parentOrderDBId = null;
@@ -606,6 +624,7 @@ export async function sendVendorNotification(restaurantId, orderId, type, data =
                     restaurantId: restaurantIdString 
                 }).select('_id');
                 if (subOrder) data.orderDatabaseId = subOrder._id;
+            }
             }
         } catch (e) {
             console.warn('Vendor notification auto-resolution failed:', e.message);
@@ -643,8 +662,13 @@ export async function sendVendorNotification(restaurantId, orderId, type, data =
         }
         
         if (!vendorOwners) {
-            const vendor = await Vendor.findById(restaurantIdString).select('owners');
-            vendorOwners = vendor?.owners || [];
+            if (usePostgresNotificationWrites()) {
+                const vendor = await notificationRepository.getVendorProfile(restaurantIdString);
+                vendorOwners = vendor?.ownerIds || [];
+            } else {
+                const vendor = await Vendor.findById(restaurantIdString).select('owners');
+                vendorOwners = vendor?.owners || [];
+            }
             if (isRedisReady() && vendorOwners.length > 0) {
                 try {
                     await redisClient.set(ownerCacheKey, JSON.stringify(vendorOwners), 'EX', 1800);
@@ -687,9 +711,13 @@ export async function sendVendorNotification(restaurantId, orderId, type, data =
 export async function sendVendorOrderEmail(restaurantId, orderId, data = {}) {
     try {
         const { sendMail } = await import('../config/mailer.js');
-        const Vendor = (await import('../model/vendor/vendor.model.js')).default;
-
-        const vendor = await Vendor.findById(restaurantId).select('email storeName phone');
+        let vendor;
+        if (usePostgresNotificationWrites()) {
+            vendor = await notificationRepository.getVendorProfile(restaurantId);
+        } else {
+            const Vendor = (await import('../model/vendor/vendor.model.js')).default;
+            vendor = await Vendor.findById(restaurantId).select('email storeName phone');
+        }
         if (!vendor || !vendor.email) {
             console.warn(`[sendVendorOrderEmail] No valid email found for vendor ID ${restaurantId}`);
             return;
@@ -807,10 +835,9 @@ export async function removeSubscription(endpoint) {
  */
 export async function syncUnreadCountToRedis(userId) {
     try {
-        const trueCount = await Notification.countDocuments({
-            userId: String(userId),
-            read: false
-        });
+        const trueCount = usePostgresNotificationWrites()
+            ? await notificationRepository.unreadCount('user', userId)
+            : await Notification.countDocuments({ userId: String(userId), read: false });
         const redisKey = `user:${userId}:unread_count`;
         if (isRedisReady()) {
             await redisClient.set(redisKey, trueCount, 'EX', 604800);

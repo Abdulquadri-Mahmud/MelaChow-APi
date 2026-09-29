@@ -1,5 +1,7 @@
 import prisma from "../../config/prisma.js";
 import Vendor from "../../model/vendor/vendor.model.js";
+import { calculateRiderPayoutKobo, describeRiderPayout } from "./riderPayout.js";
+import { calculatePaystackTransferFee } from "../../utils/paystackFees.js";
 
 const defaultPlatformConfig = {
   riderFixedPayout: 600,
@@ -232,11 +234,11 @@ export const adminFinanceRepository = {
 
     const adminTransactions = (adminWallet?.transactions || []).map(transactionShape).filter((tx) => dateInRange(tx.date, startDate, endDate));
     const totalEscrowHeld = vendorOrders.filter((order) => !order.escrowReleased).reduce((sum, order) => sum + numberValue(order.escrowAmount), 0);
-    const totalCommissionEarned = vendorOrders.reduce((sum, order) => sum + numberValue(order.commission), 0);
-    const totalPlatformDeliveryRevenue = paidOrders
-      .filter((order) => ["delivered", "completed"].includes(order.orderStatus))
-      .reduce((sum, order) => sum + Math.max(0, numberValue(order.deliveryFee) - numberValue(order.riderEarnings ?? platformConfig.riderFixedPayout)), 0);
-    const totalServiceFeeRevenue = paidOrders.reduce((sum, order) => sum + numberValue(order.serviceFee), 0);
+    // Financial history must come from the immutable ledger. Recalculating old
+    // orders with today's commission/rider rules silently rewrites past revenue.
+    const totalCommissionEarned = adminTransactions.filter((tx) => tx.type === "credit" && tx.transactionType === "commission").reduce((sum, tx) => sum + numberValue(tx.amount), 0);
+    const totalPlatformDeliveryRevenue = adminTransactions.filter((tx) => tx.transactionType === "delivery_spread").reduce((sum, tx) => sum + numberValue(tx.reportingAmount), 0);
+    const totalServiceFeeRevenue = adminTransactions.filter((tx) => tx.type === "credit" && tx.transactionType === "service_fee").reduce((sum, tx) => sum + numberValue(tx.amount), 0);
     const totalCredits = adminTransactions.filter((tx) => tx.type === "credit").reduce((sum, tx) => sum + numberValue(tx.amount), 0);
     const totalDebits = adminTransactions.filter((tx) => tx.type === "debit").reduce((sum, tx) => sum + numberValue(tx.amount), 0);
     const currentPlatformBalance = adminWallet?.balance || 0;
@@ -244,6 +246,7 @@ export const adminFinanceRepository = {
     return {
       success: true,
       data: {
+        moneyUnit: "kobo",
         currentPlatformBalance,
         totalEscrowHeld,
         availableBalance: Math.max(0, currentPlatformBalance - totalEscrowHeld),
@@ -259,8 +262,8 @@ export const adminFinanceRepository = {
         period: { startDate, endDate },
         revenueModel: {
           commissionRate: platformConfig.commissionEnabled ? `${platformConfig.commissionRate}% (enabled)` : "0% (disabled)",
-          spreadPerOrder: `?${1000 - platformConfig.riderFixedPayout} (approx - varies by city fee)`,
-          riderPayout: `?${platformConfig.riderFixedPayout} fixed per platform delivery`,
+          spreadPerOrder: "Delivery fee minus the configured rider payout",
+          riderPayout: describeRiderPayout(platformConfig),
           serviceFee: platformConfig.serviceFeeEnabled
             ? `${platformConfig.serviceFeeType === "fixed" ? "?" + platformConfig.serviceFeeValue : platformConfig.serviceFeeValue + "%"} (max ?${platformConfig.serviceFeeCap})`
             : "Disabled",
@@ -275,9 +278,9 @@ export const adminFinanceRepository = {
     const groupType = period === "90days" || period === "3months" ? "week" : period === "12months" ? "month" : "day";
     const startDate = new Date();
     startDate.setDate(startDate.getDate() - daysToLookBack);
-    const vendorOrders = await prisma.vendorOrder.findMany({
-      where: { createdAt: { gte: startDate }, userOrder: { paymentStatus: "paid" } },
-      include: { userOrder: true },
+    const orders = await prisma.order.findMany({
+      where: { createdAt: { gte: startDate }, paymentStatus: "paid" },
+      include: { vendorOrders: { select: { commission: true } }, walletTransactions: true },
     });
 
     const bucket = (date) => {
@@ -288,22 +291,25 @@ export const adminFinanceRepository = {
     };
 
     const rows = new Map();
-    for (const vendorOrder of vendorOrders) {
-      const label = bucket(vendorOrder.createdAt);
+    for (const order of orders) {
+      const label = bucket(order.createdAt);
       const current = rows.get(label) || { label, commission: 0, deliveryRevenue: 0, serviceFeeRevenue: 0, globalGMV: 0, totalRevenue: 0, orderCount: new Set() };
-      const deliveryRevenue = Math.max(0, numberValue(vendorOrder.userOrder.deliveryFee) - numberValue(vendorOrder.userOrder.riderEarnings || platformConfig.riderFixedPayout));
-      current.commission += numberValue(vendorOrder.commission);
+      const commission = order.walletTransactions.filter(tx => tx.type === "credit" && tx.transactionType === "commission").reduce((sum, tx) => sum + tx.amount, 0);
+      const deliveryRevenue = order.walletTransactions.filter(tx => tx.transactionType === "delivery_spread").reduce((sum, tx) => sum + numberValue(tx.reportingAmount), 0);
+      const serviceFee = order.walletTransactions.filter(tx => tx.type === "credit" && tx.transactionType === "service_fee").reduce((sum, tx) => sum + tx.amount, 0);
+      current.commission += commission;
       current.deliveryRevenue += deliveryRevenue;
-      current.serviceFeeRevenue += numberValue(vendorOrder.userOrder.serviceFee);
-      current.globalGMV += numberValue(vendorOrder.userOrder.total);
-      current.totalRevenue += numberValue(vendorOrder.commission) + deliveryRevenue + numberValue(vendorOrder.userOrder.serviceFee);
-      current.orderCount.add(vendorOrder.userOrderId);
+      current.serviceFeeRevenue += serviceFee;
+      current.globalGMV += numberValue(order.total);
+      current.totalRevenue += commission + deliveryRevenue + serviceFee;
+      current.orderCount.add(order.id);
       rows.set(label, current);
     }
 
     return {
       success: true,
       data: {
+        moneyUnit: "kobo",
         period,
         chart: [...rows.values()]
           .map((row) => ({ ...row, orderCount: row.orderCount.size }))
@@ -355,6 +361,7 @@ export const adminFinanceRepository = {
     return {
       success: true,
       data: {
+        moneyUnit: "kobo",
         transactions: pageSlice.map((tx) => ({ ...tx, order: tx.orderId ? orderMap[String(tx.orderId)] || null : null })),
         pagination: { total, page: pageNumber, limit: limitNumber, totalPages: Math.ceil(total / limitNumber) },
         walletSummary: {
@@ -390,7 +397,7 @@ export const adminFinanceRepository = {
       current.orderCount += 1;
       current.commissionPaid += numberValue(vendorOrder.commission);
       current.vendorEarnings += numberValue(vendorOrder.vendorTotal);
-      current.deliveryShareGenerated += Math.max(0, numberValue(vendorOrder.userOrder.deliveryFee) - numberValue(vendorOrder.userOrder.riderEarnings || platformConfig.riderFixedPayout));
+      current.deliveryShareGenerated += Math.max(0, numberValue(vendorOrder.userOrder.deliveryFee) - numberValue(vendorOrder.userOrder.riderEarnings ?? calculateRiderPayoutKobo(vendorOrder.userOrder.deliveryFee, platformConfig)));
       current.totalSubtotal += numberValue(vendorOrder.commission) + numberValue(vendorOrder.vendorTotal);
       rows.set(vendorId, current);
     }
@@ -414,6 +421,7 @@ export const adminFinanceRepository = {
     return {
       success: true,
       data: {
+        moneyUnit: "kobo",
         vendors: pageSlice,
         pagination: { total, page: pageNumber, limit: limitNumber, totalPages: Math.ceil(total / limitNumber) },
         totals: {
@@ -457,6 +465,7 @@ export const adminFinanceRepository = {
     return {
       success: true,
       data: {
+        moneyUnit: "kobo",
         escrowOrders: rows.map((row) => ({
           _id: legacyId(row),
           escrowAmount: row.escrowAmount,
@@ -511,11 +520,12 @@ export const adminFinanceRepository = {
     return {
       success: true,
       data: {
+        moneyUnit: "kobo",
         refunds: refunds.map((refund) => ({
           _id: legacyId(refund),
           orderId: refund.order ? { _id: legacyId(refund.order), orderId: refund.order.orderCode, total: refund.order.total, paymentStatus: refund.order.paymentStatus } : refund.metadata?.legacyOrderId || null,
           userId: refund.user ? { _id: legacyId(refund.user), email: refund.user.email, firstname: refund.user.firstname, lastname: refund.user.lastname } : refund.metadata?.legacyUserId || null,
-          amount: Number(refund.amount || 0) / 100,
+          amount: Number(refund.amount || 0),
           reason: refund.reason,
           status: refund.metadata?.legacyStatus || refund.status,
           originalTotal: refund.metadata?.originalTotal,
@@ -589,6 +599,7 @@ export const adminFinanceRepository = {
     return {
       success: true,
       data: {
+        moneyUnit: "kobo",
         payments,
         summary: {
           byPaymentStatus,
@@ -601,5 +612,113 @@ export const adminFinanceRepository = {
         pagination: { total, page: pageNumber, limit: limitNumber, totalPages: Math.ceil(total / limitNumber) },
       },
     };
+  },
+
+  async getDailyFinancialSnapshot() {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const endOfToday = new Date(startOfToday); endOfToday.setDate(endOfToday.getDate() + 1);
+    const startOfYesterday = new Date(startOfToday); startOfYesterday.setDate(startOfYesterday.getDate() - 1);
+
+    const buildDayStats = async (dayStart, dayEnd) => {
+      const date = { gte: dayStart, lt: dayEnd };
+      const [orders, released, adminTransactions, vendorWithdrawals, riderWithdrawals] = await Promise.all([
+        prisma.order.findMany({ where: { paymentStatus: "paid", createdAt: date }, select: { id: true, total: true } }),
+        prisma.vendorOrder.findMany({ where: { escrowReleased: true, updatedAt: date }, select: { escrowAmount: true, userOrder: { select: { paymentStatus: true } } } }),
+        prisma.walletTransaction.findMany({ where: { wallet: { ownerModel: "Admin" }, date }, select: { type: true, amount: true, reportingAmount: true, transactionType: true } }),
+        prisma.withdrawal.findMany({ where: { status: "completed", settledAt: date }, select: { netAmount: true, transferFee: true } }),
+        prisma.riderWithdrawal.findMany({ where: { status: "completed", settledAt: date }, select: { requestedAmount: true } }),
+      ]);
+      const credits = (type) => adminTransactions.filter((tx) => tx.type === "credit" && tx.transactionType === type).reduce((sum, tx) => sum + numberValue(tx.amount), 0);
+      const grossDeliveryFeesCollected = credits("delivery_fee");
+      const serviceFees = credits("service_fee");
+      const commission = credits("commission");
+      const netDeliveryMargin = adminTransactions.filter((tx) => tx.transactionType === "delivery_spread").reduce((sum, tx) => sum + numberValue(tx.reportingAmount), 0);
+      const vendorPayoutsTotal = vendorWithdrawals.reduce((sum, row) => sum + numberValue(row.netAmount), 0);
+      const vendorTransferFees = vendorWithdrawals.reduce((sum, row) => sum + numberValue(row.transferFee), 0);
+      const riderPayoutsTotal = riderWithdrawals.reduce((sum, row) => sum + numberValue(row.requestedAmount), 0);
+      const riderTransferFeeCost = riderWithdrawals.reduce((sum, row) => sum + calculatePaystackTransferFee(numberValue(row.requestedAmount)), 0);
+      const invalidReleased = released.filter((row) => row.userOrder.paymentStatus !== "paid");
+      return {
+        moneyIn: orders.reduce((sum, row) => sum + row.total, 0), moneyInOrderCount: orders.length,
+        escrowReleased: released.reduce((sum, row) => sum + row.escrowAmount, 0), escrowReleasedCount: released.length,
+        releasedWithoutPaidParentCount: invalidReleased.length, releasedWithoutPaidParentTotal: invalidReleased.reduce((sum, row) => sum + row.escrowAmount, 0),
+        grossDeliveryFeesCollected, netDeliveryMargin, serviceFees, commission,
+        vendorPayoutsTotal, vendorPayoutTransferFees: vendorTransferFees, vendorPayoutCount: vendorWithdrawals.length,
+        riderPayoutsTotal, riderPayoutTransferFeesAbsorbed: riderTransferFeeCost, riderPayoutCount: riderWithdrawals.length,
+        totalMoneyOut: vendorPayoutsTotal + riderPayoutsTotal,
+        platformKept: netDeliveryMargin + serviceFees + commission - riderTransferFeeCost,
+      };
+    };
+    const [today, yesterday, escrow] = await Promise.all([
+      buildDayStats(startOfToday, endOfToday), buildDayStats(startOfYesterday, startOfToday),
+      prisma.vendorOrder.aggregate({ where: { escrowReleased: false, userOrder: { paymentStatus: "paid" } }, _sum: { escrowAmount: true }, _count: { _all: true } }),
+    ]);
+    return { success: true, data: { moneyUnit: "kobo", today, yesterday, currentEscrowHeld: escrow._sum.escrowAmount || 0, currentEscrowOrderCount: escrow._count._all, generatedAt: new Date() } };
+  },
+
+  async getReconciliationSnapshot() {
+    const [admin, escrow, vendor, rider, pendingVendor, pendingRider] = await Promise.all([
+      prisma.wallet.aggregate({ where: { ownerModel: "Admin" }, _sum: { balance: true } }),
+      prisma.vendorOrder.aggregate({ where: { escrowReleased: false, userOrder: { paymentStatus: "paid" } }, _sum: { escrowAmount: true } }),
+      prisma.wallet.aggregate({ where: { ownerModel: "Vendor" }, _sum: { balance: true } }),
+      prisma.wallet.aggregate({ where: { ownerModel: "Rider" }, _sum: { balance: true } }),
+      prisma.withdrawal.aggregate({ where: { status: { in: ["pending", "processing"] } }, _sum: { requestedAmount: true } }),
+      prisma.riderWithdrawal.aggregate({ where: { status: { in: ["pending", "processing"] } }, _sum: { requestedAmount: true } }),
+    ]);
+    const internalLedgerBalance = admin._sum.balance || 0, escrowHeld = escrow._sum.escrowAmount || 0;
+    const vendorPayables = vendor._sum.balance || 0, riderPayables = rider._sum.balance || 0;
+    const pendingVendorPayouts = pendingVendor._sum.requestedAmount || 0, pendingRiderPayouts = pendingRider._sum.requestedAmount || 0;
+    const totalOwed = vendorPayables + riderPayables;
+    const availableAfterObligations = internalLedgerBalance - escrowHeld - totalOwed;
+    return { success: true, data: { moneyUnit: "kobo", internalLedgerBalance, escrowHeld, vendorPayables, riderPayables, totalOwed, pendingVendorPayouts, pendingRiderPayouts, totalPendingPayouts: pendingVendorPayouts + pendingRiderPayouts, availableAfterObligations, flagged: availableAfterObligations < 0, generatedAt: new Date() } };
+  },
+
+  async getOrderProfitBreakdown({ startDate, endDate, page = 1, limit = 25 } = {}) {
+    const pageNumber = parsePage(page, 1), limitNumber = parsePage(limit, 25);
+    const date = { ...(startDate ? { gte: new Date(startDate) } : {}), ...(endDate ? { lte: new Date(endDate) } : {}) };
+    const transactions = await prisma.walletTransaction.findMany({
+      where: { wallet: { ownerModel: "Admin" }, orderId: { not: null }, ...(startDate || endDate ? { date } : {}) },
+      include: { order: { select: { orderCode: true } } }, orderBy: { date: "desc" },
+    });
+    const grouped = new Map();
+    for (const tx of transactions) {
+      const row = grouped.get(tx.orderId) || { orderId: tx.orderId, orderCode: tx.order?.orderCode, date: tx.date, commission: 0, serviceFee: 0, grossDeliveryFee: 0, netDeliveryMargin: 0, deliveryCompleted: false };
+      if (tx.type === "credit" && tx.transactionType === "commission") row.commission += tx.amount;
+      if (tx.type === "credit" && tx.transactionType === "service_fee") row.serviceFee += tx.amount;
+      if (tx.transactionType === "delivery_fee") row.grossDeliveryFee += tx.amount;
+      if (tx.transactionType === "delivery_spread") { row.netDeliveryMargin += numberValue(tx.reportingAmount); row.deliveryCompleted = true; }
+      if (tx.date < row.date) row.date = tx.date;
+      grouped.set(tx.orderId, row);
+    }
+    const rows = [...grouped.values()].map((row) => ({ ...row, platformGain: row.commission + row.serviceFee + row.netDeliveryMargin })).sort((a, b) => b.date - a.date);
+    const totals = rows.reduce((out, row) => ({ totalCommission: out.totalCommission + row.commission, totalServiceFee: out.totalServiceFee + row.serviceFee, totalNetDeliveryMargin: out.totalNetDeliveryMargin + row.netDeliveryMargin, totalPlatformGain: out.totalPlatformGain + row.platformGain, orderCount: out.orderCount + 1 }), { totalCommission: 0, totalServiceFee: 0, totalNetDeliveryMargin: 0, totalPlatformGain: 0, orderCount: 0 });
+    return { success: true, data: { moneyUnit: "kobo", orders: rows.slice((pageNumber - 1) * limitNumber, pageNumber * limitNumber), totals, pagination: { total: rows.length, page: pageNumber, limit: limitNumber, totalPages: Math.ceil(rows.length / limitNumber) } } };
+  },
+
+  async getDailyFinanceReport({ start, end, reportDate }) {
+    const orders = await prisma.order.findMany({
+      where: { paymentStatus: "paid", orderStatus: { in: ["delivered", "completed"] }, updatedAt: { gte: start, lt: end } },
+      include: { items: true, vendorOrders: { include: { restaurant: { select: { id: true, storeName: true } } } }, walletTransactions: true },
+      orderBy: { updatedAt: "desc" },
+    });
+    const restaurants = new Map();
+    const rows = orders.map((order) => {
+      const commissionLedger = order.walletTransactions.filter(tx => tx.type === "credit" && tx.transactionType === "commission").reduce((s, tx) => s + tx.amount, 0);
+      const serviceLedger = order.walletTransactions.filter(tx => tx.type === "credit" && tx.transactionType === "service_fee").reduce((s, tx) => s + tx.amount, 0);
+      const deliverySpread = order.walletTransactions.filter(tx => tx.transactionType === "delivery_spread").reduce((s, tx) => s + numberValue(tx.reportingAmount), 0);
+      const commission = commissionLedger || order.vendorOrders.reduce((s, vo) => s + numberValue(vo.commission), 0);
+      const vendorEarnings = order.vendorOrders.reduce((s, vo) => s + numberValue(vo.vendorTotal ?? vo.escrowAmount), 0);
+      for (const vo of order.vendorOrders) {
+        const current = restaurants.get(vo.restaurantId) || { restaurant: vo.restaurant.storeName, completedOrders: 0, foodSales: 0, commission: 0, vendorEarnings: 0 };
+        current.completedOrders += 1; current.foodSales += numberValue(vo.vendorTotal) + numberValue(vo.commission);
+        current.commission += numberValue(vo.commission); current.vendorEarnings += numberValue(vo.vendorTotal ?? vo.escrowAmount);
+        restaurants.set(vo.restaurantId, current);
+      }
+      const serviceFee = serviceLedger || order.serviceFee;
+      return { orderNumber: order.orderCode, completedAt: order.updatedAt, restaurants: order.vendorOrders.map(vo => vo.restaurant.storeName).join(", "), items: order.items.map(item => `${item.quantity} x ${item.name}`).join("; "), foodSubtotal: order.subtotal, deliveryFee: order.deliveryFee, serviceFee, totalPaid: order.total, commission, vendorEarnings, deliverySpread, platformRevenue: commission + serviceFee + deliverySpread };
+    });
+    const summary = rows.reduce((s, row) => ({ completedOrders: s.completedOrders + 1, grossMerchandiseValue: s.grossMerchandiseValue + row.foodSubtotal, grossDeliveryFees: s.grossDeliveryFees + row.deliveryFee, serviceFees: s.serviceFees + row.serviceFee, commission: s.commission + row.commission, vendorEarnings: s.vendorEarnings + row.vendorEarnings, deliverySpread: s.deliverySpread + row.deliverySpread, platformRevenue: s.platformRevenue + row.platformRevenue, customerPayments: s.customerPayments + row.totalPaid }), { completedOrders: 0, grossMerchandiseValue: 0, grossDeliveryFees: 0, serviceFees: 0, commission: 0, vendorEarnings: 0, deliverySpread: 0, platformRevenue: 0, customerPayments: 0 });
+    return { moneyUnit: "kobo", reportDate, summary, restaurants: [...restaurants.values()], orders: rows };
   },
 };

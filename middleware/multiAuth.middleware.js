@@ -3,6 +3,10 @@ import User from "../model/user.model.js";
 import Vendor from "../model/vendor/vendor.model.js";
 import Admin from "../model/Admin/admin.model.js";
 import { isTokenBlocked } from "./tokenBlocklist.js";
+import { findIdentityByTokenId, postgresUserIdentityEnabled, publicUser } from "../services/postgres/userIdentity.repository.js";
+import { findVendorByTokenId, postgresVendorIdentityEnabled, publicVendor } from "../services/postgres/vendorIdentity.repository.js";
+import { usePostgresAdminWrites } from "../services/postgres/compat.js";
+import { adminAccountRepository } from "../services/postgres/adminAccount.repository.js";
 
 const ADMIN_ROLES = ["admin", "super-admin", "finance-admin"];
 
@@ -44,10 +48,12 @@ const multiAuth = async (req, res, next) => {
                 try {
                     const decoded = jwt.verify(userToken, process.env.JWT_SECRET);
                     if (decoded.type !== 'access') throw new Error('Access token required');
-                    const user = await User.findById(decoded.id).select("-password");
+                    const identity = postgresUserIdentityEnabled() ? await findIdentityByTokenId(decoded.id) : null;
+                    const user = postgresUserIdentityEnabled() ? (identity ? publicUser(identity) : null) : await User.findById(decoded.id).select("-password");
                     if (user && (!decoded.role || decoded.role === "user") && user.isActive && !user.suspended && !user.banned) {
                         req.user = user;
                         req.userId = decoded.id;
+                        req.postgresUserId = identity?.id || null;
                         req.userType = 'user';
                         return next();
                     }
@@ -70,10 +76,12 @@ const multiAuth = async (req, res, next) => {
                 try {
                     const decoded = jwt.verify(vendorToken, process.env.JWT_SECRET);
                     if (decoded.type !== 'access') throw new Error('Access token required');
-                    const vendor = await Vendor.findById(decoded.id);
+                    const identity = postgresVendorIdentityEnabled() ? await findVendorByTokenId(decoded.id) : null;
+                    const vendor = postgresVendorIdentityEnabled() ? (identity ? publicVendor(identity) : null) : await Vendor.findById(decoded.id);
                     if (vendor && decoded.role === 'vendor' && vendor.active && !vendor.suspended && !vendor.deletedAt) {
                         req.vendor = vendor;
                         req.userId = decoded.id;
+                        req.postgresVendorId = identity?.id || null;
                         req.userType = 'vendor';
                         return next();
                     }
@@ -95,10 +103,11 @@ const multiAuth = async (req, res, next) => {
                 try {
                     const decoded = jwt.verify(adminToken, process.env.JWT_SECRET);
                     if (decoded.type !== 'access') throw new Error('Access token required');
-                    const admin = await Admin.findById(decoded.id);
+                    const admin = usePostgresAdminWrites() ? await adminAccountRepository.get(decoded.id) : await Admin.findById(decoded.id);
                     if (admin && ADMIN_ROLES.includes(decoded.role) && admin.isActive) {
                         req.admin = admin;
                         req.userId = decoded.id;
+                        req.postgresAdminId = usePostgresAdminWrites() ? admin.id : null;
                         req.userType = 'admin';
                         return next();
                     }

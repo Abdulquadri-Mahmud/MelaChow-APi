@@ -1,5 +1,7 @@
 import AdminPushSubscription from '../../model/notification/adminPushSubscription.model.js';
 import Notification from '../../model/notification/notification.model.js';
+import { usePostgresNotificationWrites } from '../../services/postgres/compat.js';
+import { notificationRepository } from '../../services/postgres/notification.repository.js';
 
 export const subscribeAdmin = async (req, res) => {
     try {
@@ -9,6 +11,7 @@ export const subscribeAdmin = async (req, res) => {
         if (!subscription || !subscription.endpoint || !subscription.keys) {
             return res.status(400).json({ message: 'Invalid subscription object' });
         }
+        if(usePostgresNotificationWrites()){await notificationRepository.saveSubscription('admin',adminId,subscription,deviceType,req.headers['user-agent']);return res.status(201).json({message:'Admin subscribed successfully'});}
 
         await AdminPushSubscription.findOneAndUpdate(
             { 'subscription.endpoint': subscription.endpoint },
@@ -27,6 +30,7 @@ export const unsubscribeAdmin = async (req, res) => {
     try {
         const { endpoint } = req.body;
         if (!endpoint) return res.status(400).json({ message: 'Endpoint is required' });
+        if(usePostgresNotificationWrites()){await notificationRepository.removeSubscription('admin',req.admin._id,endpoint);return res.json({success:true,message:'Admin unsubscribed'});}
 
         await AdminPushSubscription.findOneAndDelete({
             adminId: req.admin._id,
@@ -44,6 +48,7 @@ export const getAdminNotifications = async (req, res) => {
     try {
         const { limit = 50, skip = 0, type, unread } = req.query;
         const adminId = req.admin._id;
+        if(usePostgresNotificationWrites()){const result=await notificationRepository.list('admin',adminId,{limit,skip,type,unread});const unreadCount=await notificationRepository.unreadCount('admin',adminId);return res.json({success:true,...result,unreadCount,hasMore:result.total>Number(skip)+result.notifications.length});}
 
         // Build query — Admins see notifications where role is 'admin' (broadcasts)
         // OR notifications specifically targeted to their adminId.
@@ -97,6 +102,7 @@ export const getAdminNotifications = async (req, res) => {
 export const getAdminUnreadCount = async (req, res) => {
     try {
         const adminId = req.admin._id;
+        if(usePostgresNotificationWrites())return res.json({success:true,count:await notificationRepository.unreadCount('admin',adminId)});
         const count = await Notification.countDocuments({
             $or: [
                 { role: 'admin' },
@@ -118,6 +124,7 @@ export const getAdminUnreadCount = async (req, res) => {
 export const markAdminAsRead = async (req, res) => {
     try {
         const adminId = req.admin._id;
+        if(usePostgresNotificationWrites()){const notification=await notificationRepository.markRead('admin',adminId,req.params.id);if(!notification)return res.status(404).json({success:false,message:'Notification not found'});return res.json({success:true,notification});}
         const notification = await Notification.findOneAndUpdate(
             {
                 _id: req.params.id,
@@ -146,6 +153,7 @@ export const markAdminAsRead = async (req, res) => {
 export const markAllAdminAsRead = async (req, res) => {
     try {
         const adminId = req.admin._id;
+        if(usePostgresNotificationWrites()){const modifiedCount=await notificationRepository.markAllRead('admin',adminId);return res.json({success:true,message:'All admin notifications marked as read',modifiedCount});}
         const result = await Notification.updateMany(
             {
                 $or: [
@@ -173,6 +181,7 @@ export const markAllAdminAsRead = async (req, res) => {
 export const deleteAdminNotification = async (req, res) => {
     try {
         const adminId = req.admin._id;
+        if(usePostgresNotificationWrites()){const deletedCount=await notificationRepository.remove('admin',adminId,req.params.id);if(!deletedCount)return res.status(404).json({success:false,message:'Notification not found'});return res.json({success:true,message:'Notification deleted'});}
         const notification = await Notification.findOneAndDelete({
             _id: req.params.id,
             $or: [

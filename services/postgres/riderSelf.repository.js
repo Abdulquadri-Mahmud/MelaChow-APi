@@ -1,12 +1,16 @@
 import prisma from "../../config/prisma.js";
+import { calculateRiderPayoutKobo, calculateRiderPayoutNaira } from "./riderPayout.js";
 
-const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{12}$/i;
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const defaultPlatformConfig = {
+  riderPayoutType: "flat",
+  riderPayoutValue: 600,
   riderFixedPayout: 600,
 };
 
 const legacyId = (record) => record?.legacyMongoId || record?.id || null;
+const naira = (kobo) => Number(kobo || 0) / 100;
 
 const compactObject = (value) =>
   Object.fromEntries(Object.entries(value).filter(([, fieldValue]) => fieldValue !== undefined && fieldValue !== null));
@@ -23,10 +27,10 @@ const resolveId = async (model, id) => {
   return record?.id || null;
 };
 
-const getPlatformRiderFee = async () => {
+const getPlatformRiderFee = async (deliveryFeeKobo = 0) => {
   const config = await prisma.platformConfig.findUnique({ where: { type: "singleton" } });
   const value = config?.value && typeof config.value === "object" && !Array.isArray(config.value) ? config.value : {};
-  return value.riderFixedPayout || defaultPlatformConfig.riderFixedPayout;
+  return calculateRiderPayoutNaira(deliveryFeeKobo, { ...defaultPlatformConfig, ...value });
 };
 
 const getPlatformConfigValue = async () => {
@@ -77,17 +81,21 @@ const orderItemShape = (item, { populateRestaurant = false } = {}) => ({
   portion_label: item.portionLabel,
   quantity: item.quantity,
   portion_quantity: item.portionQuantity,
-  price: item.price,
+  price: naira(item.price),
   note: item.note,
   dietary_type: dietaryShape(item.dietaryType),
   item_type: item.itemType,
-  selected_options: item.selectedOptions,
+  selected_options: (item.selectedOptions || []).map((option) => ({
+    ...option,
+    ...(option.price_modifier_naira !== undefined && { price_modifier_naira: naira(option.price_modifier_naira) }),
+    ...(option.priceModifier !== undefined && { priceModifier: naira(option.priceModifier) }),
+  })),
   metadata: item.metadata,
 });
 
 const vendorDeliveryFeeShape = (fee) => ({
   restaurantId: fee.restaurant?.legacyMongoId || fee.restaurantId,
-  deliveryFee: fee.deliveryFee,
+  deliveryFee: naira(fee.deliveryFee),
 });
 
 const riderPublicShape = (rider) => {
@@ -124,7 +132,7 @@ const riderPublicShape = (rider) => {
     isVerified: rider.isVerified,
     deletedAt: rider.deletedAt,
     totalDeliveries: rider.totalDeliveries,
-    totalEarnings: rider.totalEarnings,
+    totalEarnings: naira(rider.totalEarnings),
     rating: rider.rating,
     ratingCount: rider.ratingCount,
     notes: rider.notes,
@@ -163,13 +171,13 @@ const baseOrderShape = (order, options = {}) => ({
   vendorDeliveryFees: (order.vendorDeliveryFees || []).map(vendorDeliveryFeeShape),
   deliveryAddress: order.deliveryAddress,
   phone: order.phone,
-  subtotal: order.subtotal,
-  deliveryFee: order.deliveryFee,
-  serviceFee: order.serviceFee,
+  subtotal: naira(order.subtotal),
+  deliveryFee: naira(order.deliveryFee),
+  serviceFee: naira(order.serviceFee),
   appliedDiscount: order.appliedDiscount,
   freeDeliveryPromo: order.freeDeliveryPromo,
   vendorDeliveryPromo: order.vendorDeliveryPromo,
-  total: order.total,
+  total: naira(order.total),
   orderId: order.orderCode,
   paymentStatus: order.paymentStatus,
   paymentReference: order.paymentReference,
@@ -177,10 +185,11 @@ const baseOrderShape = (order, options = {}) => ({
   orderStatus: order.orderStatus,
   riderId: order.rider?.legacyMongoId || order.riderId,
   riderAssignment: order.riderAssignment,
-  riderEarnings: order.riderEarnings,
+  riderEarnings: naira(order.riderEarnings),
   statusLog: order.statusLog,
   createdAt: order.createdAt,
   updatedAt: order.updatedAt,
+  moneyUnit: "naira",
   __v: 0,
 });
 
@@ -223,7 +232,7 @@ const vendorInclude = {
 };
 
 const activeOrderShape = async ({ order, vendorOrder = null, restaurant }) => {
-  const platformRiderFee = await getPlatformRiderFee();
+  const platformRiderFee = await getPlatformRiderFee(order.deliveryFee);
   const shaped = baseOrderShape(order);
   shaped.status = vendorOrder ? vendorOrder.orderStatus : order.orderStatus;
   shaped.restaurantId = restaurantShape(restaurant);
@@ -245,8 +254,8 @@ const activeOrderShape = async ({ order, vendorOrder = null, restaurant }) => {
 };
 
 const detailOrderShape = async ({ order, vendorOrder = null, restaurant }) => {
-  const platformRiderFee = await getPlatformRiderFee();
   const shaped = await activeOrderShape({ order, vendorOrder, restaurant });
+  const platformRiderFee = shaped.deliveryFee;
   delete shaped.restaurantLogo;
   delete shaped.status;
   shaped.riderEarnings = platformRiderFee;
@@ -306,6 +315,122 @@ const mergeMetadata = (rider, extra) => ({
 });
 
 export const riderSelfRepository = {
+  async terminateAssignment(orderToken, riderToken, { reason = "rider_initiated", note = "", changedBy = null } = {}) {
+    const riderId = await resolveId(prisma.rider, riderToken);
+    if (!riderId) throw new Error("Rider not found");
+    let found = orderToken ? await findOrderByAnyId(orderToken) : null;
+    if (!found) {
+      const activeAssignment = await prisma.riderAssignment.findFirst({
+        where: { riderId, status: { in: ["pending", "accepted", "picked_up"] } },
+        orderBy: { createdAt: "desc" },
+        include: { order: { include: orderInclude }, vendorOrder: { include: { userOrder: { include: orderInclude }, restaurant: { include: vendorInclude } } } },
+      });
+      if (activeAssignment?.vendorOrder?.userOrder) found = { order: activeAssignment.vendorOrder.userOrder, vendorOrder: activeAssignment.vendorOrder, restaurant: activeAssignment.vendorOrder.restaurant };
+      else if (activeAssignment?.order) found = { order: activeAssignment.order, vendorOrder: null, restaurant: await getOrderRestaurant(activeAssignment.order) };
+    }
+    if (!found?.order) throw new Error("Order not found");
+    const vendorOrder = found.vendorOrder || await prisma.vendorOrder.findFirst({ where: { userOrderId: found.order.id }, orderBy: { createdAt: "asc" } });
+    if (!vendorOrder) throw new Error("Vendor order not found for this order");
+    if (found.order.riderId !== riderId && vendorOrder.riderId !== riderId) throw new Error("Rider is no longer assigned to this order");
+    if (["delivered", "cancelled"].includes(found.order.orderStatus)) throw new Error("Cannot terminate a completed or cancelled order");
+
+    const rider = await prisma.rider.findUnique({ where: { id: riderId }, include: riderInclude });
+    if (!rider) throw new Error("Rider not found");
+    const foodPickedUp = ["out_for_delivery", "picked_up"].includes(found.order.orderStatus);
+    const isRiderInitiated = reason === "rider_initiated";
+    const appliesStrike = reason !== "admin_unassigned";
+    const config = await prisma.platformConfig.findUnique({ where: { type: "singleton" }, select: { value: true } });
+    const penaltyHours = Number(config?.value?.riderTerminationPenaltyHours ?? 24);
+    const strikeLimit = 2;
+    const metadata = mergeMetadata(rider, {});
+    const nextStrikes = Number(metadata.terminationStrikes || 0) + (appliesStrike && foodPickedUp ? 1 : 0);
+    if (appliesStrike && foodPickedUp) {
+      metadata.terminationStrikes = nextStrikes;
+      metadata.lastTerminationAt = new Date().toISOString();
+      if (nextStrikes >= strikeLimit) {
+        metadata.isSuspended = true;
+        metadata.suspendedUntil = new Date(Date.now() + penaltyHours * 60 * 60 * 1000).toISOString();
+      }
+    }
+    const riderStatus = metadata.isSuspended ? "offline" : "available";
+    const statusLog = Array.isArray(found.order.statusLog) ? found.order.statusLog : [];
+    const riderAssignment = found.order.riderAssignment && typeof found.order.riderAssignment === "object" && !Array.isArray(found.order.riderAssignment)
+      ? found.order.riderAssignment
+      : {};
+    const finalReason = reason === "admin_unassigned" ? "admin_unassigned" : "rider_terminated";
+
+    await prisma.$transaction(async (tx) => {
+      await tx.order.update({
+        where: { id: found.order.id },
+        data: {
+          orderStatus: "ready_for_pickup",
+          riderId: null,
+          riderAssignment: { ...riderAssignment, status: "unassigned", lastReason: finalReason },
+          statusLog: [...statusLog, { status: "ready_for_pickup", changedBy: changedBy || `rider:${legacyId(rider)}:terminated`, timestamp: new Date().toISOString() }],
+        },
+      });
+      await tx.vendorOrder.updateMany({ where: { userOrderId: found.order.id }, data: { orderStatus: "ready_for_pickup", riderId: null } });
+      await tx.rider.update({ where: { id: riderId }, data: { status: riderStatus, currentOrderId: null, assignmentExpiresAt: null, metadata } });
+      const assignments = await tx.riderAssignment.findMany({
+        where: { riderId, orderId: found.order.id, status: { in: ["pending", "accepted", "picked_up"] } },
+        select: { id: true, metadata: true },
+      });
+      for (const assignment of assignments) {
+        await tx.riderAssignment.update({
+          where: { id: assignment.id },
+          data: { status: "rejected", respondedAt: new Date(), reason: finalReason, metadata: { ...(assignment.metadata || {}), legacyStatus: isRiderInitiated ? "terminated_by_rider" : "cancelled" } },
+        });
+      }
+      await tx.orderTermination.create({
+        data: {
+          orderId: found.order.id,
+          vendorOrderId: vendorOrder.id,
+          previousRiderId: riderId,
+          previousRiderName: rider.name || "Unknown",
+          previousRiderPhone: rider.phone || "Unknown",
+          foodPickedUp,
+          reason,
+          riderNote: String(note || ""),
+          status: "pending",
+          metadata: { changedBy },
+        },
+      });
+    });
+
+    return {
+      success: true,
+      foodPickedUp,
+      penaltyHours,
+      orderId: legacyId(found.order),
+      vendorOrderId: legacyId(vendorOrder),
+      riderId: legacyId(rider),
+      message: isRiderInitiated
+        ? (foodPickedUp ? "Order terminated. A strike has been logged. New rider will contact you to collect the food." : "Order terminated. A new rider will be assigned shortly.")
+        : "Rider unassigned and order returned for reassignment",
+    };
+  },
+
+  async reportUndeliverable(orderToken, riderToken, reason = "") {
+    const riderId = await resolveId(prisma.rider, riderToken);
+    if (!riderId) throw new Error("Rider not found");
+    const found = await findOrderByAnyId(orderToken);
+    if (!found?.order) throw new Error("Order not found");
+    const vendorOrder = found.vendorOrder || await prisma.vendorOrder.findFirst({ where: { userOrderId: found.order.id }, orderBy: { createdAt: "asc" } });
+    if (!vendorOrder) throw new Error("Vendor order not found for this order");
+    if (found.order.riderId !== riderId && vendorOrder.riderId !== riderId) throw new Error("You are not assigned to this order");
+    const statusLog = Array.isArray(found.order.statusLog) ? found.order.statusLog : [];
+    await prisma.$transaction(async (tx) => {
+      await tx.order.update({
+        where: { id: found.order.id },
+        data: { orderStatus: "disputed_delivery", statusLog: [...statusLog, { status: "disputed_delivery", changedBy: `rider:${legacyId({ id: riderId, legacyMongoId: riderToken })}`, timestamp: new Date().toISOString() }] },
+      });
+      await tx.vendorOrder.updateMany({ where: { userOrderId: found.order.id }, data: { orderStatus: "disputed_delivery" } });
+      const pending = await tx.orderTermination.findFirst({ where: { orderId: found.order.id, status: "pending" }, orderBy: { terminatedAt: "desc" }, select: { id: true, metadata: true } });
+      if (pending) await tx.orderTermination.update({ where: { id: pending.id }, data: { status: "disputed", metadata: { ...(pending.metadata || {}), undeliverableReason: String(reason || "") } } });
+    });
+    return { success: true, message: "Order flagged as disputed. Vendor has been notified.", orderId: legacyId(found.order), orderDatabaseId: found.order.id, vendorOrderId: legacyId(vendorOrder), vendorDatabaseId: vendorOrder.restaurantId };
+  },
+
   async acceptAssignment(riderId, requestedOrderId = null) {
     const resolvedRiderId = await resolveId(prisma.rider, riderId);
     if (!resolvedRiderId) return { success: false, status: 404, message: "Rider not found" };
@@ -403,7 +528,9 @@ export const riderSelfRepository = {
     });
     const losingRiderIds = losingAssignments.map((entry) => entry.riderId).filter(Boolean);
 
-    const [, , , , updatedRider] = await prisma.$transaction([
+    let updatedRider;
+    try {
+      const transactionResults = await prisma.$transaction([
       prisma.order.update({
         where: { id: found.order.id },
         data: {
@@ -459,7 +586,14 @@ export const riderSelfRepository = {
             }),
           ]
         : []),
-    ]);
+      ], { isolationLevel: "Serializable" });
+      updatedRider = transactionResults[4];
+    } catch (error) {
+      if (error?.code === "P2034") {
+        return { success: false, status: 409, message: "This delivery job was just accepted by another rider." };
+      }
+      throw error;
+    }
 
     // ── Queue 1-hour delivery watchdog (Postgres Path) ─────────────────
     try {
@@ -745,13 +879,25 @@ export const riderSelfRepository = {
     }
 
     const platformConfig = await getPlatformConfigValue();
-    const riderFixedPayout = platformConfig.riderFixedPayout || defaultPlatformConfig.riderFixedPayout;
+    // Platform configuration values are entered in naira, while PostgreSQL
+    // money columns are stored in kobo.
+    const riderPayoutType = platformConfig.riderPayoutType || defaultPlatformConfig.riderPayoutType;
+    const riderPayoutValue = Number(
+      platformConfig.riderPayoutValue ??
+      platformConfig.riderFixedPayout ??
+      defaultPlatformConfig.riderPayoutValue
+    );
     const riderVendorId = rider.vendorId;
     const isVendorManagedDelivery = rider.managedBy !== "admin";
 
     let deliveryFee = 0;
     if (rider.managedBy === "admin") {
-      deliveryFee = riderFixedPayout;
+      deliveryFee = Number(found.order.deliveryFee || 0);
+      if (deliveryFee === 0) {
+        const vendorPromo = found.order.vendorDeliveryPromo || {};
+        const freeDeliveryPromo = found.order.freeDeliveryPromo || {};
+        deliveryFee = Number(vendorPromo.originalDeliveryFee || freeDeliveryPromo.originalDeliveryFee || 0);
+      }
     } else {
       const deliveryFeeEntry = (found.order.vendorDeliveryFees || []).find((fee) => fee.restaurantId === riderVendorId);
       deliveryFee = Number(deliveryFeeEntry?.deliveryFee || 0);
@@ -766,7 +912,7 @@ export const riderSelfRepository = {
       }
     }
 
-    const riderPayout = deliveryFee > 0 ? Math.min(riderFixedPayout, deliveryFee) : 0;
+    const riderPayout = calculateRiderPayoutKobo(deliveryFee, { riderPayoutType, riderPayoutValue });
     const platformSpread = deliveryFee > 0 ? Number((deliveryFee - riderPayout).toFixed(2)) : 0;
     const statusLog = Array.isArray(found.order.statusLog) ? found.order.statusLog : [];
     const riderAssignment =

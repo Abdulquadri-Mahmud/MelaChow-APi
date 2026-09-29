@@ -5,10 +5,23 @@ const legacyId = (record) => record?.legacyMongoId || record?.id || null;
 const compactObject = (value) =>
   Object.fromEntries(Object.entries(value).filter(([, fieldValue]) => fieldValue !== undefined && fieldValue !== null));
 
+const mergeMetadata = (record, extra) => ({
+  ...(record?.metadata && typeof record.metadata === "object" && !Array.isArray(record.metadata) ? record.metadata : {}),
+  ...extra,
+});
+
 const resolveId = async (model, id) => {
   if (!id) return null;
-  const record = await model.findUnique({
-    where: { legacyMongoId: String(id) },
+  const token = String(id);
+  const record = await model.findFirst({
+    where: {
+      OR: [
+        ...( /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token)
+          ? [{ id: token }]
+          : []),
+        { legacyMongoId: token },
+      ],
+    },
     select: { id: true },
   });
   return record?.id || null;
@@ -54,7 +67,7 @@ const platformVehicleShape = (vehicle) =>
 
 const platformVehicleAdminShape = (vehicle, lookups = {}) => {
   const metadata = vehicle.metadata || {};
-  const assignedRider = metadata.legacyAssignedRiderId ? lookups.ridersByLegacyId?.[metadata.legacyAssignedRiderId] : null;
+  const assignedRider = vehicle.riders?.[0] || (metadata.legacyAssignedRiderId ? lookups.ridersByLegacyId?.[metadata.legacyAssignedRiderId] : null);
   const state = metadata.legacyStateId ? lookups.statesByLegacyId?.[metadata.legacyStateId] : null;
   const city = metadata.legacyCityId ? lookups.citiesByLegacyId?.[metadata.legacyCityId] : null;
 
@@ -78,6 +91,34 @@ const platformVehicleAdminShape = (vehicle, lookups = {}) => {
     updatedAt: vehicle.updatedAt,
     __v: 0,
   };
+};
+
+const vehicleInclude = {
+  riders: {
+    where: { deletedAt: null },
+    select: { id: true, legacyMongoId: true, name: true, phone: true },
+    take: 1,
+  },
+};
+
+const vehicleMetadata = (body, current = {}) => ({
+  ...current,
+  ...(body.stateId !== undefined ? { legacyStateId: body.stateId || null } : {}),
+  ...(body.cityId !== undefined ? { legacyCityId: body.cityId || null } : {}),
+  ...(body.notes !== undefined ? { notes: body.notes || "" } : {}),
+});
+
+const vehicleData = (body, currentMetadata = {}) => compactObject({
+  label: body.label?.trim(),
+  identifier: body.identifier?.trim(),
+  vehicleType: body.vehicleType,
+  status: body.status === "retired" ? "inactive" : body.status,
+  metadata: vehicleMetadata(body, currentMetadata),
+});
+
+const shapeOneVehicle = async (vehicle) => {
+  const lookups = await buildPlatformVehicleLookups([vehicle]);
+  return platformVehicleAdminShape(vehicle, lookups);
 };
 
 const riderShape = (rider) => {
@@ -113,7 +154,7 @@ const riderShape = (rider) => {
     isVerified: rider.isVerified,
     deletedAt: rider.deletedAt,
     totalDeliveries: rider.totalDeliveries,
-    totalEarnings: rider.totalEarnings,
+    totalEarnings: Number(rider.totalEarnings || 0) / 100,
     rating: rider.rating,
     ratingCount: rider.ratingCount,
     notes: rider.notes,
@@ -410,6 +451,7 @@ export const adminRidersRepository = {
   async listPlatformVehicles(filters = {}) {
     const vehicles = (
       await prisma.platformVehicle.findMany({
+        include: vehicleInclude,
         orderBy: { createdAt: "desc" },
       })
     ).filter((vehicle) => filterPlatformVehicle(vehicle, filters));
@@ -419,5 +461,182 @@ export const adminRidersRepository = {
       success: true,
       data: vehicles.map((vehicle) => platformVehicleAdminShape(vehicle, lookups)),
     };
+  },
+
+  async createPlatformVehicle(body) {
+    const vehicle = await prisma.platformVehicle.create({
+      data: vehicleData(body),
+      include: vehicleInclude,
+    });
+    return shapeOneVehicle(vehicle);
+  },
+
+  async updatePlatformVehicle(vehicleToken, body) {
+    const id = await resolveId(prisma.platformVehicle, vehicleToken);
+    if (!id) return null;
+    const current = await prisma.platformVehicle.findUnique({ where: { id }, select: { metadata: true } });
+    const vehicle = await prisma.platformVehicle.update({
+      where: { id },
+      data: vehicleData(body, current?.metadata || {}),
+      include: vehicleInclude,
+    });
+    return shapeOneVehicle(vehicle);
+  },
+
+  async deletePlatformVehicle(vehicleToken) {
+    const id = await resolveId(prisma.platformVehicle, vehicleToken);
+    if (!id) return false;
+    await prisma.$transaction(async (tx) => {
+      await tx.rider.updateMany({
+        where: { platformVehicleId: id },
+        data: { platformVehicleId: null, vehicleOwnership: "own" },
+      });
+      await tx.platformVehicle.delete({ where: { id } });
+    });
+    return true;
+  },
+
+  async unassignPlatformVehicle(vehicleToken) {
+    const id = await resolveId(prisma.platformVehicle, vehicleToken);
+    if (!id) return null;
+    return prisma.$transaction(async (tx) => {
+      await tx.rider.updateMany({
+        where: { platformVehicleId: id },
+        data: { platformVehicleId: null, vehicleOwnership: "own" },
+      });
+      const current = await tx.platformVehicle.findUnique({ where: { id }, select: { metadata: true } });
+      const metadata = { ...(current?.metadata || {}), legacyAssignedRiderId: null, legacyStatus: "available" };
+      const vehicle = await tx.platformVehicle.update({
+        where: { id },
+        data: { status: "available", metadata },
+        include: vehicleInclude,
+      });
+      return platformVehicleAdminShape(vehicle);
+    });
+  },
+
+  async deactivateRider(riderToken, { vendorToken = null, softDelete = false } = {}) {
+    const riderId = await resolveId(prisma.rider, riderToken);
+    if (!riderId) return { success: false, status: 404, message: "Rider not found" };
+    const rider = await prisma.rider.findUnique({ where: { id: riderId }, include: riderInclude });
+    if (vendorToken) {
+      const vendorId = await resolveId(prisma.vendor, vendorToken);
+      if (!vendorId || rider.vendorId !== vendorId) return { success: false, status: 404, message: "Rider not found for this vendor" };
+    }
+    if (softDelete && rider.currentOrderId) return { success: false, status: 409, message: "Cannot deactivate rider mid-delivery" };
+    const updated = await prisma.$transaction(async (tx) => {
+      if (rider.platformVehicleId) {
+        const vehicle = await tx.platformVehicle.findUnique({ where: { id: rider.platformVehicleId }, select: { metadata: true } });
+        await tx.platformVehicle.update({ where: { id: rider.platformVehicleId }, data: { status: "available", metadata: { ...(vehicle?.metadata || {}), legacyAssignedRiderId: null, legacyStatus: "available" } } });
+      }
+      return tx.rider.update({
+        where: { id: riderId },
+        data: { isActive: false, status: "offline", ...(softDelete ? { deletedAt: new Date(), platformVehicleId: null } : {}) },
+        include: riderInclude,
+      });
+    });
+    return { success: true, data: riderShape(updated) };
+  },
+
+  async setRiderSuspension(riderToken, { suspended, reason = "", adminToken = null }) {
+    const riderId = await resolveId(prisma.rider, riderToken);
+    if (!riderId) return null;
+    const rider = await prisma.rider.findUnique({ where: { id: riderId }, include: riderInclude });
+    const metadata = mergeMetadata(rider, {
+      isSuspended: Boolean(suspended),
+      suspendedUntil: null,
+      lastSuspensionAction: { suspended: Boolean(suspended), reason: String(reason).trim(), changedBy: adminToken ? String(adminToken) : null, changedAt: new Date().toISOString() },
+    });
+    const updated = await prisma.rider.update({ where: { id: riderId }, data: { metadata, ...(suspended ? { status: "offline" } : {}) }, include: riderInclude });
+    return riderShape(updated);
+  },
+
+  async approveRider(riderToken, adminToken = null) {
+    const riderId = await resolveId(prisma.rider, riderToken);
+    if (!riderId) return null;
+    const rider = await prisma.rider.findUnique({ where: { id: riderId }, include: riderInclude });
+    if (!rider.isActive || rider.deletedAt) throw new Error("Cannot approve an inactive rider");
+    if (!rider.cityId || !rider.stateId) throw new Error("Assign the rider's state and city before approval");
+    const adminId = adminToken ? await resolveId(prisma.admin, adminToken) : null;
+    const updated = await prisma.rider.update({
+      where: { id: riderId },
+      data: { isVerified: true, approvedAt: rider.approvedAt || new Date(), approvedBy: adminId, locationStatus: "approved", requestedState: "", requestedCity: "" },
+      include: riderInclude,
+    });
+    return riderShape(updated);
+  },
+
+  async forceRiderAvailable(riderToken, adminToken = null) {
+    const riderId = await resolveId(prisma.rider, riderToken);
+    if (!riderId) return null;
+    const rider = await prisma.rider.findUnique({ where: { id: riderId }, include: riderInclude });
+    if (rider.currentOrderId) {
+      const [order, vendorOrder] = await Promise.all([
+        prisma.order.findUnique({ where: { id: rider.currentOrderId }, select: { riderId: true } }),
+        prisma.vendorOrder.findFirst({ where: { OR: [{ id: rider.currentOrderId }, { userOrderId: rider.currentOrderId }], riderId }, select: { id: true } }),
+      ]);
+      if (order?.riderId === riderId || vendorOrder) throw new Error("Rider still has an active assigned order. Use Unassign Rider so the order and assignment are safely reset.");
+    }
+    const updated = await prisma.rider.update({
+      where: { id: riderId },
+      data: { status: "available", currentOrderId: null, assignmentExpiresAt: null, metadata: mergeMetadata(rider, { legacyCurrentOrderId: null, lastAvailabilityOverride: { from: rider.status, to: "available", overriddenBy: adminToken ? String(adminToken) : null, overriddenAt: new Date().toISOString() } }) },
+      include: riderInclude,
+    });
+    return riderShape(updated);
+  },
+
+  async updateRider(riderToken, body, adminToken = null) {
+    const riderId = await resolveId(prisma.rider, riderToken);
+    if (!riderId) return null;
+    const rider = await prisma.rider.findUnique({ where: { id: riderId }, include: riderInclude });
+    const [vendorId, stateId, cityId, requestedVehicleId, approvedBy] = await Promise.all([
+      body.vendorId ? resolveId(prisma.vendor, body.vendorId) : Promise.resolve(body.vendorId === null || body.vendorId === "" ? null : undefined),
+      body.stateId ? resolveId(prisma.state, body.stateId) : Promise.resolve(undefined),
+      body.cityId ? resolveId(prisma.city, body.cityId) : Promise.resolve(undefined),
+      body.platformVehicleId ? resolveId(prisma.platformVehicle, body.platformVehicleId) : Promise.resolve(undefined),
+      adminToken ? resolveId(prisma.admin, adminToken) : Promise.resolve(null),
+    ]);
+    if (body.vendorId && !vendorId) throw new Error("Vendor not found");
+    if (body.stateId && !stateId) throw new Error("State not found");
+    if (body.cityId && !cityId) throw new Error("City not found");
+    if (body.platformVehicleId && !requestedVehicleId) throw new Error("Platform vehicle not found");
+    const changesActiveAssignmentFields =
+      (body.status !== undefined && body.status !== rider.status) ||
+      (body.vendorId !== undefined && (vendorId || null) !== rider.vendorId) ||
+      (body.stateId !== undefined && stateId !== rider.stateId) ||
+      (body.cityId !== undefined && cityId !== rider.cityId);
+    if (rider.currentOrderId && changesActiveAssignmentFields) {
+      const error = new Error("Cannot change rider status, vendor, or city while the rider has an active assignment");
+      error.statusCode = 409;
+      throw error;
+    }
+    const ownership = body.vehicleOwnership ?? rider.vehicleOwnership;
+    const vehicleType = body.vehicleType ?? rider.vehicleType;
+    const nextVehicleId = ownership === "platform" ? (requestedVehicleId ?? rider.platformVehicleId) : null;
+    if (ownership === "platform") {
+      if (!nextVehicleId) throw new Error("Select an available platform vehicle for this rider");
+      const vehicle = await prisma.platformVehicle.findUnique({ where: { id: nextVehicleId }, include: { riders: { where: { id: { not: riderId }, deletedAt: null }, select: { id: true }, take: 1 } } });
+      if (!vehicle || vehicle.vehicleType !== vehicleType || (!["available", "assigned"].includes(vehicle.status)) || vehicle.riders.length) throw new Error("Selected platform vehicle is unavailable or does not match rider vehicle type");
+    }
+    const scalar = {};
+    for (const key of ["name", "phone", "notes", "isActive", "avatar", "status", "serviceZones", "vehicleOwnership", "vehicleType", "locationStatus", "requestedState", "requestedCity"]) if (body[key] !== undefined) scalar[key] = body[key];
+    if (body.email !== undefined) scalar.email = body.email || null;
+    if (body.metadata !== undefined) scalar.metadata = { ...(rider.metadata || {}), ...(body.metadata || {}) };
+    if (body.payoutDetails !== undefined) scalar.payoutDetails = { ...(rider.payoutDetails || {}), ...(body.payoutDetails || {}) };
+    if (body.vendorId !== undefined) { scalar.vendorId = vendorId; if (!vendorId) scalar.managedBy = "admin"; }
+    if (body.stateId !== undefined) scalar.stateId = stateId;
+    if (body.cityId !== undefined) scalar.cityId = cityId;
+    scalar.platformVehicleId = nextVehicleId;
+    if (body.stateId && body.cityId) Object.assign(scalar, { locationStatus: "approved", requestedState: "", requestedCity: "" });
+    if (body.isVerified === true) Object.assign(scalar, { isVerified: true, approvedAt: rider.approvedAt || new Date(), approvedBy });
+    if (body.isVerified === false) Object.assign(scalar, { isVerified: false, approvedAt: null, approvedBy: null, ...(rider.status === "available" ? { status: "offline" } : {}) });
+
+    await prisma.$transaction(async (tx) => {
+      if (rider.platformVehicleId && rider.platformVehicleId !== nextVehicleId) await tx.platformVehicle.update({ where: { id: rider.platformVehicleId }, data: { status: "available" } });
+      if (nextVehicleId) await tx.platformVehicle.update({ where: { id: nextVehicleId }, data: { status: "assigned" } });
+      await tx.rider.update({ where: { id: riderId }, data: scalar });
+    });
+    const updated = await prisma.rider.findUnique({ where: { id: riderId }, include: riderInclude });
+    return riderShape(updated);
   },
 };

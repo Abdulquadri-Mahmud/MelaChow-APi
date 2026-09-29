@@ -7,6 +7,8 @@ import {
     serializeChoiceGroupTemplate,
 } from "../../services/choiceGroupTemplate.service.js";
 import { syncChoiceGroupTemplateUsages } from "../../services/choiceGroupTemplateSync.service.js";
+import { usePostgresMenuWrites } from "../../services/postgres/compat.js";
+import { menuMutationRepository } from "../../services/postgres/menuMutation.repository.js";
 
 const escapeRegex = (value) => String(value).replace(/[.*+?^$()|[]\{}]/g, "\$&");
 
@@ -57,6 +59,10 @@ const buildUsageMap = async (templates) => {
 
 export const listChoiceGroupTemplates = async (req, res) => {
     try {
+        if (usePostgresMenuWrites()) {
+            const templates = await menuMutationRepository.listTemplates(req.vendor._id, { archived: req.query.archived === "true", search: req.query.search?.trim() || "" });
+            return res.status(200).json({ success: true, templates });
+        }
         const query = {
             vendor_id: req.vendor._id,
             is_archived: req.query.archived === "true",
@@ -84,6 +90,11 @@ export const listChoiceGroupTemplates = async (req, res) => {
 export const createChoiceGroupTemplate = async (req, res) => {
     try {
         const normalized = normalizeChoiceGroupTemplateInput(req.body);
+        if (usePostgresMenuWrites()) {
+            const template = await menuMutationRepository.createTemplate(req.vendor._id, normalized);
+            if (!template) return res.status(404).json({ success: false, message: "Vendor not found" });
+            return res.status(201).json({ success: true, template });
+        }
         const template = await ChoiceGroupTemplate.create({
             vendor_id: req.vendor._id,
             ...normalized,
@@ -99,6 +110,12 @@ export const createChoiceGroupTemplate = async (req, res) => {
 
 export const updateChoiceGroupTemplate = async (req, res) => {
     try {
+        if (usePostgresMenuWrites()) {
+            const normalized = normalizeChoiceGroupTemplateInput(req.body);
+            const template = await menuMutationRepository.updateTemplate(req.vendor._id, req.params.templateId, normalized);
+            if (!template) return res.status(404).json({ success: false, message: "Template not found" });
+            return res.status(200).json({ success: true, message: "Template updated everywhere it is used.", template });
+        }
         const template = await getOwnedTemplate(req.params.templateId, req.vendor._id);
         if (!template) {
             return res.status(404).json({ success: false, message: "Template not found" });
@@ -121,6 +138,11 @@ export const updateChoiceGroupTemplate = async (req, res) => {
 
 export const duplicateChoiceGroupTemplate = async (req, res) => {
     try {
+        if (usePostgresMenuWrites()) {
+            const template = await menuMutationRepository.duplicateTemplate(req.vendor._id, req.params.templateId);
+            if (!template) return res.status(404).json({ success: false, message: "Template not found" });
+            return res.status(201).json({ success: true, template });
+        }
         const source = await getOwnedTemplate(req.params.templateId, req.vendor._id);
         if (!source) {
             return res.status(404).json({ success: false, message: "Template not found" });
@@ -156,6 +178,12 @@ export const setChoiceGroupTemplateArchiveStatus = async (req, res) => {
     try {
         if (typeof req.body.is_archived !== "boolean") {
             return res.status(400).json({ success: false, message: "is_archived must be a boolean" });
+        }
+
+        if (usePostgresMenuWrites()) {
+            const template = await menuMutationRepository.archiveTemplate(req.vendor._id, req.params.templateId, req.body.is_archived);
+            if (!template) return res.status(404).json({ success: false, message: "Template not found" });
+            return res.status(200).json({ success: true, message: req.body.is_archived ? "Template archived. Existing menu items were not changed." : "Template restored.", template });
         }
 
         const template = await getOwnedTemplate(req.params.templateId, req.vendor._id);

@@ -5,6 +5,7 @@ import { postgresPaymentRepository } from "../services/postgres/payment.reposito
 import { getVendorOpenStatus } from "../utils/vendorOpenStatus.js";
 
 const liveWriteEnabled = process.env.PRISMA_SMOKE_WRITE === "1";
+const walletPayment = process.env.PRISMA_SMOKE_WALLET === "1";
 const legacyId = (row) => row?.legacyMongoId || row?.id || null;
 
 const alwaysOpenHours = {
@@ -106,6 +107,7 @@ const main = async () => {
     deliveryFee: candidate.deliveryFee,
     vendorClosed: candidate.vendorClosed,
     liveWriteEnabled,
+    walletPayment,
   };
 
   if (!liveWriteEnabled) {
@@ -122,6 +124,8 @@ const main = async () => {
     orderBy: { createdAt: "asc" },
     select: { id: true, balance: true, totalEarned: true, totalWithdrawn: true },
   });
+  let customerWalletSnapshot = await prisma.wallet.findUnique({ where: { ownerId_ownerModel: { ownerId: candidate.user.id, ownerModel: "User" } }, select: { id: true, balance: true, totalEarned: true, totalWithdrawn: true } });
+  let createdCustomerWallet = false;
 
   let createdOrderId = null;
   let reference = null;
@@ -141,16 +145,21 @@ const main = async () => {
     });
 
     const order = await postgresPaymentRepository.findOrderByPaymentReference(reference);
-    await postgresPaymentRepository.validateSuccessfulPaymentForOrder(order, {
+    if (walletPayment) {
+      if (!customerWalletSnapshot) { customerWalletSnapshot = await prisma.wallet.create({ data: { ownerId: candidate.user.id, ownerModel: "User" }, select: { id: true, balance: true, totalEarned: true, totalWithdrawn: true } }); createdCustomerWallet = true; }
+      await prisma.wallet.update({ where: { id: customerWalletSnapshot.id }, data: { balance: { increment: order.total } } });
+    } else await postgresPaymentRepository.validateSuccessfulPaymentForOrder(order, {
       reference,
       status: "success",
       amount: order.total,
       currency: "NGN",
       gateway_response: "Successful",
+      fees: 0,
+      metadata: { feeBearer: "customer" },
       paid_at: new Date().toISOString(),
     });
-    const fulfillment = await postgresPaymentRepository.fulfillPaidOrder(reference);
-    const idempotentFulfillment = await postgresPaymentRepository.fulfillPaidOrder(reference);
+    const fulfillment = await postgresPaymentRepository.fulfillPaidOrder(reference, { walletPayment });
+    const idempotentFulfillment = await postgresPaymentRepository.fulfillPaidOrder(reference, { walletPayment });
 
     const fulfilledOrder = await prisma.order.findUnique({
       where: { id: createdOrderId },
@@ -170,6 +179,8 @@ const main = async () => {
       orderBy: { createdAt: "asc" },
       select: { id: true, balance: true },
     });
+    const walletPaymentRows = await prisma.walletTransaction.count({ where: { orderId: createdOrderId, metadata: { path: ["source"], equals: "postgres_wallet_order_payment" } } });
+    if (walletPayment && walletPaymentRows !== 1) throw new Error("Wallet payment debit was not recorded exactly once");
 
     console.log(JSON.stringify({
       ok: true,
@@ -192,6 +203,7 @@ const main = async () => {
         adminWalletBalanceDelta: adminWalletSnapshot && adminWallet?.id === adminWalletSnapshot.id
           ? adminWallet.balance - adminWalletSnapshot.balance
           : null,
+        customerWalletDebitCount: walletPaymentRows,
       },
     }, null, 2));
   } finally {
@@ -208,6 +220,10 @@ const main = async () => {
           totalWithdrawn: adminWalletSnapshot.totalWithdrawn,
         },
       }).catch(() => null);
+    }
+    if (customerWalletSnapshot) {
+      if (createdCustomerWallet) await prisma.wallet.delete({ where: { id: customerWalletSnapshot.id } }).catch(() => null);
+      else await prisma.wallet.update({ where: { id: customerWalletSnapshot.id }, data: { balance: customerWalletSnapshot.balance, totalEarned: customerWalletSnapshot.totalEarned, totalWithdrawn: customerWalletSnapshot.totalWithdrawn } }).catch(() => null);
     }
     if (reference) await prisma.paymentAttempt.delete({ where: { reference } }).catch(() => null);
     if (createdOrderId) await prisma.order.delete({ where: { id: createdOrderId } }).catch(() => null);

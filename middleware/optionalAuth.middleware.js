@@ -1,6 +1,7 @@
 import jwt from "jsonwebtoken";
 import User from "../model/user.model.js";
 import { isTokenBlocked } from "./tokenBlocklist.js";
+import { findIdentityByTokenId, postgresUserIdentityEnabled, publicUser } from "../services/postgres/userIdentity.repository.js";
 
 const optionalAuth = async (req, res, next) => {
   if (req.method === "OPTIONS") return next();
@@ -14,10 +15,12 @@ const optionalAuth = async (req, res, next) => {
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
     if (decoded.type !== 'access') return next();
-    const user = await User.findById(decoded.id).select("-password");
+    const identity = postgresUserIdentityEnabled() ? await findIdentityByTokenId(decoded.id) : null;
+    const user = identity ? publicUser(identity) : await User.findById(decoded.id).select("-password");
     if (user && (!decoded.role || decoded.role === "user") && user.isActive && !user.suspended && !user.banned) {
       req.user = user;
       req.userId = decoded.id;
+      req.postgresUserId = identity?.id || null;
     }
   } catch {
     // Public pages should still load promo data for anonymous/expired sessions.

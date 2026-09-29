@@ -5,6 +5,16 @@ import City from '../../model/location/City.js';
 import State from '../../model/location/State.js';
 import { sendMail } from '../../config/mailer.js';
 import { errorHandler } from '../../utils/errorHandler.js';
+import {
+  addIdentityAddress,
+  deleteIdentityAddress,
+  postgresUserIdentityEnabled,
+  publicUser,
+  updateIdentityAddress,
+  updateIdentityProfile,
+  startIdentityPasswordReset,
+  completeIdentityPasswordReset,
+} from '../../services/postgres/userIdentity.repository.js';
 
 // In-memory token storage (or use DB in production)
 // let verificationTokens = new Map();
@@ -113,6 +123,13 @@ export const forgotPassword = async (req, res) => {
   const { email } = req.body;
 
   try {
+    if (postgresUserIdentityEnabled()) {
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const result = await startIdentityPasswordReset({ email, otp, otpExpires: new Date(Date.now() + 10 * 60 * 1000) });
+      if (result.error) return res.status(404).json({ message: 'User not found' });
+      await sendMail({ to: email, subject: 'Reset Your Password - MelaChow', html: `<p>Your password reset OTP is <strong>${otp}</strong>. It expires in 10 minutes.</p>` });
+      return res.json({ message: 'OTP has been sent to your email', ...(process.env.NODE_ENV !== 'production' && !process.env.RESEND_API_KEY ? { devOtp: otp } : {}) });
+    }
     const user = await User.findOne({ email });
     if (!user) return res.status(404).json({ message: 'User not found' });
 
@@ -177,6 +194,12 @@ export const resetPassword = async (req, res) => {
   const { email, otp, password } = req.body;
 
   try {
+    if (postgresUserIdentityEnabled()) {
+      const result = await completeIdentityPasswordReset({ email, otp, password });
+      if (result.error === 'not_found') return res.status(404).json({ message: 'User not found' });
+      if (result.error) return res.status(400).json({ message: 'Invalid or expired OTP' });
+      return res.json({ message: 'Password has been reset successfully' });
+    }
     // 1. Find the user
     const user = await User.findOne({ email });
 
@@ -398,6 +421,9 @@ export const getProfile = async (req, res) => {
   }
 
   try {
+    if (postgresUserIdentityEnabled()) {
+      return res.json({ status: true, user: req.user });
+    }
     const userId = req.userId;
     const user = await User.findById(userId).select("-password -otp -otpExpires");
 
@@ -425,6 +451,11 @@ export const updateProfile = async (req, res) => {
     const userId = req.userId;
     const { firstname, lastname, phone, avatar } = req.body;
 
+    if (postgresUserIdentityEnabled()) {
+      const updated = await updateIdentityProfile(req.postgresUserId, { firstname, lastname, phone, avatar });
+      return res.json({ status: true, message: "Profile updated", user: publicUser(updated) });
+    }
+
     const updated = await User.findByIdAndUpdate(
       userId,
       { firstname, lastname, phone, avatar },
@@ -449,16 +480,27 @@ export const addAddress = async (req, res) => {
       state,
       cityId,
       stateId,
-      coordinates,
+      coordinates, provider, providerPlaceId, formattedAddress, locationSource,
       isDefault = false,
       label = "Home"
     } = req.body;
 
-    if (!addressLine || (!city && !cityId) || (!state && !stateId)) {
+    if (!addressLine || (coordinates == null && ((!city && !cityId) || (!state && !stateId)))) {
       return res.status(400).json({
         status: false,
-        message: "Address line, city, and state are required",
+        message: "Address line and either Google coordinates or city/state names are required",
       });
+    }
+
+    if (postgresUserIdentityEnabled()) {
+      if (coordinates != null) {
+        const lat = Number(coordinates?.lat), lng = Number(coordinates?.lng);
+        if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180) return res.status(400).json({ status: false, message: "Invalid delivery pin coordinates" });
+      }
+      const updated = await addIdentityAddress(req.postgresUserId, { label, addressLine, isDefault, city, state, cityId, stateId, provider, providerPlaceId, formattedAddress, locationSource, ...(coordinates != null ? { coordinates } : {}) });
+      if (updated?.error === "invalid_city") return res.status(400).json({ status: false, message: "Invalid or inactive cityId" });
+      if (updated?.error === "invalid_state") return res.status(400).json({ status: false, message: "Invalid or inactive stateId" });
+      return res.status(200).json({ status: true, message: "Address added successfully", addresses: publicUser(updated).addresses });
     }
 
     const user = await User.findById(userId);
@@ -534,6 +576,10 @@ export const addAddress = async (req, res) => {
 
 export const getUserAddresses = async (req, res) => {
   try {
+    if (postgresUserIdentityEnabled()) {
+      const addresses = req.user.addresses || [];
+      return res.status(200).json({ success: true, count: addresses.length, addresses });
+    }
     const userId = req.userId;
 
     const user = await User.findById(userId)
@@ -572,12 +618,29 @@ export const updateAddress = async (req, res) => {
       isDefault,
       cityId,
       stateId,
-      coordinates,
+      coordinates, provider, providerPlaceId, formattedAddress, locationSource,
       label
     } = req.body;
 
     if (!addressId)
       return res.status(400).json({ status: false, message: "addressId query is required" });
+
+    if (postgresUserIdentityEnabled()) {
+      if (coordinates != null) {
+        const lat = Number(coordinates?.lat);
+        const lng = Number(coordinates?.lng);
+        if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lng) || lng < -180 || lng > 180) {
+          return res.status(400).json({ status: false, message: "Invalid delivery pin coordinates" });
+        }
+      }
+      const updated = await updateIdentityAddress(req.postgresUserId, addressId, { state, city, addressLine, isDefault, cityId, stateId, provider, providerPlaceId, formattedAddress, locationSource, ...(coordinates != null ? { coordinates } : {}), label });
+      if (updated?.error === "invalid_city") return res.status(400).json({ status: false, message: "Invalid or inactive cityId" });
+      if (updated?.error === "invalid_state") return res.status(400).json({ status: false, message: "Invalid or inactive stateId" });
+      if (!updated) return res.status(404).json({ status: false, message: "Address not found" });
+      const addresses = publicUser(updated).addresses;
+      const address = addresses.find((item) => String(item._id) === String(addressId) || String(item.id) === String(addressId));
+      return res.json({ status: true, message: "Address updated successfully", address, addresses });
+    }
 
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ status: false, message: "User not found" });
@@ -669,6 +732,12 @@ export const deleteAddress = async (req, res) => {
 
     if (!addressId)
       return res.status(400).json({ status: false, message: "addressId query is required" });
+
+    if (postgresUserIdentityEnabled()) {
+      const updated = await deleteIdentityAddress(req.postgresUserId, addressId);
+      if (!updated) return res.status(404).json({ status: false, message: "Address not found" });
+      return res.json({ status: true, message: "Address deleted successfully", addresses: publicUser(updated).addresses });
+    }
 
     const user = await User.findById(userId);
     if (!user) return res.status(404).json({ status: false, message: "User not found" });

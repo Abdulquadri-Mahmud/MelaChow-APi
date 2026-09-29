@@ -9,12 +9,15 @@ import { sendAuthCookies } from '../../utils/sendTokenCookie.js';
 
 import { generateAccessToken, generateRefreshToken } from "../../utils/generateTokens.js";
 import ActivityLog from "../../model/ActivityLog.js";
+import { usePostgresAdminWrites } from "../../services/postgres/compat.js";
+import { adminAccountRepository } from "../../services/postgres/adminAccount.repository.js";
 
 // ==========================
 // GET CURRENT ADMIN PROFILE
 // ==========================
 export const getMe = async (req, res) => {
   try {
+    if(usePostgresAdminWrites()){const admin=await adminAccountRepository.get(req.admin._id);if(!admin)return res.status(404).json({success:false,message:"Admin not found"});return res.status(200).json({success:true,admin});}
     const admin = await Admin.findById(req.admin._id);
     if (!admin) return res.status(404).json({ success: false, message: "Admin not found" });
 
@@ -38,6 +41,7 @@ export const registerAdmin = async (req, res) => {
         message: "A valid role is required. Allowed roles: admin, super-admin, finance-admin.",
       });
     }
+    if(usePostgresAdminWrites()){const result=await adminAccountRepository.register({name,email,password,role});if(result.error)return res.status(400).json({success:false,message:"Email already exists"});return res.status(201).json({success:true,message:"Admin registered successfully",admin:{...result.admin,wallet:result.wallet}});}
 
     // Check if admin already exists
     const existing = await Admin.findOne({ email });
@@ -94,6 +98,7 @@ export const registerAdmin = async (req, res) => {
 export const loginAdmin = async (req, res) => {
   try {
     const { email, password } = req.body;
+    if(usePostgresAdminWrites()){const raw=await adminAccountRepository.findByEmail(email,{raw:true});if(!raw)return res.status(404).json({success:false,message:"Admin not found"});if(!await adminAccountRepository.comparePassword(raw,password))return res.status(401).json({success:false,message:"Invalid credentials"});await adminAccountRepository.resetLoginAttempts(raw.id);const role=raw.role==="super_admin"?"super-admin":raw.role==="finance_admin"?"finance-admin":raw.role,accessToken=generateAccessToken({id:raw.id,role}),refreshToken=generateRefreshToken({id:raw.id,role});sendAuthCookies(res,accessToken,refreshToken,"admin");await adminAccountRepository.recordActivity({actorId:raw.id,action:"LOGIN",targetModel:"System",details:`${raw.name} logged into the system`,ipAddress:req.ip,userAgent:req.headers["user-agent"]});return res.status(200).json({success:true,message:"Login successful",accessToken,admin:await adminAccountRepository.get(raw.id)});}
     const admin = await Admin.findOne({ email }).select("+password");
     if (!admin) return res.status(404).json({ success: false, message: "Admin not found" });
 
@@ -132,6 +137,7 @@ export const loginAdmin = async (req, res) => {
 export const forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
+    if(usePostgresAdminWrites()){const admin=await adminAccountRepository.findByEmail(email,{raw:true});if(!admin)return res.status(404).json({success:false,message:"Admin not found"});const otp=Math.floor(100000+Math.random()*900000).toString();await adminAccountRepository.setResetOtp(admin.id,otp,new Date(Date.now()+10*60*1000));await sendAdminEmail({...admin,role:admin.role==="super_admin"?"super-admin":admin.role},otp,"reset");return res.status(200).json({success:true,message:"OTP sent to your email"});}
     const admin = await Admin.findOne({ email });
     if (!admin) return res.status(404).json({ success: false, message: "Admin not found" });
 
@@ -154,6 +160,7 @@ export const forgotPassword = async (req, res) => {
 export const resetPassword = async (req, res) => {
   try {
     const { email, otp, newPassword } = req.body;
+    if(usePostgresAdminWrites()){const admin=await adminAccountRepository.findByEmail(email,{raw:true});if(!admin)return res.status(404).json({success:false,message:"Admin not found"});if(String(admin.otp||"").trim()!==String(otp).trim()||!admin.otpExpires||new Date()>admin.otpExpires)return res.status(400).json({success:false,message:"OTP invalid or expired"});const token=`legacy-otp-${Date.now()}`;await adminAccountRepository.setResetToken(admin.id,token,new Date(Date.now()+60000));await adminAccountRepository.resetPassword(email,token,newPassword);return res.status(200).json({success:true,message:"Password reset successfully"});}
     const admin = await Admin.findOne({ email }).select("+password");
     if (!admin) return res.status(404).json({ success: false, message: "Admin not found" });
 
@@ -176,6 +183,7 @@ export const resetPassword = async (req, res) => {
 // =============================
 export const getAllAdmins = async (req, res) => {
   try {
+    if(usePostgresAdminWrites()){const admins=await adminAccountRepository.list();return res.status(200).json({success:true,count:admins.length,admins});}
     const admins = await Admin.find().select("-password");
     res.status(200).json({ success: true, count: admins.length, admins });
   } catch (err) {
@@ -189,6 +197,7 @@ export const getAllAdmins = async (req, res) => {
 export const deleteAdmin = async (req, res) => {
   try {
     const { id } = req.params;
+    if(usePostgresAdminWrites()){const deleted=await adminAccountRepository.remove(id,req.admin?._id);if(!deleted)return res.status(404).json({success:false,message:"Admin not found"});return res.status(200).json({success:true,message:"Admin deleted successfully"});}
     const adminToDelete = await Admin.findById(id);
     await Admin.findByIdAndDelete(id);
 
@@ -227,6 +236,7 @@ export const logoutAdmin = async (req, res) => {
 
     // Log logout
     if (req.admin) {
+      if(usePostgresAdminWrites()){await adminAccountRepository.recordActivity({actorId:req.admin._id,action:"LOGOUT",targetModel:"System",details:`${req.admin.name} logged out`});return res.status(200).json({success:true,message:"Logged out successfully"});}
       await ActivityLog.create({
         adminId: req.admin._id,
         action: "LOGOUT",
@@ -247,6 +257,7 @@ export const logoutAdmin = async (req, res) => {
 export const getRecentActivities = async (req, res) => {
   try {
     const { limit = 10, page = 1 } = req.query;
+    if(usePostgresAdminWrites()){const result=await adminAccountRepository.activities({limit,page});return res.status(200).json({success:true,count:result.activities.length,total:result.total,activities:result.activities});}
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     const activities = await ActivityLog.find()

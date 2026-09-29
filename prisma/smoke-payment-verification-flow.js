@@ -141,6 +141,8 @@ const main = async () => {
       amount: order.total,
       currency: "NGN",
       gateway_response: "Successful",
+      fees: 0,
+      metadata: { feeBearer: "customer" },
       paid_at: new Date().toISOString(),
     });
 

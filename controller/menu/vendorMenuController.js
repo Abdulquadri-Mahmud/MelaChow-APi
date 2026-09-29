@@ -7,7 +7,8 @@ import ChoiceGroupTemplate from '../../model/menu/ChoiceGroupTemplate.js';
 // TODO: ComboItem replaces MenuVariant — update variant-related functions to use ComboItem
 // import { MenuVariant, MenuVariantComponent, VariantChoiceGroup, VariantChoiceOption } from '../../model/menu/MenuVariant.js';
 import { MenuService } from '../../services/menu.service.js';
-import { usePostgresMenuReads } from '../../services/postgres/compat.js';
+import { usePostgresMenuReads, usePostgresMenuWrites } from '../../services/postgres/compat.js';
+import { menuMutationRepository } from '../../services/postgres/menuMutation.repository.js';
 
 const getPostgresMenuRepository = async () => {
     const { menuCatalogRepository } = await import('../../services/postgres/menuCatalog.repository.js');
@@ -22,6 +23,11 @@ export const createVendorMenuSection = async (req, res) => {
     try {
         const { name, description, sort_order, is_visible } = req.body;
         const vendor_id = req.vendor._id;
+        if (usePostgresMenuWrites()) {
+            const section = await menuMutationRepository.createSection(vendor_id, req.body);
+            if (!section) return res.status(404).json({ success: false, message: 'Vendor not found' });
+            return res.status(201).json({ success: true, section });
+        }
         const section = await VendorMenuSection.create({ vendor_id, name, description, sort_order, is_visible });
         res.status(201).json({ success: true, section });
     } catch (error) {
@@ -52,6 +58,11 @@ export const updateVendorMenuSection = async (req, res) => {
         const { sectionId } = req.params;
         const vendor_id = req.vendor._id;
         const { name, description, sort_order, is_visible } = req.body;
+        if (usePostgresMenuWrites()) {
+            const section = await menuMutationRepository.updateSection(vendor_id, sectionId, req.body);
+            if (!section) return res.status(404).json({ success: false, message: 'Section not found' });
+            return res.status(200).json({ success: true, section });
+        }
         const section = await VendorMenuSection.findOneAndUpdate(
             { _id: sectionId, vendor_id, deleted_at: null }, // scope to vendor + not deleted
             { name, description, sort_order, is_visible },
@@ -68,6 +79,11 @@ export const deleteVendorMenuSection = async (req, res) => {
     try {
         const { sectionId } = req.params;
         const vendor_id = req.vendor._id;
+        if (usePostgresMenuWrites()) {
+            const deleted = await menuMutationRepository.deleteSection(vendor_id, sectionId);
+            if (!deleted) return res.status(404).json({ success: false, message: 'Section not found' });
+            return res.status(200).json({ success: true, message: 'Section deleted. Items moved to "Other".' });
+        }
 
         // Soft delete — set deleted_at timestamp instead of destroying the record
         const section = await VendorMenuSection.findOneAndUpdate(
@@ -100,6 +116,11 @@ export const createMenuItem = async (req, res) => {
             image_url, item_type, dietary_type, sort_order, prep_time_minutes, tags,
         } = req.body;
         const vendor_id = req.vendor._id;
+        if (usePostgresMenuWrites()) {
+            const item = await menuMutationRepository.createItem(vendor_id, req.body);
+            if (!item) return res.status(400).json({ success: false, message: 'Vendor or category not found' });
+            return res.status(201).json({ success: true, item });
+        }
 
         const VALID_ITEM_TYPES = ["FOOD", "DRINK", "SIDE", "PROTEIN", "SWALLOW", "SOUP", "DESSERT", "OTHER"];
         const VALID_DIETARY_TYPES = ["veg", "non-veg", "vegan", "halal", "kosher", "mixed"];
@@ -146,6 +167,11 @@ export const updateMenuItem = async (req, res) => {
         const { itemId } = req.params;
         const vendor_id = req.vendor._id;
         const { platform_category_id, name, description, image_url, item_type, dietary_type, prep_time_minutes, tags, sort_order, vendor_section_id } = req.body;
+        if (usePostgresMenuWrites()) {
+            const item = await menuMutationRepository.updateItem(vendor_id, itemId, req.body);
+            if (!item) return res.status(404).json({ success: false, message: 'Item not found' });
+            return res.status(200).json({ success: true, item });
+        }
 
         const VALID_ITEM_TYPES = ["FOOD", "DRINK", "SIDE", "PROTEIN", "SWALLOW", "SOUP", "DESSERT", "OTHER"];
         const VALID_DIETARY_TYPES = ["veg", "non-veg", "vegan", "halal", "kosher", "mixed"];
@@ -211,6 +237,13 @@ export const toggleMenuItemAvailability = async (req, res) => {
         }
 
         // ── GUARD 3: Validate itemId is a valid ObjectId ───────
+        if (usePostgresMenuWrites()) {
+            const result = await menuMutationRepository.toggleItemAvailability(vendorId, itemId);
+            if (!result) return res.status(404).json({ success: false, message: "Menu item not found" });
+            if (result.error === "archived") return res.status(400).json({ success: false, message: "Restore this item from archive before making it available" });
+            return res.status(200).json({ success: true, message: result.item.is_available ? "Item is now visible on your menu" : "Item is now hidden from your menu", item: result.item });
+        }
+
         if (!mongoose.Types.ObjectId.isValid(itemId)) {
             return res.status(400).json({
                 success: false,
@@ -277,6 +310,12 @@ export const setMenuItemArchiveStatus = async (req, res) => {
             return res.status(400).json({ success: false, message: 'archived must be boolean' });
         }
 
+        if (usePostgresMenuWrites()) {
+            const item = await menuMutationRepository.setItemArchive(vendor_id, itemId, archived);
+            if (!item) return res.status(404).json({ success: false, message: 'Menu item not found' });
+            return res.status(200).json({ success: true, message: archived ? 'Item archived successfully' : 'Item restored successfully', item });
+        }
+
         const item = await MenuItem.findOne({ _id: itemId, vendor_id });
         if (!item) return res.status(404).json({ success: false, message: 'Menu item not found' });
 
@@ -313,6 +352,12 @@ export const toggleMenuItemStock = async (req, res) => {
         const vendor_id = req.vendor._id;
         const { is_in_stock } = req.body;
 
+        if (usePostgresMenuWrites()) {
+            const item = await menuMutationRepository.setItemStock(vendor_id, itemId, is_in_stock);
+            if (!item) return res.status(404).json({ success: false, message: 'Item not found' });
+            return res.status(200).json({ success: true, item });
+        }
+
         const item = await MenuItem.findOneAndUpdate({ _id: itemId, vendor_id }, { is_in_stock }, { new: true });
         if (!item) return res.status(404).json({ success: false, message: 'Item not found' });
 
@@ -327,6 +372,12 @@ export const moveItemToSection = async (req, res) => {
         const { itemId } = req.params;
         const { vendor_section_id } = req.body;
         const vendor_id = req.vendor._id;
+
+        if (usePostgresMenuWrites()) {
+            const item = await menuMutationRepository.moveItem(vendor_id, itemId, vendor_section_id);
+            if (!item) return res.status(404).json({ success: false, message: 'Item not found' });
+            return res.status(200).json({ success: true, item });
+        }
 
         const item = await MenuItem.findOneAndUpdate(
             { _id: itemId, vendor_id },
@@ -350,6 +401,12 @@ export const addMenuItemPortion = async (req, res) => {
         const { itemId } = req.params;
         const { label, price, is_default, max_quantity, sort_order, track_stock, stock_quantity, low_stock_threshold } = req.body;
         const vendor_id = req.vendor._id;
+
+        if (usePostgresMenuWrites()) {
+            const portion = await menuMutationRepository.createPortion(vendor_id, itemId, req.body);
+            if (!portion) return res.status(404).json({ success: false, message: 'Item not found' });
+            return res.status(201).json({ success: true, portion });
+        }
 
         // Confirm item belongs to this vendor
         const item = await MenuItem.findOne({ _id: itemId, vendor_id });
@@ -384,6 +441,12 @@ export const updateMenuItemPortion = async (req, res) => {
     try {
         const { itemId, portionId } = req.params;
         const vendor_id = req.vendor._id;
+
+        if (usePostgresMenuWrites()) {
+            const portion = await menuMutationRepository.updatePortion(vendor_id, itemId, portionId, req.body);
+            if (!portion) return res.status(404).json({ success: false, message: 'Portion not found' });
+            return res.status(200).json({ success: true, portion });
+        }
 
         // Ensure the item belongs to this vendor
         const item = await MenuItem.findOne({ _id: itemId, vendor_id });
@@ -428,6 +491,12 @@ export const togglePortionStock = async (req, res) => {
         const { itemId, portionId } = req.params;
         const { is_in_stock } = req.body;
         const vendor_id = req.vendor._id;
+
+        if (usePostgresMenuWrites()) {
+            const portion = await menuMutationRepository.updatePortion(vendor_id, itemId, portionId, { is_in_stock });
+            if (!portion) return res.status(404).json({ success: false, message: 'Portion not found' });
+            return res.status(200).json({ success: true, portion });
+        }
 
         const item = await MenuItem.findOne({ _id: itemId, vendor_id });
         if (!item) return res.status(404).json({ success: false, message: 'Item not found' });
@@ -706,6 +775,12 @@ export const addMenuItemChoiceGroup = async (req, res) => {
         const { name, min_selections, max_selections, is_required, sort_order, source_template_id } = req.body;
         const vendor_id = req.vendor._id;
 
+        if (usePostgresMenuWrites()) {
+            const group = await menuMutationRepository.createGroup(vendor_id, itemId, req.body);
+            if (!group) return res.status(404).json({ success: false, message: 'Item not found' });
+            return res.status(201).json({ success: true, group });
+        }
+
         const item = await MenuItem.findOne({ _id: itemId, vendor_id });
         if (!item) return res.status(404).json({ success: false, message: 'Item not found' });
 
@@ -739,6 +814,12 @@ export const updateMenuItemChoiceGroup = async (req, res) => {
         const { itemId, groupId } = req.params;
         const vendor_id = req.vendor._id;
         const { name, min_selections, max_selections, is_required, sort_order } = req.body;
+
+        if (usePostgresMenuWrites()) {
+            const group = await menuMutationRepository.updateGroup(vendor_id, itemId, groupId, req.body);
+            if (!group) return res.status(404).json({ success: false, message: 'Choice group not found' });
+            return res.status(200).json({ success: true, group });
+        }
 
         // Verify item ownership
         const item = await MenuItem.findOne({ _id: itemId, vendor_id });
@@ -788,6 +869,12 @@ export const addMenuItemChoiceOption = async (req, res) => {
     try {
         const { groupId } = req.params;
         const { label, price_modifier_naira, image_url, is_available, sort_order, track_stock, stock_quantity, low_stock_threshold, source_template_option_id } = req.body;
+
+        if (usePostgresMenuWrites()) {
+            const option = await menuMutationRepository.createOption(req.vendor._id, groupId, req.body);
+            if (!option) return res.status(404).json({ success: false, message: 'Choice group not found or access denied' });
+            return res.status(201).json({ success: true, option });
+        }
 
         const group = await MenuItemChoiceGroup.findById(groupId).lean();
         if (!group) return res.status(404).json({ success: false, message: 'Choice group not found' });
@@ -850,6 +937,12 @@ export const updateMenuItemChoiceOption = async (req, res) => {
     try {
         const { optionId } = req.params;
         const { label, price_modifier_naira, image_url, is_available, sort_order, track_stock, stock_quantity, low_stock_threshold } = req.body;
+
+        if (usePostgresMenuWrites()) {
+            const option = await menuMutationRepository.updateOption(req.vendor._id, optionId, req.body);
+            if (!option) return res.status(404).json({ success: false, message: 'Option not found or access denied' });
+            return res.status(200).json({ success: true, option });
+        }
 
         const existingOption = await MenuItemChoiceOption.findById(optionId).lean();
         if (!existingOption) return res.status(404).json({ success: false, message: 'Option not found' });
@@ -935,6 +1028,12 @@ export const deleteMenuItem = async (req, res) => {
         const { itemId } = req.params;
         const vendor_id = req.vendor._id;
 
+        if (usePostgresMenuWrites()) {
+            const deleted = await menuMutationRepository.deleteItem(vendor_id, itemId);
+            if (!deleted) return res.status(404).json({ success: false, message: 'Menu item not found' });
+            return res.status(200).json({ success: true, message: 'Menu item and all related data deleted successfully' });
+        }
+
         if (!mongoose.Types.ObjectId.isValid(itemId)) {
             return res.status(400).json({ success: false, message: 'Invalid item ID' });
         }
@@ -966,6 +1065,12 @@ export const deleteMenuItemPortion = async (req, res) => {
     try {
         const { itemId, portionId } = req.params;
         const vendor_id = req.vendor._id;
+
+        if (usePostgresMenuWrites()) {
+            const deleted = await menuMutationRepository.deletePortion(vendor_id, itemId, portionId);
+            if (!deleted) return res.status(404).json({ success: false, message: 'Portion not found' });
+            return res.status(200).json({ success: true, message: 'Portion deleted successfully' });
+        }
 
         // Ownership check via the parent item
         const item = await MenuItem.findOne({ _id: itemId, vendor_id }).lean();
@@ -1007,6 +1112,12 @@ export const deleteMenuItemChoiceGroup = async (req, res) => {
         const { groupId } = req.params;
         const vendor_id = req.vendor._id;
 
+        if (usePostgresMenuWrites()) {
+            const deleted = await menuMutationRepository.deleteGroup(vendor_id, itemId, groupId);
+            if (!deleted) return res.status(404).json({ success: false, message: 'Choice group not found' });
+            return res.status(200).json({ success: true, message: 'Choice group and all its options deleted' });
+        }
+
         const group = await MenuItemChoiceGroup.findById(groupId).lean();
         if (!group) return res.status(404).json({ success: false, message: 'Choice group not found' });
 
@@ -1031,6 +1142,12 @@ export const deleteMenuItemChoiceOption = async (req, res) => {
     try {
         const { optionId } = req.params;
         const vendor_id = req.vendor._id;
+
+        if (usePostgresMenuWrites()) {
+            const deleted = await menuMutationRepository.deleteOption(vendor_id, optionId);
+            if (!deleted) return res.status(404).json({ success: false, message: 'Choice option not found or access denied' });
+            return res.status(200).json({ success: true, message: 'Choice option deleted' });
+        }
 
         const option = await MenuItemChoiceOption.findById(optionId).lean();
         if (!option) return res.status(404).json({ success: false, message: 'Choice option not found' });

@@ -1,4 +1,5 @@
 import express from 'express';
+import optionalAuth from '../../middleware/optionalAuth.middleware.js';
 import {
     getFullVendorMenu,
     getMenuItemDetails,
@@ -15,7 +16,7 @@ const router = express.Router();
 router.get('/foods/:foodId', getPublicFoodDetail);
 
 // ─── Vendor-specific menu (customer facing) ────────────────────────────────
-router.get('/:vendorId/menu', getFullVendorMenu);
+router.get('/:vendorId/menu', optionalAuth, getFullVendorMenu);
 router.get('/:vendorId/menu/items/:itemId', getMenuItemDetails);
 router.get('/:vendorId/menu/combos/:comboId', getComboDetails);
 

@@ -1,6 +1,8 @@
 import mongoose from "mongoose";
 import Vendor from "../../../model/vendor/vendor.model.js";
 import Rider from "../../../model/rider.model.js";
+import { usePostgresAdminWrites } from "../../../services/postgres/compat.js";
+import { adminMutationRepository } from "../../../services/postgres/adminMutation.repository.js";
 
 /**
  * Payout fee overrides (fee-bearer + markup) per vendor/rider.
@@ -25,7 +27,7 @@ const setVendorOverride = async (req, res) => {
             return res.status(400).json({ success: false, message: "markupAmount must be a non-negative number" });
         }
 
-        const vendor = await Vendor.findById(vendorId);
+        const vendor = usePostgresAdminWrites()?await adminMutationRepository.getPayoutOwner("vendor",vendorId):await Vendor.findById(vendorId);
         if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
 
         const historyEntry = {
@@ -49,7 +51,7 @@ const setVendorOverride = async (req, res) => {
             history: [...(vendor.payoutFeeOverride?.history || []), historyEntry],
         };
 
-        await vendor.save();
+        if(usePostgresAdminWrites())await adminMutationRepository.setPayoutFeeOverride("vendor",vendorId,vendor.payoutFeeOverride,req.admin?._id||req.user?._id);else await vendor.save();
 
         return res.status(200).json({
             success: true,
@@ -73,7 +75,7 @@ const setRiderOverride = async (req, res) => {
             return res.status(400).json({ success: false, message: "markupAmount must be a non-negative number" });
         }
 
-        const rider = await Rider.findById(riderId);
+        const rider = usePostgresAdminWrites()?await adminMutationRepository.getPayoutOwner("rider",riderId):await Rider.findById(riderId);
         if (!rider) return res.status(404).json({ success: false, message: "Rider not found" });
 
         // Any nonzero markup OR a non-platform feeBearer reduces what the rider
@@ -105,7 +107,7 @@ const setRiderOverride = async (req, res) => {
             history: [...(rider.payoutFeeOverride?.history || []), historyEntry],
         };
 
-        await rider.save();
+        if(usePostgresAdminWrites())await adminMutationRepository.setPayoutFeeOverride("rider",riderId,rider.payoutFeeOverride,req.admin?._id||req.user?._id);else await rider.save();
 
         return res.status(200).json({
             success: true,
@@ -127,7 +129,7 @@ const setRiderOverride = async (req, res) => {
 const confirmRiderNotice = async (req, res) => {
     try {
         const { riderId } = req.params;
-        const rider = await Rider.findById(riderId);
+        const rider = usePostgresAdminWrites()?await adminMutationRepository.getPayoutOwner("rider",riderId):await Rider.findById(riderId);
         if (!rider) return res.status(404).json({ success: false, message: "Rider not found" });
 
         if (rider.payoutFeeOverride?.status !== "pending_notice") {
@@ -149,7 +151,7 @@ const confirmRiderNotice = async (req, res) => {
             note: "Manual notice confirmed by admin",
         });
 
-        await rider.save();
+        if(usePostgresAdminWrites())await adminMutationRepository.setPayoutFeeOverride("rider",riderId,rider.payoutFeeOverride,req.admin?._id||req.user?._id);else await rider.save();
 
         return res.status(200).json({
             success: true,
@@ -164,7 +166,7 @@ const confirmRiderNotice = async (req, res) => {
 const clearVendorOverride = async (req, res) => {
     try {
         const { vendorId } = req.params;
-        const vendor = await Vendor.findById(vendorId);
+        const vendor = usePostgresAdminWrites()?await adminMutationRepository.getPayoutOwner("vendor",vendorId):await Vendor.findById(vendorId);
         if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
 
         vendor.payoutFeeOverride = {
@@ -182,7 +184,7 @@ const clearVendorOverride = async (req, res) => {
                 note: "Override cleared",
             }],
         };
-        await vendor.save();
+        if(usePostgresAdminWrites())await adminMutationRepository.setPayoutFeeOverride("vendor",vendorId,vendor.payoutFeeOverride,req.admin?._id||req.user?._id);else await vendor.save();
         return res.status(200).json({ success: true, message: "Vendor override cleared — reverted to platform default.", data: vendor.payoutFeeOverride });
     } catch (error) {
         return res.status(500).json({ success: false, message: error.message });
@@ -192,7 +194,7 @@ const clearVendorOverride = async (req, res) => {
 const clearRiderOverride = async (req, res) => {
     try {
         const { riderId } = req.params;
-        const rider = await Rider.findById(riderId);
+        const rider = usePostgresAdminWrites()?await adminMutationRepository.getPayoutOwner("rider",riderId):await Rider.findById(riderId);
         if (!rider) return res.status(404).json({ success: false, message: "Rider not found" });
 
         rider.payoutFeeOverride = {
@@ -210,7 +212,7 @@ const clearRiderOverride = async (req, res) => {
                 note: "Override cleared",
             }],
         };
-        await rider.save();
+        if(usePostgresAdminWrites())await adminMutationRepository.setPayoutFeeOverride("rider",riderId,rider.payoutFeeOverride,req.admin?._id||req.user?._id);else await rider.save();
         return res.status(200).json({ success: true, message: "Rider override cleared — reverted to platform default.", data: rider.payoutFeeOverride });
     } catch (error) {
         return res.status(500).json({ success: false, message: error.message });

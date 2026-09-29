@@ -26,6 +26,7 @@ router.post('/set-password', setPassword);
 
 // ✅ NEW: Password-based login
 router.post('/login-password', loginWithPassword);
+router.post('/login', loginWithPassword);
 
 // ✅ NEW: Password reset flow
 router.post('/forgot-password-new', forgotPasswordNew);

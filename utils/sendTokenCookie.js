@@ -15,7 +15,15 @@
  * 
  * ========================================
  */
-export const sendTokenCookie = (res, token, cookieName = 'token', maxAge = 15 * 60 * 1000) => {
+const durationToMs = (value, fallback) => {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  const match = String(value || '').trim().match(/^(\d+)\s*(ms|s|m|h|d)$/i);
+  if (!match) return fallback;
+  const units = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
+  return Number(match[1]) * units[match[2].toLowerCase()];
+};
+
+export const sendTokenCookie = (res, token, cookieName = 'token', maxAge = durationToMs(process.env.JWT_EXPIRES_IN || '7d', 7 * 24 * 60 * 60 * 1000)) => {
   const isProduction = process.env.NODE_ENV === "production";
 
   const cookieOptions = {
@@ -49,6 +57,7 @@ export const sendAuthCookies = (res, accessToken, refreshToken, role = 'user') =
     rider: ['riderToken', 'riderRefreshToken'],
   };
   const [accessName, refreshName] = names[role] || names.user;
-  sendTokenCookie(res, accessToken, accessName, 15 * 60 * 1000);
+  const accessMaxAge = durationToMs(process.env.JWT_EXPIRES_IN || '7d', 7 * 24 * 60 * 60 * 1000);
+  sendTokenCookie(res, accessToken, accessName, accessMaxAge);
   sendTokenCookie(res, refreshToken, refreshName, 30 * 24 * 60 * 60 * 1000);
 };

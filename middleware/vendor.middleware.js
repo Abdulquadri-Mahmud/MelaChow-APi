@@ -1,6 +1,7 @@
 import jwt from "jsonwebtoken";
 import vendorModel from "../model/vendor/vendor.model.js";
 import { isTokenBlocked } from "./tokenBlocklist.js";
+import { findVendorByTokenId, postgresVendorIdentityEnabled, publicVendor } from "../services/postgres/vendorIdentity.repository.js";
 
 const authVendor = async (req, res, next) => {
   try {
@@ -52,7 +53,10 @@ const authVendor = async (req, res, next) => {
     }
 
     // Fetch vendor from database
-    const vendor = await vendorModel.findById(decoded.id);
+    const postgresVendor = postgresVendorIdentityEnabled() ? await findVendorByTokenId(decoded.id) : null;
+    const vendor = postgresVendorIdentityEnabled()
+      ? (postgresVendor ? publicVendor(postgresVendor) : null)
+      : await vendorModel.findById(decoded.id);
 
     if (!vendor) {
       return res.status(401).json({
@@ -72,6 +76,9 @@ const authVendor = async (req, res, next) => {
 
     // Attach vendor to request object for use in controllers
     req.vendor = vendor;
+    req.vendorId = vendor._id;
+    req.postgresVendorId = postgresVendor?.id || null;
+    req.postgresVendor = postgresVendor || null;
     next();
   } catch (err) {
     console.error("Vendor Auth Middleware Error:", err.message);

@@ -36,3 +36,23 @@ export const getDeliveryOtpContext = async (orderToken, riderToken) => {
     customerEmail: order.user?.email || null,
   };
 };
+
+export const storeDeliveryOtpSession = (key, payload, expiresAt) =>
+  prisma.deliveryOtpSession.upsert({
+    where: { key },
+    create: { key, payload, expiresAt },
+    update: { payload, expiresAt },
+  });
+
+export const getDeliveryOtpSession = async (key) => {
+  const session = await prisma.deliveryOtpSession.findUnique({ where: { key } });
+  if (!session) return null;
+  if (session.expiresAt <= new Date()) {
+    await prisma.deliveryOtpSession.delete({ where: { key } }).catch(() => null);
+    return null;
+  }
+  return session.payload;
+};
+
+export const deleteDeliveryOtpSession = (key) =>
+  prisma.deliveryOtpSession.deleteMany({ where: { key } });

@@ -232,9 +232,15 @@ export const getFullVendorMenu = async (req, res) => {
                 return res.status(404).json({ success: false, message: "Vendor not found" });
             }
 
+            let vendor = menu.vendor;
+            if (req.query.addressId && req.postgresUserId) {
+                const { getDeliveryQuotes } = await import("../../services/deliveryPricing.service.js");
+                const quote = (await getDeliveryQuotes({ addressId: req.query.addressId, vendorIds: [vendor._id], userId: req.postgresUserId, checkout: false }))[0];
+                if (quote) vendor = { ...vendor, deliveryFee: quote.deliveryFeeKobo / 100, distanceKm: quote.distanceKm, deliverable: quote.deliverable, estimatedDeliveryTime: quote.estimatedDurationMinutes || vendor.estimatedDeliveryTime, deliveryQuote: { ...quote, deliveryFee: quote.deliveryFeeKobo / 100, deliveryFeeKobo: undefined } };
+            }
             return res.status(200).json({
                 success: true,
-                vendor: menu.vendor,
+                vendor,
                 combos: menu.combos,
                 sections: menu.sections,
                 unsectioned: menu.unsectioned,
