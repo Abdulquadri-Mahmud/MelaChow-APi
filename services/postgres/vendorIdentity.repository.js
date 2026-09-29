@@ -189,16 +189,17 @@ export const updateVendorProfileIdentity = async (tokenId, updates = {}) => {
   }
 
   const address = updates.address && typeof updates.address === "object" ? updates.address : null;
-  const latitude = address?.latitude;
-  const longitude = address?.longitude;
-  const hasGooglePlace = Boolean(address?.googlePlaceId);
-  const hasGoogleLocation = hasGooglePlace && Number.isFinite(Number(latitude)) && Number(latitude) >= -90 && Number(latitude) <= 90 && Number.isFinite(Number(longitude)) && Number(longitude) >= -180 && Number(longitude) <= 180;
-  if (hasGooglePlace && !hasGoogleLocation) throw new Error("Select a valid Google address with coordinates");
-  if (hasGoogleLocation) {
+  const latitude = address?.latitude ?? address?.coordinates?.lat;
+  const longitude = address?.longitude ?? address?.coordinates?.lng;
+  const provider = String(address?.provider || "").toLowerCase();
+  const providerPlaceId = address?.providerPlaceId || address?.googlePlaceId || address?.osmPlaceId;
+  const hasProviderLocation = Boolean(providerPlaceId || provider === "device_gps") && Number.isFinite(Number(latitude)) && Number(latitude) >= -90 && Number(latitude) <= 90 && Number.isFinite(Number(longitude)) && Number(longitude) >= -180 && Number(longitude) <= 180;
+  if ((providerPlaceId || provider) && !hasProviderLocation) throw new Error("Select a valid address with coordinates");
+  if (hasProviderLocation) {
     data.address = address;
     data.pickupLatitude = Number(latitude);
     data.pickupLongitude = Number(longitude);
-    data.pickupPlaceId = String(address.googlePlaceId);
+    data.pickupPlaceId = String(providerPlaceId || `${provider}:${latitude},${longitude}`);
     data.pickupFormattedAddress = String(address.formattedAddress || address.street || "");
     data.pickupLocationVerifiedAt = new Date();
     data.locationStatus = "approved";
@@ -229,7 +230,7 @@ export const updateVendorProfileIdentity = async (tokenId, updates = {}) => {
     }
   }
   const updated = await prisma.vendor.update({ where: { id: vendor.id }, data, include: includeLocation });
-  if (hasGoogleLocation) {
+  if (hasProviderLocation) {
     await syncVendorPickupPoint({ id: updated.id, latitude: updated.pickupLatitude, longitude: updated.pickupLongitude });
   }
   return updated;
@@ -278,3 +279,4 @@ export const setVendorDeletedIdentity = async (tokenId, deleted) => {
     include: includeLocation,
   });
 };
+

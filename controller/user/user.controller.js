@@ -488,7 +488,7 @@ export const addAddress = async (req, res) => {
     if (!addressLine || (coordinates == null && ((!city && !cityId) || (!state && !stateId)))) {
       return res.status(400).json({
         status: false,
-        message: "Address line and either Google coordinates or city/state names are required",
+        message: "Address line and either GPS coordinates or city/state names are required",
       });
     }
 

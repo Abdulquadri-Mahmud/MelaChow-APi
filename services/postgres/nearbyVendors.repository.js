@@ -62,7 +62,7 @@ export const nearbyVendorsRepository = {
         activeDeliveryPromo: promo ? { promoId: idOf(promo), maxOrders: promo.maxOrders, usedOrders: promo.usedOrders, remainingOrders: promo.maxOrders == null ? null : Math.max(0, promo.maxOrders - promo.usedOrders), startsAt: promo.startsAt, endsAt: promo.endsAt } : null,
         locationStatus: vendor.locationStatus, createdAt: vendor.createdAt,
       };
-    }).filter((vendor) => vendor.deliverable).sort((a, b) => {
+    }).filter((vendor) => vendor.deliverable && (addressHasCoordinates ? vendor.distanceKm != null && vendor.distanceKm <= Number(globalConfig.discoveryDistanceKm || 15) : true)).sort((a, b) => {
       if (a.distanceKm == null && b.distanceKm == null) return Number(b.rating || 0) - Number(a.rating || 0);
       if (a.distanceKm == null) return 1;
       if (b.distanceKm == null) return -1;
@@ -70,3 +70,4 @@ export const nearbyVendorsRepository = {
     });
   },
 };
+
