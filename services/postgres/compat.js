@@ -3,15 +3,20 @@ const postgresMigrationEnabled = () =>
     .trim()
     .toLowerCase() === "true";
 
+const providerIsPostgres = (key) =>
+  String(process.env[key] || "").trim().toLowerCase() === "postgres";
+
+// Once PostgreSQL is declared as the primary database, every migrated feature
+// must read and write through its PostgreSQL repository. Feature-specific
+// provider variables remain useful during a gradual migration when MongoDB is
+// still the primary database.
 const usesPostgres = (key) =>
   postgresMigrationEnabled() &&
-  String(process.env[key] || "").trim().toLowerCase() === "postgres";
+  (providerIsPostgres("DB_PRIMARY_PROVIDER") || providerIsPostgres(key));
 
 export const usePostgresReads = () => usesPostgres("DB_READ_PROVIDER");
 
-export const usePostgresBannerReads = () =>
-  String(process.env.DB_PRIMARY_PROVIDER || "").trim().toLowerCase() === "postgres" ||
-  usesPostgres("DB_BANNER_READ_PROVIDER");
+export const usePostgresBannerReads = () => usesPostgres("DB_BANNER_READ_PROVIDER");
 
 export const usePostgresMenuReads = () => usesPostgres("DB_MENU_READ_PROVIDER");
 export const usePostgresMenuWrites = () => usesPostgres("DB_MENU_WRITE_PROVIDER");
@@ -30,8 +35,7 @@ export const usePostgresNotificationWrites = () => usesPostgres("DB_NOTIFICATION
 export const usePostgresDiscountWrites = () => usesPostgres("DB_DISCOUNT_WRITE_PROVIDER");
 export const usePostgresPromoWrites = () => usesPostgres("DB_PROMO_WRITE_PROVIDER");
 export const usePostgresSupportWrites = () => usesPostgres("DB_SUPPORT_WRITE_PROVIDER");
-export const usePostgresAdminWrites = () =>
-  usesPostgres("DB_PRIMARY_PROVIDER") || usesPostgres("DB_ADMIN_WRITE_PROVIDER");
+export const usePostgresAdminWrites = () => usesPostgres("DB_ADMIN_WRITE_PROVIDER");
 
 export const usePostgresCategoryMetricsReads = () => usesPostgres("DB_CATEGORY_METRICS_READ_PROVIDER");
 
