@@ -14,7 +14,17 @@ const walletShape = (wallet) => wallet ? {
   balance: koboToNaira(wallet.balance),
   totalEarned: koboToNaira(wallet.totalEarned),
   totalWithdrawn: koboToNaira(wallet.totalWithdrawn),
-  moneyUnit: "naira",
+moneyUnit: "naira",
+  ...(Array.isArray(wallet.transactions) ? {
+    transactions: wallet.transactions.map((tx) => ({
+      ...tx,
+      _id: legacyId(tx),
+      id: legacyId(tx),
+      amount: koboToNaira(tx.amount),
+      reportingAmount: tx.reportingAmount == null ? null : koboToNaira(tx.reportingAmount),
+      moneyUnit: "naira",
+    })),
+  } : {}),
 } : null;
 const walletsByOwner = async (ownerModel, ownerIds) => {
   if (!ownerIds.length) return new Map();
@@ -73,5 +83,54 @@ export const adminDirectoryRepository = {
     const wallets = await walletsByOwner("Vendor", rows.map((row) => row.id));
     const vendors = rows.map((row) => { const shaped = publicRow(row); delete shaped._count; return { ...shaped, wallet: wallets.get(row.id) || null, totalSales: koboToNaira(row.totalSales), flatRateDeliveryFee: koboToNaira(row.flatRateDeliveryFee), platformDeliveryFeeOverride: row.platformDeliveryFeeOverride == null ? null : koboToNaira(row.platformDeliveryFeeOverride), foods: Array(row._count.menuItems + row._count.legacyFoods).fill(null), moneyUnit: "naira" }; });
     return { success: true, count: vendors.length, vendors };
+  },
+  async getVendor(token) {
+    const vendor = await resolve(prisma.vendor, token);
+    if (!vendor || vendor.deletedAt) return null;
+    const [wallet, menuItems, foods, comboItems, vendorOrders, withdrawals] = await Promise.all([
+      prisma.wallet.findUnique({ where: { ownerId_ownerModel: { ownerId: vendor.id, ownerModel: "Vendor" } }, include: { transactions: { orderBy: { date: "desc" } } } }),
+      prisma.menuItem.findMany({ where: { vendorId: vendor.id }, include: { portions: true }, orderBy: { createdAt: "desc" } }),
+      prisma.food.findMany({ where: { vendorId: vendor.id }, orderBy: { createdAt: "desc" } }),
+      prisma.comboItem.findMany({ where: { vendorId: vendor.id }, orderBy: { createdAt: "desc" } }),
+      prisma.vendorOrder.findMany({ where: { restaurantId: vendor.id }, include: { userOrder: { select: { legacyMongoId: true, orderCode: true, paymentStatus: true, total: true, createdAt: true } } }, orderBy: { updatedAt: "desc" } }),
+      prisma.withdrawal.findMany({ where: { vendorId: vendor.id } }),
+    ]);
+    const completedStatuses = new Set(["delivered", "completed"]), activeStatuses = new Set(["accepted", "preparing", "ready_for_pickup", "rider_assigned", "out_for_delivery"]);
+    const completed = vendorOrders.filter((row) => completedStatuses.has(row.orderStatus));
+    const active = vendorOrders.filter((row) => activeStatuses.has(row.orderStatus));
+    const cancelled = vendorOrders.filter((row) => row.orderStatus === "cancelled");
+    const sum = (rows, field) => rows.reduce((total, row) => total + Number(row[field] || 0), 0);
+    const paidWithdrawals = withdrawals.filter((row) => row.status === "completed"), pendingWithdrawals = withdrawals.filter((row) => ["pending", "processing"].includes(row.status));
+    const shaped = publicRow(vendor);
+    return {
+      ...shaped,
+      hasPassword: Boolean(vendor.password),
+      payoutDetails: vendor.payoutDetails || null,
+      wallet: walletShape(wallet),
+      totalSales: koboToNaira(vendor.totalSales),
+      flatRateDeliveryFee: koboToNaira(vendor.flatRateDeliveryFee),
+      platformDeliveryFeeOverride: vendor.platformDeliveryFeeOverride == null ? null : koboToNaira(vendor.platformDeliveryFeeOverride),
+      foods: foods.map((food) => ({ ...publicRow(food), image_url: Array.isArray(food.images) ? food.images[0] : null, price: koboToNaira(food.price), packagingFee: koboToNaira(food.packagingFee), moneyUnit: "naira" })),
+      menuItems: menuItems.map((item) => ({ ...publicRow(item), image_url: item.imageUrl, is_available: item.isAvailable, portions: item.portions.map((portion) => ({ ...publicRow(portion), price: koboToNaira(portion.price) })), moneyUnit: "naira" })),
+      comboItems: comboItems.map((item) => ({ ...publicRow(item), image_url: item.imageUrl, is_available: item.isAvailable, price: koboToNaira(item.price), moneyUnit: "naira" })),
+      adminOverview: {
+        totalOrders: vendorOrders.length,
+        completedOrders: completed.length,
+        activeOrders: active.length,
+        cancelledOrders: cancelled.length,
+        grossSales: koboToNaira(vendorOrders.reduce((total, row) => total + Number(row.vendorTotal || 0) + Number(row.commission || 0), 0)),
+        commission: koboToNaira(sum(vendorOrders, "commission")),
+        escrowHeld: koboToNaira(sum(vendorOrders.filter((row) => !row.escrowReleased), "escrowAmount")),
+        escrowReleased: koboToNaira(sum(vendorOrders.filter((row) => row.escrowReleased), "escrowAmount")),
+        walletBalance: koboToNaira(wallet?.balance),
+        paidOut: koboToNaira(sum(paidWithdrawals, "netAmount")),
+        pendingPayout: koboToNaira(Number(wallet?.balance || 0) + sum(pendingWithdrawals, "requestedAmount")),
+        inFlightPayout: koboToNaira(sum(pendingWithdrawals, "requestedAmount")),
+        payoutCount: paidWithdrawals.length,
+        recentOrders: vendorOrders.slice(0, 5).map((row) => ({ ...publicRow(row), vendorTotal: koboToNaira(row.vendorTotal), escrowAmount: koboToNaira(row.escrowAmount), userOrderId: row.userOrder ? { ...publicRow(row.userOrder), orderId: row.userOrder.orderCode, total: koboToNaira(row.userOrder.total) } : null, moneyUnit: "naira" })),
+        historySource: "vendor_orders",
+      },
+      moneyUnit: "naira",
+    };
   },
 };
