@@ -30,7 +30,8 @@ export const usePostgresNotificationWrites = () => usesPostgres("DB_NOTIFICATION
 export const usePostgresDiscountWrites = () => usesPostgres("DB_DISCOUNT_WRITE_PROVIDER");
 export const usePostgresPromoWrites = () => usesPostgres("DB_PROMO_WRITE_PROVIDER");
 export const usePostgresSupportWrites = () => usesPostgres("DB_SUPPORT_WRITE_PROVIDER");
-export const usePostgresAdminWrites = () => usesPostgres("DB_ADMIN_WRITE_PROVIDER");
+export const usePostgresAdminWrites = () =>
+  usesPostgres("DB_PRIMARY_PROVIDER") || usesPostgres("DB_ADMIN_WRITE_PROVIDER");
 
 export const usePostgresCategoryMetricsReads = () => usesPostgres("DB_CATEGORY_METRICS_READ_PROVIDER");
 
