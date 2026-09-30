@@ -1,8 +1,9 @@
 import prisma from "../../config/prisma.js";
+import { koboToNaira } from "../../utils/moneyContract.js";
 
 const paidMetricStatuses = ["paid"];
 
-const sumOrders = (orders) => orders.reduce((acc, order) => acc + (order.total || 0), 0);
+const sumOrders = (orders) => koboToNaira(orders.reduce((acc, order) => acc + (order.total || 0), 0));
 
 const ordersSince = (startDate) =>
   prisma.order.findMany({
