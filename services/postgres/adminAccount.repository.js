@@ -13,7 +13,13 @@ export const adminAccountRepository={
  async get(token){const id=await resolve(token);return id?shape(await prisma.admin.findUnique({where:{id}})):null;},
  async findByEmail(email,{raw=false}={}){const row=await prisma.admin.findUnique({where:{email:String(email).trim().toLowerCase()}});return raw?row:shape(row);},
  async register({name,email,password,role}){const normalized=String(email).trim().toLowerCase();if(await prisma.admin.findUnique({where:{email:normalized}}))return{error:"exists"};const hash=await bcrypt.hash(password,12);return prisma.$transaction(async tx=>{const admin=await tx.admin.create({data:{name,email:normalized,password:hash,role:dbRole(role)}});let wallet=null;if(role==="super-admin"){wallet=await tx.wallet.create({data:{ownerId:admin.id,ownerModel:"Admin",balance:0,totalEarned:0,totalWithdrawn:0}});await tx.admin.update({where:{id:admin.id},data:{walletId:wallet.id}});}await tx.activityLog.create({data:{actorId:admin.id,actorModel:"Admin",action:"LOGIN",targetId:admin.id,targetModel:"Admin",metadata:{details:`New admin registered with role: ${role}`}}});return{admin:shape({...admin,walletId:wallet?.id||null}),wallet};});},
- async comparePassword(admin,password){return bcrypt.compare(password,admin.password);},
+ async comparePassword(admin,password){
+  const hash=typeof admin?.password==="string"?admin.password.trim():"";
+  // Legacy imports can contain a missing/plain-text password. Treat that as a
+  // failed login instead of allowing bcrypt to turn the request into a 500.
+  if(!/^\$2[aby]\$\d{2}\$/.test(hash))return false;
+  try{return await bcrypt.compare(String(password),hash);}catch{return false;}
+ },
  async recordPasswordFailure(admin){const attempts=(admin.lockUntil&&admin.lockUntil>new Date()?admin.loginAttempts:0)+1;const locked=attempts>=5;return prisma.admin.update({where:{id:admin.id},data:{loginAttempts:locked?0:attempts,lockUntil:locked?new Date(Date.now()+15*60*1000):null}});},
  async resetLoginAttempts(id){return prisma.admin.update({where:{id},data:{loginAttempts:0,lockUntil:null}});},
  async setLoginOtp(id,{hash,expires,attempts=0}){return prisma.admin.update({where:{id},data:{loginOtpHash:hash,loginOtpExpires:expires,loginOtpAttempts:attempts}});},

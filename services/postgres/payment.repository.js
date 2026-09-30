@@ -1,4 +1,5 @@
 import prisma from "../../config/prisma.js";
+import { koboToNaira } from "../../utils/moneyContract.js";
 
 const toBigIntKobo = (amount) => BigInt(Math.round(Number(amount || 0)));
 
@@ -147,11 +148,11 @@ const postgresOrderShape = (order) => ({
   paymentReference: order?.paymentReference,
   paymentStatus: order?.paymentStatus,
   orderStatus: order?.orderStatus,
-  total: order?.total,
-  subtotal: order?.subtotal,
-  deliveryFee: order?.deliveryFee,
-  serviceFee: order?.serviceFee,
-  moneyUnit: "kobo",
+  total: koboToNaira(order?.total),
+  subtotal: koboToNaira(order?.subtotal),
+  deliveryFee: koboToNaira(order?.deliveryFee),
+  serviceFee: koboToNaira(order?.serviceFee),
+  moneyUnit: "naira",
   deliveryAddress: order?.deliveryAddress,
   phone: order?.phone,
   createdAt: order?.createdAt,
@@ -852,7 +853,7 @@ export const postgresPaymentRepository = {
         invoice: {
           id: invoice.id,
           invoiceNumber: invoice.invoiceNumber,
-          amount: Number(invoice.amount || 0),
+          amount: koboToNaira(invoice.amount),
         },
         creditedKobo,
       };

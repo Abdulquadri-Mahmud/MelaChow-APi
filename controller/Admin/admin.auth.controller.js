@@ -58,6 +58,7 @@ const getLoginContext = (req) => {
 // ============================================
 
 export const loginAdmin = async (req, res) => {
+    let stage = 'request_validation';
     try {
         const { email, password } = req.body;
 
@@ -66,26 +67,38 @@ export const loginAdmin = async (req, res) => {
         }
 
         if (usePostgresAdminWrites()) {
+            stage = 'admin_lookup';
             const raw = await adminAccountRepository.findByEmail(email, { raw: true });
             if (!raw) return res.status(401).json({ message: 'Invalid credentials' });
             const admin = apiAdmin(raw);
             if (!raw.isActive) return res.status(401).json({ message: 'Account deactivated. Please contact super admin.' });
             if (raw.lockUntil && raw.lockUntil > new Date()) return res.status(423).json({ message: 'Account temporarily locked due to multiple failed login attempts. Try again in 15 minutes.' });
+            stage = 'password_verification';
             if (!await adminAccountRepository.comparePassword(raw, password)) {
+                stage = 'password_failure_recording';
                 const failed = await adminAccountRepository.recordPasswordFailure(raw);
                 const attemptsLeft = failed.lockUntil ? 0 : 5 - failed.loginAttempts;
                 return res.status(attemptsLeft > 0 ? 401 : 423).json({ message: attemptsLeft > 0 ? `Invalid credentials. ${attemptsLeft} attempts remaining.` : 'Account locked due to multiple failed attempts. Try again in 15 minutes.' });
             }
+            stage = 'login_attempt_reset';
             await adminAccountRepository.resetLoginAttempts(raw.id);
             if (admin.role === 'super-admin') {
                 const otp = generateOTP();
+                stage = 'mfa_storage';
                 await adminAccountRepository.setLoginOtp(raw.id, { hash: hashLoginOtp(otp), expires: new Date(Date.now() + 10 * 60 * 1000) });
+                stage = 'mfa_challenge';
+                const challengeToken = signMfaChallenge(admin);
+                stage = 'mfa_delivery';
                 await sendMail({ to: raw.email, subject: 'Your MelaChow Super-Admin Login Code', html: `<div><h2>Super-admin sign-in verification</h2><p>Enter this code: <strong>${otp}</strong></p><p>It expires in 10 minutes.</p></div>` });
-                return res.status(200).json({ success: true, requiresMfa: true, challengeToken: signMfaChallenge(admin), message: 'A verification code was sent to your super-admin email.' });
+                return res.status(200).json({ success: true, requiresMfa: true, challengeToken, message: 'A verification code was sent to your super-admin email.' });
             }
+            stage = 'session_tokens';
             const accessToken = generateAccessToken(raw.id, admin.role), refreshToken = generateRefreshToken(raw.id, admin.role);
+            stage = 'session_cookie';
             sendAuthCookies(res, accessToken, refreshToken, 'admin');
-            return res.status(200).json({ success: true, message: 'Login successful', admin: await adminAccountRepository.get(raw.id) });
+            stage = 'admin_profile';
+            const profile = await adminAccountRepository.get(raw.id);
+            return res.status(200).json({ success: true, message: 'Login successful', admin: profile });
         }
 
         // Find admin with password field
@@ -164,14 +177,17 @@ export const loginAdmin = async (req, res) => {
         });
 
     } catch (error) {
-        console.error('Admin login error:', error);
-        if (error?.code === 'P2022' || /column .* does not exist/i.test(error?.message || '')) {
-            return res.status(503).json({ message: 'The staging database is being updated. Please retry login after the deployment completes.' });
+        console.error('Admin login error:', { stage, code: error?.code, name: error?.name, message: error?.message });
+        if (/^P\d{4}$/.test(error?.code || '') || /column .* does not exist/i.test(error?.message || '')) {
+            return res.status(503).json({ message: 'The admin database operation failed. Please retry shortly.', errorCode: 'ADMIN_DATABASE_ERROR', stage });
         }
-        if (/email send failed|RESEND_API_KEY/i.test(error?.message || '')) {
-            return res.status(502).json({ message: 'Your password was accepted, but the verification email could not be sent. Please try again shortly.' });
+        if (stage === 'mfa_delivery' || /email send failed|RESEND_API_KEY/i.test(error?.message || '')) {
+            return res.status(502).json({ message: 'Your password was accepted, but the verification email could not be sent. Please try again shortly.', errorCode: 'ADMIN_MFA_DELIVERY_FAILED', stage });
         }
-        res.status(500).json({ message: 'Login failed. Please try again shortly.' });
+        if (['mfa_challenge', 'session_tokens', 'session_cookie'].includes(stage)) {
+            return res.status(503).json({ message: 'Admin session configuration is unavailable. Please contact the system administrator.', errorCode: 'ADMIN_SESSION_CONFIGURATION_ERROR', stage });
+        }
+        return res.status(500).json({ message: `Admin login failed during ${stage.replaceAll('_', ' ')}. Please try again shortly.`, errorCode: 'ADMIN_LOGIN_FAILED', stage });
     }
 };
 

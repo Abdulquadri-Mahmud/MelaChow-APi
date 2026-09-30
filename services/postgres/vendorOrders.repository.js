@@ -1,4 +1,5 @@
 import prisma from "../../config/prisma.js";
+import { koboToNaira, orderItemToNaira } from "../../utils/moneyContract.js";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -34,7 +35,7 @@ const userShape = (user) => {
 
 const dietaryShape = (value) => (value === "non_veg" ? "non-veg" : value);
 
-const orderItemShape = (item) => ({
+const orderItemShape = (item) => orderItemToNaira({
   _id: legacyId(item),
   type: item.type,
   foodId: item.menuItem?.legacyMongoId || item.foodId,
@@ -59,7 +60,7 @@ const orderItemShape = (item) => ({
 
 const vendorDeliveryFeeShape = (fee) => ({
   restaurantId: fee.restaurant?.legacyMongoId || fee.restaurantId,
-  deliveryFee: fee.deliveryFee,
+  deliveryFee: koboToNaira(fee.deliveryFee),
 });
 
 const riderShape = (rider) => {
@@ -85,13 +86,13 @@ const userOrderShape = (order) => {
     deliveryAddress: order.deliveryAddress,
     phone: order.phone,
     restaurantNotes: order.restaurantNotes,
-    subtotal: order.subtotal,
-    deliveryFee: order.deliveryFee,
-    serviceFee: order.serviceFee,
+    subtotal: koboToNaira(order.subtotal),
+    deliveryFee: koboToNaira(order.deliveryFee),
+    serviceFee: koboToNaira(order.serviceFee),
     appliedDiscount: order.appliedDiscount,
     freeDeliveryPromo: order.freeDeliveryPromo,
     vendorDeliveryPromo: order.vendorDeliveryPromo,
-    total: order.total,
+    total: koboToNaira(order.total),
     orderId: order.orderCode,
     paymentStatus: order.paymentStatus,
     paymentReference: order.paymentReference,
@@ -99,7 +100,7 @@ const userOrderShape = (order) => {
     orderStatus: order.orderStatus,
     riderId: riderShape(order.rider) || order.riderId,
     riderAssignment: order.riderAssignment,
-    riderEarnings: order.riderEarnings,
+    riderEarnings: koboToNaira(order.riderEarnings),
     statusLog: order.statusLog,
     optionStockReservedAt: order.optionStockReservedAt,
     optionStockRestoredAt: order.optionStockRestoredAt,
@@ -107,7 +108,7 @@ const userOrderShape = (order) => {
     portionStockRestoredAt: order.portionStockRestoredAt,
     createdAt: order.createdAt,
     updatedAt: order.updatedAt,
-    moneyUnit: "kobo",
+    moneyUnit: "naira",
     __v: 0,
   };
 };
@@ -116,12 +117,12 @@ const vendorOrderShape = (vendorOrder) => ({
   _id: legacyId(vendorOrder),
   restaurantId: vendorOrder.restaurant?.legacyMongoId || vendorOrder.restaurantId,
   userOrderId: userOrderShape(vendorOrder.userOrder),
-  items: vendorOrder.items || [],
-  commission: vendorOrder.commission,
-  vendorTotal: vendorOrder.vendorTotal,
+  items: (vendorOrder.items || []).map(orderItemToNaira),
+  commission: koboToNaira(vendorOrder.commission),
+  vendorTotal: koboToNaira(vendorOrder.vendorTotal),
   customerNote: vendorOrder.customerNote,
-  deliveryShare: vendorOrder.deliveryShare,
-  escrowAmount: vendorOrder.escrowAmount,
+  deliveryShare: koboToNaira(vendorOrder.deliveryShare),
+  escrowAmount: koboToNaira(vendorOrder.escrowAmount),
   escrowReleased: vendorOrder.escrowReleased,
   orderStatus: vendorOrder.orderStatus,
   riderId: riderShape(vendorOrder.rider) || vendorOrder.riderId,
@@ -129,7 +130,7 @@ const vendorOrderShape = (vendorOrder) => ({
   stateId: vendorOrder.stateId,
   createdAt: vendorOrder.createdAt,
   updatedAt: vendorOrder.updatedAt,
-  moneyUnit: "kobo",
+  moneyUnit: "naira",
   __v: 0,
 });
 

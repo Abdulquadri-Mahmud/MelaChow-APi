@@ -1,4 +1,5 @@
 import prisma from "../../config/prisma.js";
+import { koboToNaira, orderItemToNaira } from "../../utils/moneyContract.js";
 import { calculateRiderPayoutKobo } from "./riderPayout.js";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -77,7 +78,7 @@ const foodShape = (food) =>
 
 const dietaryShape = (value) => (value === "non_veg" ? "non-veg" : value);
 
-const orderItemShape = (item) => ({
+const orderItemShape = (item) => orderItemToNaira({
   _id: legacyId(item),
   type: item.type,
   foodId: foodShape(item.menuItem),
@@ -99,7 +100,7 @@ const orderItemShape = (item) => ({
   metadata: item.metadata,
 });
 
-const rawOrderItemShape = (item) => ({
+const rawOrderItemShape = (item) => orderItemToNaira({
   _id: legacyId(item),
   type: item.type,
   foodId: item.menuItem?.legacyMongoId || item.foodId,
@@ -123,7 +124,7 @@ const rawOrderItemShape = (item) => ({
 
 const vendorDeliveryFeeShape = (fee) => ({
   restaurantId: fee.restaurant?.legacyMongoId || fee.restaurantId,
-  deliveryFee: fee.deliveryFee,
+  deliveryFee: koboToNaira(fee.deliveryFee),
 });
 
 const orderShape = (order, { deliveryType = false, activeAssignments = false } = {}) => ({
@@ -133,13 +134,13 @@ const orderShape = (order, { deliveryType = false, activeAssignments = false } =
   vendorDeliveryFees: (order.vendorDeliveryFees || []).map(vendorDeliveryFeeShape),
   deliveryAddress: order.deliveryAddress,
   phone: order.phone,
-  subtotal: order.subtotal,
-  deliveryFee: order.deliveryFee,
-  serviceFee: order.serviceFee,
+  subtotal: koboToNaira(order.subtotal),
+  deliveryFee: koboToNaira(order.deliveryFee),
+  serviceFee: koboToNaira(order.serviceFee),
   appliedDiscount: order.appliedDiscount,
   freeDeliveryPromo: order.freeDeliveryPromo,
   vendorDeliveryPromo: order.vendorDeliveryPromo,
-  total: order.total,
+  total: koboToNaira(order.total),
   orderId: order.orderCode,
   paymentStatus: order.paymentStatus,
   paymentReference: order.paymentReference,
@@ -147,11 +148,11 @@ const orderShape = (order, { deliveryType = false, activeAssignments = false } =
   orderStatus: order.orderStatus,
   riderId: riderShape(order.rider),
   riderAssignment: order.riderAssignment,
-  riderEarnings: order.riderEarnings,
+  riderEarnings: koboToNaira(order.riderEarnings),
   statusLog: order.statusLog,
   createdAt: order.createdAt,
   updatedAt: order.updatedAt,
-  moneyUnit: "kobo",
+  moneyUnit: "naira",
   __v: 0,
   ...(deliveryType ? { deliveryType: "platform_managed" } : {}),
   ...(activeAssignments ? { activeAssignments: [] } : {}),
@@ -181,17 +182,17 @@ const vendorOrderShape = (vendorOrder) => ({
   _id: legacyId(vendorOrder),
   restaurantId: vendorSummaryShape(vendorOrder.restaurant),
   userOrderId: vendorOrder.userOrder?.legacyMongoId || vendorOrder.userOrderId,
-  items: vendorOrder.items || [],
-  commission: vendorOrder.commission,
-  vendorTotal: vendorOrder.vendorTotal,
-  deliveryShare: vendorOrder.deliveryShare,
-  escrowAmount: vendorOrder.escrowAmount,
+  items: (vendorOrder.items || []).map(orderItemToNaira),
+  commission: koboToNaira(vendorOrder.commission),
+  vendorTotal: koboToNaira(vendorOrder.vendorTotal),
+  deliveryShare: koboToNaira(vendorOrder.deliveryShare),
+  escrowAmount: koboToNaira(vendorOrder.escrowAmount),
   escrowReleased: vendorOrder.escrowReleased,
   orderStatus: vendorOrder.orderStatus,
   riderId: vendorOrder.riderId,
   createdAt: vendorOrder.createdAt,
   updatedAt: vendorOrder.updatedAt,
-  moneyUnit: "kobo",
+  moneyUnit: "naira",
   __v: 0,
 });
 
@@ -199,17 +200,17 @@ const platformVendorOrderShape = (vendorOrder) => ({
   _id: legacyId(vendorOrder),
   restaurantId: platformVendorSummaryShape(vendorOrder.restaurant),
   userOrderId: vendorOrder.userOrder?.legacyMongoId || vendorOrder.userOrderId,
-  items: vendorOrder.items || [],
-  commission: vendorOrder.commission,
-  vendorTotal: vendorOrder.vendorTotal,
-  deliveryShare: vendorOrder.deliveryShare,
-  escrowAmount: vendorOrder.escrowAmount,
+  items: (vendorOrder.items || []).map(orderItemToNaira),
+  commission: koboToNaira(vendorOrder.commission),
+  vendorTotal: koboToNaira(vendorOrder.vendorTotal),
+  deliveryShare: koboToNaira(vendorOrder.deliveryShare),
+  escrowAmount: koboToNaira(vendorOrder.escrowAmount),
   escrowReleased: vendorOrder.escrowReleased,
   orderStatus: vendorOrder.orderStatus,
   riderId: vendorOrder.rider?.legacyMongoId || vendorOrder.riderId,
   createdAt: vendorOrder.createdAt,
   updatedAt: vendorOrder.updatedAt,
-  moneyUnit: "kobo",
+  moneyUnit: "naira",
   __v: 0,
 });
 
@@ -220,13 +221,13 @@ const platformOrderShape = (order) => ({
   vendorDeliveryFees: (order.vendorDeliveryFees || []).map(vendorDeliveryFeeShape),
   deliveryAddress: order.deliveryAddress,
   phone: order.phone,
-  subtotal: order.subtotal,
-  deliveryFee: order.deliveryFee,
-  serviceFee: order.serviceFee,
+  subtotal: koboToNaira(order.subtotal),
+  deliveryFee: koboToNaira(order.deliveryFee),
+  serviceFee: koboToNaira(order.serviceFee),
   appliedDiscount: order.appliedDiscount,
   freeDeliveryPromo: order.freeDeliveryPromo,
   vendorDeliveryPromo: order.vendorDeliveryPromo,
-  total: order.total,
+  total: koboToNaira(order.total),
   orderId: order.orderCode,
   paymentStatus: order.paymentStatus,
   paymentReference: order.paymentReference,
@@ -234,11 +235,11 @@ const platformOrderShape = (order) => ({
   orderStatus: order.orderStatus,
   riderId: riderShape(order.rider),
   riderAssignment: order.riderAssignment,
-  riderEarnings: order.riderEarnings,
+  riderEarnings: koboToNaira(order.riderEarnings),
   statusLog: order.statusLog,
   createdAt: order.createdAt,
   updatedAt: order.updatedAt,
-  moneyUnit: "kobo",
+  moneyUnit: "naira",
   __v: 0,
   vendorOrders: (order.vendorOrders || []).map(platformVendorOrderShape),
 });
@@ -496,18 +497,18 @@ const commissionLedgerOrderShape = (order, platformConfig) => {
     _id: legacyId(order),
     orderId: order.orderCode,
     createdAt: order.createdAt,
-    subtotal: order.subtotal,
-    deliveryFee: order.deliveryFee,
-    serviceFee: order.serviceFee || 0,
-    riderEarnings,
-    total: order.total,
+    subtotal: koboToNaira(order.subtotal),
+    deliveryFee: koboToNaira(order.deliveryFee),
+    serviceFee: koboToNaira(order.serviceFee),
+    riderEarnings: koboToNaira(riderEarnings),
+    total: koboToNaira(order.total),
     numberOfVendors: (order.vendorOrders || []).length,
     vendorNames: [...new Set((order.items || []).map((item) => item.restaurant?.storeName).filter(Boolean))],
-    totalCommission,
-    deliveryFeeHeld,
-    deliverySpread,
-    platformRevenue: totalCommission + (order.serviceFee || 0) + deliverySpread,
-    moneyUnit: "kobo",
+    totalCommission: koboToNaira(totalCommission),
+    deliveryFeeHeld: koboToNaira(deliveryFeeHeld),
+    deliverySpread: koboToNaira(deliverySpread),
+    platformRevenue: koboToNaira(totalCommission + (order.serviceFee || 0) + deliverySpread),
+    moneyUnit: "naira",
   };
 };
 
@@ -622,17 +623,17 @@ export const adminOrdersRepository = {
         where: { id: wallet.ownerId },
         select: { legacyMongoId: true, id: true },
       });
-      vendorWallets[vendor?.legacyMongoId || vendor?.id || wallet.ownerId] = wallet.balance;
+      vendorWallets[vendor?.legacyMongoId || vendor?.id || wallet.ownerId] = koboToNaira(wallet.balance);
     }
 
     const financialSummary = {
-      subtotal: order.subtotal,
-      totalDeliveryFee: order.deliveryFee,
-      discountAmount: order.appliedDiscount?.amount || 0,
-      totalCommission: vendorOrders.reduce((sum, vendorOrder) => sum + (vendorOrder.commission || 0), 0),
-      totalVendorEarnings: vendorOrders.reduce((sum, vendorOrder) => sum + (vendorOrder.vendorTotal || 0), 0),
-      total: order.total,
-      moneyUnit: "kobo",
+      subtotal: koboToNaira(order.subtotal),
+      totalDeliveryFee: koboToNaira(order.deliveryFee),
+      discountAmount: koboToNaira(order.appliedDiscount?.amount),
+      totalCommission: koboToNaira(vendorOrders.reduce((sum, vendorOrder) => sum + (vendorOrder.commission || 0), 0)),
+      totalVendorEarnings: koboToNaira(vendorOrders.reduce((sum, vendorOrder) => sum + (vendorOrder.vendorTotal || 0), 0)),
+      total: koboToNaira(order.total),
+      moneyUnit: "naira",
     };
 
     return {
@@ -769,20 +770,20 @@ export const adminOrdersRepository = {
     return {
       success: true,
       data: {
-        moneyUnit: "kobo",
+        moneyUnit: "naira",
         totalOrders: orders.length,
-        totalRevenue: orders.reduce((sum, order) => sum + (order.paymentStatus === "paid" ? order.total : 0), 0),
-        totalCommission: vendorOrders.reduce((sum, vendorOrder) => sum + (vendorOrder.commission || 0), 0),
-        platformDeliveryRevenue: orders.reduce((sum, order) => sum + (order.paymentStatus === "paid" ? order.deliveryFee : 0), 0),
+        totalRevenue: koboToNaira(orders.reduce((sum, order) => sum + (order.paymentStatus === "paid" ? order.total : 0), 0)),
+        totalCommission: koboToNaira(vendorOrders.reduce((sum, vendorOrder) => sum + (vendorOrder.commission || 0), 0)),
+        platformDeliveryRevenue: koboToNaira(orders.reduce((sum, order) => sum + (order.paymentStatus === "paid" ? order.deliveryFee : 0), 0)),
         ordersByStatus,
         ordersByPaymentStatus,
         recentOrders: recentOrders.map((order) => ({
           _id: legacyId(order),
           orderId: order.orderCode,
-          total: order.total,
+          total: koboToNaira(order.total),
           orderStatus: order.orderStatus,
           createdAt: order.createdAt,
-          moneyUnit: "kobo",
+          moneyUnit: "naira",
         })),
       },
     };
@@ -1000,7 +1001,7 @@ export const adminOrdersRepository = {
         orderStatus: updatedVendorOrder.orderStatus,
         userOrderId: legacyId(updatedVendorOrder.userOrder),
         restaurantId: legacyId(updatedVendorOrder.restaurant),
-        items: updatedVendorOrder.items,
+        items: (updatedVendorOrder.items || []).map(orderItemToNaira),
         createdAt: updatedVendorOrder.createdAt,
         updatedAt: updatedVendorOrder.updatedAt,
       },
@@ -1014,8 +1015,8 @@ export const adminOrdersRepository = {
         vendorOrderDatabaseId: vendorOrder.id,
         restaurantId: legacyId(vendor),
         restaurantName: vendor.storeName,
-        totalAmount: vendorOrder.userOrder.total,
-        items: vendorOrder.items,
+        totalAmount: koboToNaira(vendorOrder.userOrder.total),
+        items: (vendorOrder.items || []).map(orderItemToNaira),
         isReadyTransition: ["ready_for_pickup", "ready"].includes(status) && !["ready_for_pickup", "ready"].includes(previousStatus),
       },
     };
