@@ -505,7 +505,7 @@ export const loginVendorWithPassword = async (req, res) => {
       if (result.error === 'approval_required') return res.status(403).json({ success: false, message: 'Your account is pending admin approval.', requiresApproval: true });
       if (result.error === 'inactive') return res.status(401).json({ message: 'Account suspended or inactive. Please contact support.' });
       if (result.error === 'locked') return res.status(423).json({ message: 'Account temporarily locked due to multiple failed login attempts.' });
-      if (result.error) return res.status(401).json({ message: 'Invalid email or password' });
+      if (result.error) return res.status(401).json({ message: result.attemptsLeft ? 'Invalid email or password. ' + result.attemptsLeft + ' attempts remaining.' : 'Invalid email or password' });
       const tokenId = result.vendor.legacyMongoId || result.vendor.id;
       const accessToken = generateAccessToken(tokenId, 'vendor');
       const refreshToken = generateRefreshToken(tokenId, 'vendor');

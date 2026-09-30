@@ -165,7 +165,13 @@ export const loginAdmin = async (req, res) => {
 
     } catch (error) {
         console.error('Admin login error:', error);
-        res.status(500).json({ message: 'Login failed', error: error.message });
+        if (error?.code === 'P2022' || /column .* does not exist/i.test(error?.message || '')) {
+            return res.status(503).json({ message: 'The staging database is being updated. Please retry login after the deployment completes.' });
+        }
+        if (/email send failed|RESEND_API_KEY/i.test(error?.message || '')) {
+            return res.status(502).json({ message: 'Your password was accepted, but the verification email could not be sent. Please try again shortly.' });
+        }
+        res.status(500).json({ message: 'Login failed. Please try again shortly.' });
     }
 };
 
