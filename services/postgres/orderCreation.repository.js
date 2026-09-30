@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import prisma from "../../config/prisma.js";
+import { koboToNaira, orderItemToNaira } from "../../utils/moneyContract.js";
 import { assertVendorIsOpen } from "../../utils/vendorOpenStatus.js";
 import { quoteVendorDelivery } from "../deliveryPricing.service.js";
 
@@ -122,7 +123,7 @@ const resolveChoiceSelections = async (tx, menuItemId, selectedChoices = []) => 
       group_name: group.name,
       option_id: legacyId(option),
       label: option.label,
-      price_modifier_naira: option.priceModifier,
+      price_modifier_naira: koboToNaira(option.priceModifier),
       quantity,
     });
   }
@@ -305,7 +306,7 @@ const orderShape = (order) => ({
   orderId: order.orderCode,
   orderCode: order.orderCode,
   userId: order.user?.legacyMongoId || order.userId,
-  items: (order.items || []).map((item) => ({
+  items: (order.items || []).map((item) => orderItemToNaira({
     _id: legacyId(item),
     type: item.type,
     foodId: item.menuItem?.legacyMongoId || item.foodId,
@@ -328,14 +329,14 @@ const orderShape = (order) => ({
   })),
   vendorDeliveryFees: (order.vendorDeliveryFees || []).map((fee) => ({
     restaurantId: fee.restaurant?.legacyMongoId || fee.restaurantId,
-    deliveryFee: fee.deliveryFee,
+    deliveryFee: koboToNaira(fee.deliveryFee),
   })),
   deliveryAddress: order.deliveryAddress,
   phone: order.phone,
-  subtotal: order.subtotal,
-  deliveryFee: order.deliveryFee,
-  serviceFee: order.serviceFee,
-  total: order.total,
+  subtotal: koboToNaira(order.subtotal),
+  deliveryFee: koboToNaira(order.deliveryFee),
+  serviceFee: koboToNaira(order.serviceFee),
+  total: koboToNaira(order.total),
   appliedDiscount: order.appliedDiscount,
   paymentReference: order.paymentReference,
   paymentStatus: order.paymentStatus,
@@ -344,6 +345,7 @@ const orderShape = (order) => ({
   vendorDeliveryPromo: order.vendorDeliveryPromo,
   createdAt: order.createdAt,
   updatedAt: order.updatedAt,
+  moneyUnit: "naira",
 });
 
 export const postgresOrderCreationRepository = {

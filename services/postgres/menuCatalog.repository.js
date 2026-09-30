@@ -249,7 +249,7 @@ const marketplaceItemShape = (item) => ({
       }
     : item.vendorId,
   portions: (item.portions || []).map((portion) => {
-    const { price_naira, ...shaped } = portionShape(portion);
+    const shaped = portionShape(portion);
     return {
       ...shaped,
       track_stock: portion.trackStock,

@@ -2273,7 +2273,9 @@ export const createOrderController = async (req, res) => {
                     "https://api.paystack.co/transaction/initialize",
                     {
                         email: userEmail,
-                        amount: Math.round(Number(result.order.total || 0)),
+                        amount: result.order.moneyUnit === "naira"
+                            ? Math.round(Number(result.order.total || 0) * 100)
+                            : Math.round(Number(result.order.total || 0)),
                         reference,
                         callback_url: process.env.CALL_BACK_URL,
                         metadata: {
