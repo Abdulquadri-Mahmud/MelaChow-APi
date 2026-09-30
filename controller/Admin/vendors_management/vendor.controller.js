@@ -20,6 +20,7 @@ import { generateOTP, generateResetToken } from "../../../utils/jwt.js";
 import { setVendorApprovalMirror } from "../../../services/postgres/vendorIdentity.repository.js";
 import { usePostgresAdminWrites } from "../../../services/postgres/compat.js";
 import { adminMutationRepository } from "../../../services/postgres/adminMutation.repository.js";
+import { adminDirectoryRepository } from "../../../services/postgres/adminDirectory.repository.js";
 import { payoutRepository } from "../../../services/postgres/payout.repository.js";
 
 const stripRecipientCode = (value) => {
@@ -594,6 +595,11 @@ export const reactivateVendor = async (req, res) => {
 // Get all vendors (optionally filter by status, verified, suspended)
 export const getAllVendors = async (req, res) => {
   try {
+    if (usePostgresAdminWrites()) {
+      const result = await adminDirectoryRepository.listVendors(req.query);
+      result.vendors = result.vendors.map((vendor) => ({ ...stripRecipientCode(vendor), openStatus: getVendorOpenStatus(vendor.openingHours) }));
+      return res.status(200).json(result);
+    }
     const { verified, suspended, active, isApproved, search } = req.query;
     const filters = {};
 

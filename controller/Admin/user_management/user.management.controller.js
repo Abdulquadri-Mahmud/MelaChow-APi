@@ -5,6 +5,7 @@ import User from "../../../model/user.model.js";
 import ActivityLog from "../../../model/ActivityLog.js";
 import { usePostgresAdminWrites } from "../../../services/postgres/compat.js";
 import { adminMutationRepository } from "../../../services/postgres/adminMutation.repository.js";
+import { adminDirectoryRepository } from "../../../services/postgres/adminDirectory.repository.js";
 import Order from "../../../model/order/Order.js";
 
 const escapeRegex = (value = "") => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -16,6 +17,7 @@ const escapeRegex = (value = "") => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
  */
 export const getAllUsers = async (req, res) => {
   try {
+    if (usePostgresAdminWrites()) return res.status(200).json(await adminDirectoryRepository.listUsers(req.query));
     const { verified, suspended, banned, search, customerAge, sort = "newest" } = req.query;
     const page = Math.max(Number.parseInt(req.query.page, 10) || 1, 1);
     const limit = Math.min(Math.max(Number.parseInt(req.query.limit, 10) || 20, 5), 100);
@@ -93,6 +95,12 @@ export const getUserDetails = async (req, res) => {
     const { userId } = req.query;
     if (!userId)
       return res.status(400).json({ success: false, message: "userId is required" });
+
+    if (usePostgresAdminWrites()) {
+      const user = await adminDirectoryRepository.getUser(userId);
+      if (!user) return res.status(404).json({ success: false, message: "User not found" });
+      return res.status(200).json({ success: true, user });
+    }
 
     const user = await User.findById(userId).populate("wallet").lean();
     if (!user)
@@ -247,6 +255,7 @@ export const reactivateUser = async (req, res) => {
  */
 export const getUserStats = async (req, res) => {
   try {
+    if (usePostgresAdminWrites()) return res.status(200).json(await adminDirectoryRepository.userStats());
     const totalUsers = await User.countDocuments();
     const verifiedUsers = await User.countDocuments({ isVerified: true });
     const suspendedUsers = await User.countDocuments({ suspended: true });
