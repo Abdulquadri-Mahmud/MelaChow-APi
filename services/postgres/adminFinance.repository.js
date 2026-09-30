@@ -2,6 +2,7 @@ import prisma from "../../config/prisma.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 import { calculateRiderPayoutKobo, describeRiderPayout } from "./riderPayout.js";
 import { calculatePaystackTransferFee } from "../../utils/paystackFees.js";
+import { moneyResponseToNaira } from "../../utils/moneyContract.js";
 
 const defaultPlatformConfig = {
   riderFixedPayout: 600,
@@ -218,7 +219,7 @@ const orderPaymentShape = (order, vendorOrderCount, paymentAttempt) => ({
   __v: 0,
 });
 
-export const adminFinanceRepository = {
+const adminFinanceRepositoryKobo = {
   async getRevenueSummary({ startDate, endDate } = {}) {
     const platformConfig = await getPlatformConfig();
     const [vendorOrders, paidOrders, adminWallet] = await Promise.all([
@@ -722,3 +723,10 @@ export const adminFinanceRepository = {
     return { moneyUnit: "kobo", reportDate, summary, restaurants: [...restaurants.values()], orders: rows };
   },
 };
+
+export const adminFinanceRepository = Object.fromEntries(
+  Object.entries(adminFinanceRepositoryKobo).map(([name, operation]) => [
+    name,
+    async (...args) => moneyResponseToNaira(await operation(...args)),
+  ])
+);

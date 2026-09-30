@@ -58,14 +58,15 @@ const getLoginContext = (req) => {
 // ============================================
 
 export const loginAdmin = async (req, res) => {
-    let stage = 'request_validation';
+    let stage = 'request_body';
     try {
-        const { email, password } = req.body;
+        const { email, password } = req.body || {};
 
         if (!email || !password) {
             return res.status(400).json({ message: 'Email and password are required' });
         }
 
+        stage = 'database_selection';
         if (usePostgresAdminWrites()) {
             stage = 'admin_lookup';
             const raw = await adminAccountRepository.findByEmail(email, { raw: true });
@@ -102,6 +103,7 @@ export const loginAdmin = async (req, res) => {
         }
 
         // Find admin with password field
+        stage = 'mongo_admin_lookup';
         const admin = await Admin.findOne({ email }).select('+password +loginAttempts +lockUntil');
 
         if (!admin) {
