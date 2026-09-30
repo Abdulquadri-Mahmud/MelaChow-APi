@@ -640,6 +640,12 @@ export const getVendor = async (req, res) => {
     if (!vendorId)
       return res.status(400).json({ success: false, message: "vendorId is required" });
 
+    if (usePostgresAdminWrites()) {
+      const vendor = await adminDirectoryRepository.getVendor(vendorId);
+      if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
+      return res.status(200).json({ success: true, vendor: { ...stripRecipientCode(vendor), openStatus: getVendorOpenStatus(vendor.openingHours) } });
+    }
+
     const vendor = await vendorModel.findById(vendorId)
       .select("+payoutDetails +password")
       .populate("wallet")
@@ -849,6 +855,19 @@ export const getVendorPerformance = async (req, res) => {
     const { vendorId } = req.query;
     if (!vendorId)
       return res.status(400).json({ success: false, message: "vendorId is required" });
+
+    if (usePostgresAdminWrites()) {
+      const vendor = await adminDirectoryRepository.getVendor(vendorId);
+      if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
+      return res.status(200).json({ success: true, metrics: {
+        totalSales: vendor.totalSales,
+        totalOrders: vendor.adminOverview?.totalOrders || vendor.totalOrders || 0,
+        rating: vendor.rating,
+        ratingCount: vendor.ratingCount,
+        foodCount: (vendor.foods?.length || 0) + (vendor.menuItems?.length || 0) + (vendor.comboItems?.length || 0),
+        walletBalance: vendor.wallet?.balance || 0,
+      } });
+    }
 
     const vendor = await vendorModel.findById(vendorId)
       .populate("foods")
