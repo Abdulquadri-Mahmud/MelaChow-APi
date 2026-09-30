@@ -9,6 +9,9 @@ export const postgresVendorIdentityEnabled = () =>
 
 const emailOf = (email) => String(email || "").trim().toLowerCase();
 const isUuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value));
+const mongoVendorFilter = (vendor) => vendor.legacyMongoId
+  ? { _id: vendor.legacyMongoId }
+  : { email: vendor.email };
 
 const resolveLocationId = async (model, value) => {
   if (!value) return null;
@@ -123,11 +126,39 @@ export const setVendorIdentityPassword = async ({ email, password, setupToken })
 
 export const authenticateVendorIdentity = async ({ email, password }) => {
   const vendor = await findVendorByEmail(email);
-  if (!vendor || !vendor.password || !(await bcrypt.compare(password, vendor.password))) return { error: "invalid_credentials" };
+  if (!vendor) return { error: "invalid_credentials" };
+  if (vendor.lockUntil && vendor.lockUntil > new Date()) return { error: "locked" };
+
+  let passwordMatches = Boolean(vendor.password) && await bcrypt.compare(password, vendor.password);
+
+  // Repair identities imported before their latest Mongo password hash.
+  if (!passwordMatches) {
+    try {
+      const legacyVendor = await MongoVendor.findOne(mongoVendorFilter(vendor)).select("+password").lean();
+      if (legacyVendor?.password && await bcrypt.compare(password, legacyVendor.password)) {
+        await prisma.vendor.update({
+          where: { id: vendor.id },
+          data: { password: legacyVendor.password, loginAttempts: 0, lockUntil: null },
+        });
+        passwordMatches = true;
+      }
+    } catch (error) {
+      console.error("[vendor-identity] Legacy password recovery failed:", error.message);
+    }
+  }
+
+  if (!passwordMatches) {
+    const attempts = (vendor.loginAttempts || 0) + 1;
+    const lockUntil = attempts >= 5 ? new Date(Date.now() + 15 * 60 * 1000) : null;
+    await prisma.vendor.update({
+      where: { id: vendor.id },
+      data: { loginAttempts: attempts >= 5 ? 0 : attempts, lockUntil },
+    });
+    return { error: lockUntil ? "locked" : "invalid_credentials", attemptsLeft: Math.max(0, 5 - attempts) };
+  }
   if (!vendor.verified) return { error: "verification_required" };
   if (!vendor.isApproved) return { error: "approval_required" };
   if (!vendor.active || vendor.suspended || vendor.deletedAt) return { error: "inactive" };
-  if (vendor.lockUntil && vendor.lockUntil > new Date()) return { error: "locked" };
   const updated = await prisma.vendor.update({ where: { id: vendor.id }, data: { loginAttempts: 0, lockUntil: null, lastLogin: new Date() }, include: includeLocation });
   return { vendor: updated };
 };
@@ -155,7 +186,7 @@ export const completeVendorPasswordResetIdentity = async ({ email, resetToken, p
   if (!vendor || vendor.resetPasswordToken !== resetToken || !vendor.resetPasswordExpires || vendor.resetPasswordExpires < new Date()) return { error: "invalid_token" };
   const passwordHash = await bcrypt.hash(password, 12);
   const updated = await prisma.vendor.update({ where: { id: vendor.id }, data: { password: passwordHash, otp: null, otpExpires: null, resetPasswordToken: null, resetPasswordExpires: null, loginAttempts: 0, lockUntil: null, lastLogin: new Date() }, include: includeLocation });
-  MongoVendor.updateOne({ email: vendor.email }, { $set: { password: passwordHash, loginAttempts: 0, lastLogin: new Date() }, $unset: { otp: 1, otpExpires: 1, resetPasswordToken: 1, resetPasswordExpires: 1, lockUntil: 1 } }).catch((error) => console.error("[vendor-identity] Mongo reset mirror failed:", error.message));
+  await MongoVendor.updateOne(mongoVendorFilter(vendor), { $set: { password: passwordHash, loginAttempts: 0, lastLogin: new Date() }, $unset: { otp: 1, otpExpires: 1, resetPasswordToken: 1, resetPasswordExpires: 1, lockUntil: 1 } }).catch((error) => console.error("[vendor-identity] Mongo reset mirror failed:", error.message));
   return { vendor: updated };
 };
 
