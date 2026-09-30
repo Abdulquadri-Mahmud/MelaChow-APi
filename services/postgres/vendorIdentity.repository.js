@@ -51,10 +51,15 @@ export const registerVendorIdentity = async (data) => {
   if (vendor?.verified) return { conflict: true, vendor };
   const stateId = await resolveLocationId(prisma.state, data.stateId);
   const cityId = await resolveLocationId(prisma.city, data.cityId);
+  const address = data.address && typeof data.address === "object" ? data.address : {};
+  const pickupLatitude = data.pickupLatitude ?? address.latitude ?? address.coordinates?.lat ?? null;
+  const pickupLongitude = data.pickupLongitude ?? address.longitude ?? address.coordinates?.lng ?? null;
+  const pickupPlaceId = data.pickupPlaceId || address.providerPlaceId || address.googlePlaceId || address.osmPlaceId || null;
+  const pickupFormattedAddress = data.pickupFormattedAddress || address.formattedAddress || address.street || null;
   const write = {
     email, name: data.name, phone: data.phone, storeName: data.storeName,
     storeDescription: data.storeDescription, logo: data.logo || "",
-    cuisineTypes: data.cuisineTypes || [], address: data.address || {},
+    cuisineTypes: data.cuisineTypes || [], address,
     stateId, cityId, locationStatus: data.locationStatus || null,
     requestedState: data.requestedState || "", requestedCity: data.requestedCity || "",
     pickupLatitude: data.pickupLatitude ?? null,
