@@ -12,6 +12,7 @@ export const DEFAULT_DISTANCE_DELIVERY_CONFIG = Object.freeze({
   roundingStepKm: 0.5,
   minimumFeeNaira: 400,
   maximumFeeNaira: 5000,
+  discoveryDistanceKm: 15,
   maximumDistanceKm: 20,
   routeProvider: "google",
   useRoadDistanceAtCheckout: true,
@@ -128,3 +129,4 @@ export const getDeliveryQuotes = async ({ addressId, vendorIds, userId, checkout
   const postgisDistances = await getPostgisDistancesFromAddress({ addressId: address.id, vendorIds: hydrated.map((vendor) => vendor.id) });
   return Promise.all(hydrated.map((vendor) => quoteVendorDelivery({ vendor, address, checkout, globalConfig, estimatedDistanceMeters: postgisDistances.get(vendor.id) })));
 };
+

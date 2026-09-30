@@ -489,7 +489,7 @@ model Vendor {
   suspensionReason            String            @default("") @map("suspension_reason")
   acceptsDelivery             Boolean           @default(true) @map("accepts_delivery")
   flatRateDeliveryFee         Int               @default(0) @map("flat_rate_delivery_fee_kobo")
-  deliveryRadiusKm            Float             @default(5) @map("delivery_radius_km")
+  deliveryRadiusKm            Float             @default(15) @map("delivery_radius_km")
   pickupLatitude              Float?            @map("pickup_latitude")
   pickupLongitude             Float?            @map("pickup_longitude")
   pickupPlaceId               String?           @map("pickup_place_id")
@@ -1918,3 +1918,4 @@ model DeliveryOtpSession {
   @@index([expiresAt])
   @@map("delivery_otp_sessions")
 }
+
