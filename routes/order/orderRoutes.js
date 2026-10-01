@@ -15,6 +15,7 @@ import {
 import {
   createOrderController,
   getFreeDeliveryEligibility,
+  returnToCustomerMobilePayment,
 } from "../../controller/order/createOrderV2.controller.js";
 import { getMyInvoice, listMyInvoices } from "../../controller/invoice.controller.js";
 
@@ -26,6 +27,8 @@ router.post(
   bodyParser.raw({ type: "application/json" }),
   paystackWebhook
 );
+
+router.get("/mobile-payment-return", returnToCustomerMobilePayment);
 
 // Payment Routes
 router.post("/create", auth, initializePayment);

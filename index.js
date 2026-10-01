@@ -136,7 +136,7 @@ const corsOptions = {
   },
   credentials: true,               // Ã¢Å“â€¦ CRITICAL: Allow cookies
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  allowedHeaders: ["Content-Type", "Authorization", "X-MelaChow-Client", "X-MelaChow-Device-Id"],
   optionsSuccessStatus: 200,
   maxAge: 86400,                   // 24 hours preflight cache
   // Ã¢ÂÅ’ NO exposedHeaders - Set-Cookie is automatically handled

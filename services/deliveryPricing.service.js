@@ -14,8 +14,8 @@ export const DEFAULT_DISTANCE_DELIVERY_CONFIG = Object.freeze({
   maximumFeeNaira: 5000,
   discoveryDistanceKm: 15,
   maximumDistanceKm: 20,
-  routeProvider: "google",
-  useRoadDistanceAtCheckout: true,
+  routeProvider: "geographic",
+  useRoadDistanceAtCheckout: false,
 });
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -42,8 +42,16 @@ export const roundDistanceKm = (distanceKm, mode = "nearest", step = 0.5) => {
 
 export const calculateDistanceDeliveryFee = (distanceMeters, config) => {
   const distanceKm = Math.max(0, Number(distanceMeters || 0) / 1000);
-  const billableDistanceKm = roundDistanceKm(distanceKm, config.roundingMode, config.roundingStepKm);
-  const extraKm = Math.max(0, billableDistanceKm - Number(config.includedDistanceKm || 0));
+  const includedDistanceKm = Number(config.includedDistanceKm || 0);
+  const roundingStepKm = Number(config.roundingStepKm) > 0 ? Number(config.roundingStepKm) : 0.5;
+  const roundedDistanceKm = roundDistanceKm(distanceKm, config.roundingMode, roundingStepKm);
+  // Crossing the included-distance boundary must always add at least one
+  // pricing step. Nearest rounding previously changed 1.202 km to 1.0 km,
+  // incorrectly leaving the fee at the base amount.
+  const billableDistanceKm = distanceKm > includedDistanceKm && roundedDistanceKm <= includedDistanceKm
+    ? Number((includedDistanceKm + roundingStepKm).toFixed(3))
+    : roundedDistanceKm;
+  const extraKm = Math.max(0, billableDistanceKm - includedDistanceKm);
   const rawNaira = Number(config.baseFeeNaira || 0) + extraKm * Number(config.additionalFeePerKmNaira || 0);
   const finalNaira = Math.min(Number(config.maximumFeeNaira || Infinity), Math.max(Number(config.minimumFeeNaira || 0), rawNaira));
   return { distanceKm: Number(distanceKm.toFixed(3)), billableDistanceKm, deliveryFeeKobo: toKobo(finalNaira) };
@@ -56,20 +64,6 @@ export const haversineDistanceMeters = (a, b) => {
   const dLng = rad(Number(b.lng) - Number(a.lng));
   const x = Math.sin(dLat / 2) ** 2 + Math.cos(rad(Number(a.lat))) * Math.cos(rad(Number(b.lat))) * Math.sin(dLng / 2) ** 2;
   return Math.round(earth * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x)));
-};
-
-const googleRoadRoute = async (origin, destination) => {
-  const key = process.env.GOOGLE_MAPS_SERVER_API_KEY;
-  if (!key) return null;
-  const response = await fetch("https://routes.googleapis.com/directions/v2:computeRoutes", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-Goog-Api-Key": key, "X-Goog-FieldMask": "routes.distanceMeters,routes.duration" },
-    body: JSON.stringify({ origin: { location: { latLng: { latitude: origin.lat, longitude: origin.lng } } }, destination: { location: { latLng: { latitude: destination.lat, longitude: destination.lng } } }, travelMode: "DRIVE", routingPreference: "TRAFFIC_UNAWARE" }),
-    signal: AbortSignal.timeout(5000),
-  });
-  if (!response.ok) throw new Error(`Google Routes returned ${response.status}`);
-  const route = (await response.json())?.routes?.[0];
-  return route ? { distanceMeters: route.distanceMeters, durationSeconds: Number(String(route.duration || "0s").replace("s", "")) || null } : null;
 };
 
 const vendorPoint = (vendor) => {
@@ -102,17 +96,12 @@ export const quoteVendorDelivery = async ({ vendor, address, checkout = false, g
     return { ...vendorIdentity, deliveryFeeKobo: flatFallback(vendor, config), source: "flat_fallback", distanceSource: distanceKm == null ? null : geographicSource, distanceMeters: geographicDistanceMeters, distanceKm, deliverable: distanceKm == null || distanceKm <= radiusKm, radiusKm, pricingSnapshot: { pricingMode: "flat_fallback", fallbackFlatFeeKobo: flatFallback(vendor, config), distanceMeters: geographicDistanceMeters, radiusKm } };
   }
 
-  let source = geographicSource;
-  let durationSeconds = null;
-  let distanceMeters = geographicDistanceMeters;
-  if (checkout && config.useRoadDistanceAtCheckout && config.routeProvider === "google") {
-    try {
-      const route = await googleRoadRoute(origin, destination);
-      if (route) { distanceMeters = route.distanceMeters; durationSeconds = route.durationSeconds; source = "google_routes"; }
-    } catch (error) {
-      console.warn("[delivery-quote] Google route unavailable; using geographic fallback:", error.message);
-    }
-  }
+  // Road routing is intentionally disabled. PostGIS provides the database
+  // distance when synchronized geography points exist; Haversine is the fallback.
+  // Keep checkout in the signature for API compatibility while Google Routes is paused.
+  const source = geographicSource;
+  const durationSeconds = null;
+  const distanceMeters = geographicDistanceMeters;
   const calculated = calculateDistanceDeliveryFee(distanceMeters, config);
   const deliverable = calculated.distanceKm <= radiusKm;
   const quoteId = `dq_${crypto.createHash("sha256").update(`${vendor.id}:${address.id}:${distanceMeters}:${calculated.deliveryFeeKobo}`).digest("hex").slice(0, 20)}`;

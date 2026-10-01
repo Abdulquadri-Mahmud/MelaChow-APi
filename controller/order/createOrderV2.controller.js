@@ -41,6 +41,21 @@ const PROMO_RESERVATION_TTL_MS = 45 * 60 * 1000;
 const VENDOR_ORDER_AUTO_CANCEL_DELAY_MS =
   Number(process.env.VENDOR_ORDER_AUTO_CANCEL_MINUTES || 10) * 60 * 1000;
 
+const isCustomerMobileRequest = (req) =>
+  req.get("X-MelaChow-Client") === "customer-capacitor";
+
+const getPaymentCallbackUrl = (req) => {
+  if (!isCustomerMobileRequest(req)) return process.env.CALL_BACK_URL;
+  return process.env.MOBILE_PAYMENT_CALLBACK_URL
+    || `${req.protocol}://${req.get("host")}/api/orders/mobile-payment-return`;
+};
+
+export const returnToCustomerMobilePayment = (req, res) => {
+  const reference = String(req.query.reference || req.query.trxref || "").trim();
+  if (!reference) return res.status(400).send("Payment reference is missing.");
+  return res.redirect(302, `melachow://app/verify-payment?reference=${encodeURIComponent(reference)}`);
+};
+
 async function queueVendorOrderAutoCancelChecks(order, vendorOrderMapping = {}) {
   const vendorOrderIds = Object.values(vendorOrderMapping).filter(Boolean);
   if (!vendorOrderIds.length) return;
@@ -2277,7 +2292,7 @@ export const createOrderController = async (req, res) => {
                             ? Math.round(Number(result.order.total || 0) * 100)
                             : Math.round(Number(result.order.total || 0)),
                         reference,
-                        callback_url: process.env.CALL_BACK_URL,
+                        callback_url: getPaymentCallbackUrl(req),
                         metadata: {
                             orderId: result.order.orderId,
                             postgresOrderId: result.order.id,
@@ -2387,7 +2402,7 @@ export const createOrderController = async (req, res) => {
                 email: userEmail,
                 amount: Math.round(order.total * 100),
                 reference,
-                callback_url: process.env.CALL_BACK_URL,
+                callback_url: getPaymentCallbackUrl(req),
                 metadata: {
                     orderId: order.orderId,
                     userId: String(userId),
@@ -2444,9 +2459,13 @@ export const createOrderController = async (req, res) => {
         }
 
         console.error("Create Order Controller Error:", error);
-        return res.status(400).json({
+        const transactionTimedOut = error?.code === "P2028"
+            || /transaction already closed|expired transaction|interactive transaction timeout/i.test(String(error?.message || ""));
+        return res.status(transactionTimedOut ? 503 : 400).json({
             success: false,
-            message: error.response?.data?.message || error.message || "Failed to create order"
+            message: transactionTimedOut
+                ? "Checkout took too long while confirming your order. Please retry; no payment was taken."
+                : error.response?.data?.message || error.message || "Failed to create order"
         });
     }
 };
