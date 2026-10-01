@@ -116,6 +116,9 @@ const allowedOrigins = [
   'https://vendor.melachow.com',
   'https://rider.melachow.com',
   'http://localhost:8081',
+  'http://localhost',
+  'https://localhost',
+  'capacitor://localhost',
   process.env.CLIENT_URL, // Dynamic from env
 ].filter(Boolean);
 
@@ -141,11 +144,19 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 
-// Reject cross-site browser writes even when cookies are attached. Native/mobile
-// clients do not send Sec-Fetch-Site and continue to authenticate with Bearer tokens.
+// Reject browser cross-site writes while allowing packaged Capacitor WebViews.
+// Android uses http(s)://localhost and iOS uses capacitor://localhost. These
+// origins are local to the installed application and still pass the CORS allowlist.
+const nativeAppOrigins = new Set([
+  'http://localhost',
+  'https://localhost',
+  'capacitor://localhost',
+]);
 app.use((req, res, next) => {
   const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
-  if (unsafe && req.get('Sec-Fetch-Site') === 'cross-site') {
+  const origin = req.get('Origin');
+  const isTrustedNativeApp = origin && nativeAppOrigins.has(origin);
+  if (unsafe && req.get('Sec-Fetch-Site') === 'cross-site' && !isTrustedNativeApp) {
     return res.status(403).json({ success: false, message: 'Cross-site request blocked' });
   }
   return next();
