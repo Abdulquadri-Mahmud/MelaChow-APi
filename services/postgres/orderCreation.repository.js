@@ -425,7 +425,7 @@ export const postgresOrderCreationRepository = {
         if (!frontendFeeMap.has(vendor.id)) {
           throw new Error(`Missing delivery fee for restaurant ${vendor.storeName}`);
         }
-        const quote = selectedAddress ? await quoteVendorDelivery({ vendor, address: selectedAddress, checkout: true }) : null;
+        const quote = selectedAddress ? await quoteVendorDelivery({ vendor, address: selectedAddress, checkout: true, globalConfig: platformConfig.distanceDeliveryConfig || {} }) : null;
         if (quote && !quote.deliverable) throw new Error(`${vendor.storeName} is outside the ${quote.radiusKm} km delivery area for this address.`);
         const resolvedFee = quote?.deliveryFeeKobo ?? resolveVendorDeliveryFee(vendor, platformConfig);
         if (quote) deliveryQuoteMap.set(vendor.id, quote);
@@ -626,6 +626,9 @@ export const postgresOrderCreationRepository = {
       }
 
       return { order: orderShape(order), idempotent: false };
+    }, {
+      maxWait: 10_000,
+      timeout: 20_000,
     });
   },
 };

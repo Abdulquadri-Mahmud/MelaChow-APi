@@ -2444,9 +2444,13 @@ export const createOrderController = async (req, res) => {
         }
 
         console.error("Create Order Controller Error:", error);
-        return res.status(400).json({
+        const transactionTimedOut = error?.code === "P2028"
+            || /transaction already closed|expired transaction|interactive transaction timeout/i.test(String(error?.message || ""));
+        return res.status(transactionTimedOut ? 503 : 400).json({
             success: false,
-            message: error.response?.data?.message || error.message || "Failed to create order"
+            message: transactionTimedOut
+                ? "Checkout took too long while confirming your order. Please retry; no payment was taken."
+                : error.response?.data?.message || error.message || "Failed to create order"
         });
     }
 };

@@ -12,6 +12,14 @@ describe("distance delivery pricing", () => {
     expect(calculateDistanceDeliveryFee(4200, config)).toMatchObject({ billableDistanceKm: 4, deliveryFeeKobo: 85000 });
   });
 
+  test("charges the first pricing step once distance exceeds the included kilometre", () => {
+    expect(calculateDistanceDeliveryFee(1202, config)).toMatchObject({
+      distanceKm: 1.202,
+      billableDistanceKm: 1.5,
+      deliveryFeeKobo: 47500,
+    });
+  });
+
   test("caps the fee at five thousand naira", () => {
     expect(calculateDistanceDeliveryFee(100000, config).deliveryFeeKobo).toBe(500000);
   });

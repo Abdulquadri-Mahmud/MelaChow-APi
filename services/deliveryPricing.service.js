@@ -42,8 +42,16 @@ export const roundDistanceKm = (distanceKm, mode = "nearest", step = 0.5) => {
 
 export const calculateDistanceDeliveryFee = (distanceMeters, config) => {
   const distanceKm = Math.max(0, Number(distanceMeters || 0) / 1000);
-  const billableDistanceKm = roundDistanceKm(distanceKm, config.roundingMode, config.roundingStepKm);
-  const extraKm = Math.max(0, billableDistanceKm - Number(config.includedDistanceKm || 0));
+  const includedDistanceKm = Number(config.includedDistanceKm || 0);
+  const roundingStepKm = Number(config.roundingStepKm) > 0 ? Number(config.roundingStepKm) : 0.5;
+  const roundedDistanceKm = roundDistanceKm(distanceKm, config.roundingMode, roundingStepKm);
+  // Crossing the included-distance boundary must always add at least one
+  // pricing step. Nearest rounding previously changed 1.202 km to 1.0 km,
+  // incorrectly leaving the fee at the base amount.
+  const billableDistanceKm = distanceKm > includedDistanceKm && roundedDistanceKm <= includedDistanceKm
+    ? Number((includedDistanceKm + roundingStepKm).toFixed(3))
+    : roundedDistanceKm;
+  const extraKm = Math.max(0, billableDistanceKm - includedDistanceKm);
   const rawNaira = Number(config.baseFeeNaira || 0) + extraKm * Number(config.additionalFeePerKmNaira || 0);
   const finalNaira = Math.min(Number(config.maximumFeeNaira || Infinity), Math.max(Number(config.minimumFeeNaira || 0), rawNaira));
   return { distanceKm: Number(distanceKm.toFixed(3)), billableDistanceKm, deliveryFeeKobo: toKobo(finalNaira) };
