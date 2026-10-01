@@ -47,4 +47,28 @@ describe("distance delivery pricing", () => {
     expect(quote.deliveryFeeKobo).toBeGreaterThan(40000);
     expect(quote.deliverable).toBe(true);
   });
+
+  test("does not call Google Routes during checkout", async () => {
+    const originalFetch = global.fetch;
+    let routeRequests = 0;
+    global.fetch = async () => {
+      routeRequests += 1;
+      throw new Error("Google Routes must remain disabled");
+    };
+
+    try {
+      const quote = await quoteVendorDelivery({
+        vendor: { id: "vendor-3", deliveryManagedBy: "admin", pickupLatitude: 6.583624, pickupLongitude: 3.526267 },
+        address: { id: "address-3", latitude: 6.573172, longitude: 3.529044 },
+        checkout: true,
+        globalConfig: { ...config, enabled: true, routeProvider: "google", useRoadDistanceAtCheckout: true },
+      });
+      expect(routeRequests).toBe(0);
+      expect(quote.source).toBe("haversine_estimate");
+      expect(quote.distanceKm).toBe(1.202);
+      expect(quote.deliveryFeeKobo).toBe(47500);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
 });
