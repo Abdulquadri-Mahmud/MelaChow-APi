@@ -267,9 +267,34 @@ export async function processSamkaCallback({ eventType, externalDeliveryId, sour
   return { delivery, status: status === 8 ? "delivered" : "rider_assigned", statusChanged: true };
 }
 
+export async function assertSamkaSchemaReady() {
+  if (!usesSamkaLogistics()) return;
+  // Validate the schema before the HTTP listener and retry workers start.
+  await prisma.$queryRaw`SELECT assigned_rider, rider_location FROM logistics_deliveries LIMIT 0`;
+  await prisma.$queryRaw`SELECT event_id FROM logistics_callback_events LIMIT 0`;
+}
+
+export async function recoverMissingSamkaHandoffs(limit = 20) {
+  const readyOrders = await prisma.vendorOrder.findMany({
+    where: {
+      orderStatus: "ready_for_pickup",
+      riderId: null,
+      restaurant: { deliveryManagedBy: "admin" },
+      userOrder: { paymentStatus: "paid", orderStatus: "ready_for_pickup", riderId: null },
+      logisticsDelivery: { is: null },
+    },
+    select: { id: true },
+    orderBy: { createdAt: "asc" },
+    take: limit,
+  });
+  for (const order of readyOrders) await queueSamkaDelivery(order.id);
+  return readyOrders.length;
+}
+
 export async function processSamkaLogistics() {
   if (!usesSamkaLogistics()) return { dispatched: 0, reconciled: 0, failed: 0 };
   const result = { dispatched: 0, reconciled: 0, failed: 0 };
+  await recoverMissingSamkaHandoffs();
   const pending = await prisma.logisticsDelivery.findMany({ where: { externalDeliveryId: null, dispatchStatus: { in: ["pending", "retry"] }, nextAttemptAt: { lte: new Date() } }, take: 20, orderBy: { createdAt: "asc" } });
   for (const delivery of pending) {
     try { await dispatchSamkaDelivery(delivery.id); result.dispatched += 1; } catch { result.failed += 1; }

@@ -1670,7 +1670,7 @@ export const updateVendorOrderStatus = async (req, res) => {
         console.error('❌ Customer Notification error:', notifError.message);
       }
 
-      if (notificationContext.isReadyTransition && usesSamkaLogistics()) {
+      if (notificationContext.ensureSamkaHandoff && usesSamkaLogistics()) {
         try {
           const delivery = await queueSamkaDelivery(notificationContext.vendorOrderDatabaseId);
           console.log(`Samka delivery queued for Order ${notificationContext.orderId}: ${delivery.id}`);
