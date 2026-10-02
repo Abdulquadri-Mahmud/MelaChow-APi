@@ -1,0 +1,13 @@
+import { beforeEach, describe, expect, it, jest } from "@jest/globals";
+const db={logisticsDelivery:{findUnique:jest.fn(),update:jest.fn()}};
+jest.unstable_mockModule("../config/prisma.js",()=>({default:db}));
+const {ensureSamkaDeliveryContents}=await import("../services/logistics/samkaLogistics.service.js");
+const delivery={id:"handoff",externalDeliveryId:"existing-delivery"};
+const full={...delivery,sourceOrderId:"vendor-order",sourceOrderReference:"ORD-TEST",vendorOrder:{restaurantId:"vendor",deliveryShare:47500,items:[{name:"Rice",quantity:1}],restaurant:{storeName:"Mela Kitchen",pickupLatitude:6.5,pickupLongitude:3.5,pickupFormattedAddress:"Pickup"},userOrder:{deliveryAddress:{latitude:6.6,longitude:3.6,address:"Drop-off"}}}};
+beforeEach(()=>{jest.resetAllMocks();process.env.SAMKA_LOGISTICS_BASE_URL="https://samka.test";process.env.SAMKA_LOGISTICS_SOURCE_KEY="test-key";global.fetch=jest.fn().mockResolvedValue({ok:true,text:async()=>JSON.stringify("existing-delivery")});db.logisticsDelivery.findUnique.mockResolvedValue(full)});
+describe("Active delivery contents backfill",()=>{
+ it("waits for the upgraded Samka API rather than repeatedly posting ignored fields",async()=>{await ensureSamkaDeliveryContents(delivery,{});expect(db.logisticsDelivery.findUnique).not.toHaveBeenCalled();expect(fetch).not.toHaveBeenCalled()});
+ it("updates the original source order and preserves the delivery id",async()=>{await ensureSamkaDeliveryContents(delivery,{items:[],pickupBusinessName:null});const [url,options]=fetch.mock.calls[0];expect(url).toBe("https://samka.test/api/source-deliveries");expect(JSON.parse(options.body)).toMatchObject({sourceOrderId:"vendor-order",pickupBusinessName:"Mela Kitchen",items:[{name:"Rice",quantity:1}]});expect(db.logisticsDelivery.update.mock.calls[0][0].data).not.toHaveProperty("externalDeliveryId")});
+ it("does not resend metadata once it is present",async()=>{await ensureSamkaDeliveryContents(delivery,{items:[{name:"Rice",quantity:1}],pickupBusinessName:"Mela Kitchen"});expect(fetch).not.toHaveBeenCalled()});
+ it("rejects a different delivery id instead of silently replacing the active delivery",async()=>{fetch.mockResolvedValue({ok:true,text:async()=>JSON.stringify("wrong-id")});await expect(ensureSamkaDeliveryContents(delivery,{items:[]})).rejects.toThrow("existing delivery");expect(db.logisticsDelivery.update).not.toHaveBeenCalled()});
+});
