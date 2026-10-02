@@ -28,14 +28,20 @@ export const adminAuth = async (req, res, next) => {
       return res.status(403).json({ success: false, message: "Access denied. Admin role required." });
     }
 
-    const admin = usePostgresAdminWrites() ? await adminAccountRepository.get(decoded.id) : await Admin.findById(decoded.id);
+    const usesPostgresAdminIdentity = usePostgresAdminWrites();
+    const postgresAdmin = usesPostgresAdminIdentity
+      ? await adminAccountRepository.getWithDatabaseId(decoded.id)
+      : null;
+    const admin = usesPostgresAdminIdentity ? postgresAdmin?.admin : await Admin.findById(decoded.id);
     if (!admin) return res.status(401).json({ success: false, message: "Invalid token" });
     if (!admin.isActive) {
       return res.status(403).json({ success: false, message: "Admin account is inactive." });
     }
 
     req.admin = admin;
-    req.postgresAdminId = usePostgresAdminWrites() ? admin.id : null;
+    // `admin.id` is compatibility-shaped and can intentionally be the legacy
+    // Mongo ID. Samka's audit header must receive the canonical PostgreSQL UUID.
+    req.postgresAdminId = postgresAdmin?.databaseId || null;
     next();
   } catch (err) {
     res.status(401).json({ success: false, message: "Authentication failed", error: err.message });
