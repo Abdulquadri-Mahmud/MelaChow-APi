@@ -49,6 +49,8 @@ import riderNotificationRoutes from './routes/riderNotification.routes.js';
 import publicPromoRoutes from "./routes/promo/publicPromo.routes.js";
 import bannerRoutes from "./routes/Admin/banner.routes.js";
 import platformConfigPublicRoutes from "./routes/public/platformConfig.public.routes.js";
+import samkaLogisticsRoutes from "./routes/integrations/samkaLogistics.routes.js";
+import samkaLogisticsAdminRoutes from "./routes/Admin/samkaLogisticsAdmin.routes.js";
 import supportTicketRoutes from "./routes/supportTicket.routes.js";
 import qrRoutes from "./routes/qr.routes.js";
 import adminSupportTicketRoutes from "./routes/Admin/supportTicket.routes.js";
@@ -200,14 +202,14 @@ app.use((req, res, next) => {
 // portions, selected options, and metadata can exceed 10kb.
 // All other routes keep the strict 10kb limit.
 app.use((req, res, next) => {
-    if (req.path === '/api/orders/webhook') return next();
+    if (req.path === '/api/orders/webhook' || req.path.startsWith('/api/integrations/logistics/')) return next();
     const isOrderRoute =
         req.path.startsWith('/api/orders') ||
         req.path.startsWith('/v1/cart');
     express.json({ limit: isOrderRoute ? '100kb' : '10kb' })(req, res, next);
 });
 app.use((req, res, next) => {
-    if (req.path === '/api/orders/webhook') return next();
+    if (req.path === '/api/orders/webhook' || req.path.startsWith('/api/integrations/logistics/')) return next();
     const isOrderRoute =
         req.path.startsWith('/api/orders') ||
         req.path.startsWith('/v1/cart');
@@ -219,7 +221,7 @@ app.use(cookieParser()); // Parse cookies
 // req.query injection risk is minimal for Mongoose since queries are constructed
 // server-side, not passed raw from query strings.
 app.use((req, res, next) => {
-  if (req.path === '/api/orders/webhook') return next();
+  if (req.path === '/api/orders/webhook' || req.path.startsWith('/api/integrations/logistics/')) return next();
   if (req.body) {
     req.body = mongoSanitize.sanitize(req.body);
   }
@@ -428,6 +430,7 @@ app.use('/api/socket', socketHealthRoutes);
 app.use("/api/promos", publicPromoRoutes);
 app.use("/api/banners", bannerRoutes);
 app.use("/api/public", platformConfigPublicRoutes);
+app.use("/api/integrations/logistics", samkaLogisticsRoutes);
 app.use("/api/support", supportTicketRoutes);
 app.use("/api/qr", qrRoutes);
 
@@ -455,6 +458,7 @@ app.use('/api/admin/orders', adminOrderRoutes);
 app.use('/api/admin/finance', platformFinanceRouter);
 app.use('/api/admin/support', adminSupportTicketRoutes);
 app.use('/api/admin/support', adminSupportKnowledgeRoutes);
+app.use('/api/admin/logistics', samkaLogisticsAdminRoutes);
 
 // Transactions
 app.use("/api/transactions", transactionRoutes);

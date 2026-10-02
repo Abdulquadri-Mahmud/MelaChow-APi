@@ -868,6 +868,7 @@ export const adminOrdersRepository = {
         userId: order.user?.legacyMongoId || order.userId,
         orderLegacyId: legacyId(order),
         vendorOrders: order.vendorOrders.map((vendorOrder) => ({
+          vendorOrderDatabaseId: vendorOrder.id,
           restaurantId: vendorOrder.restaurant?.legacyMongoId || vendorOrder.restaurantId,
           storeName: vendorOrder.restaurant?.storeName || "",
         })),
