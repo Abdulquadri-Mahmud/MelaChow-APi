@@ -12,6 +12,7 @@ import { getPlatformConfig } from "../../../services/platformConfig.service.js";
 import { expireStaleRiderAssignmentOffers } from "../../../services/riderAssignment.service.js";
 import { usePostgresAdminOrderReads, usePostgresOrderStatusWrites } from "../../../services/postgres/compat.js";
 import { adminOrdersRepository } from "../../../services/postgres/adminOrders.repository.js";
+import { cancelQueuedSamkaDeliveryForVendorOrder, usesSamkaLogistics } from "../../../services/logistics/samkaLogistics.service.js";
 
 /**
  * GET ALL ORDERS
@@ -316,6 +317,16 @@ export const adminOverrideOrderStatus = async (req, res) => {
                 return res.status(response.status).json({ success: false, message: response.message });
             }
 
+            if (status === "cancelled" && usesSamkaLogistics()) {
+                await Promise.all(response.notificationContext.vendorOrders.map(async (vendorOrder) => {
+                    try {
+                        await cancelQueuedSamkaDeliveryForVendorOrder(vendorOrder.vendorOrderDatabaseId, reason);
+                    } catch (logisticsError) {
+                        console.error("Samka delivery cancellation failed after admin order cancellation:", logisticsError.message);
+                    }
+                }));
+            }
+
             try {
                 const { sendOrderNotification, sendVendorNotification } = await import("../../../services/notification.service.js");
                 await sendOrderNotification(response.notificationContext.userId, response.data.orderId, status, {
@@ -357,6 +368,17 @@ export const adminOverrideOrderStatus = async (req, res) => {
             { userOrderId: order._id },
             { $set: { orderStatus: status } }
         );
+
+        if (status === "cancelled" && usesSamkaLogistics()) {
+            const vendorOrders = await VendorOrder.find({ userOrderId: order._id }).select("_id");
+            await Promise.all(vendorOrders.map(async (vendorOrder) => {
+                try {
+                    await cancelQueuedSamkaDeliveryForVendorOrder(vendorOrder._id, reason);
+                } catch (logisticsError) {
+                    console.error("Samka delivery cancellation failed after admin order cancellation:", logisticsError.message);
+                }
+            }));
+        }
 
         // ── Trigger refund when admin cancels a paid order ────────────────────────
         // Every other cancellation path calls refundOrderToWallet.

@@ -18,3 +18,5 @@ scratch/
 *.MD
 *.markdown
 *.MARKDOWN
+
+.env.samkatech.local

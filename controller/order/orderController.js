@@ -36,7 +36,7 @@ import { adminOrdersRepository } from "../../services/postgres/adminOrders.repos
 import { vendorOrdersRepository } from "../../services/postgres/vendorOrders.repository.js";
 import { postgresPaymentRepository } from "../../services/postgres/payment.repository.js";
 import { applyTransferOutcome } from "../../services/transferReconciliation.service.js";
-import { queueSamkaDelivery, usesSamkaLogistics } from "../../services/logistics/samkaLogistics.service.js";
+import { cancelQueuedSamkaDeliveryForVendorOrder, dispatchSamkaDelivery, queueSamkaDelivery, usesSamkaLogistics } from "../../services/logistics/samkaLogistics.service.js";
 
 // Helper function to normalize metadata from Paystack (Object or String)
 // Kept for backward compatibility if needed, though pendingOrder strategy supercedes it.
@@ -1634,6 +1634,10 @@ export const updateVendorOrderStatus = async (req, res) => {
 
       const { notificationContext, ...payload } = response;
 
+      if (status === "cancelled" && usesSamkaLogistics()) {
+        await cancelQueuedSamkaDeliveryForVendorOrder(payload.vendorOrder?._id || payload.vendorOrder?.id || vendorOrderId, "Vendor cancelled the order");
+      }
+
       try {
         emitOrderStatusUpdate(
           {
@@ -1670,6 +1674,9 @@ export const updateVendorOrderStatus = async (req, res) => {
         try {
           const delivery = await queueSamkaDelivery(notificationContext.vendorOrderDatabaseId);
           console.log(`Samka delivery queued for Order ${notificationContext.orderId}: ${delivery.id}`);
+          dispatchSamkaDelivery(delivery.id).catch((dispatchError) => {
+            console.error("Immediate Samka delivery dispatch failed; queued retry remains active:", dispatchError.message);
+          });
         } catch (logisticsError) {
           console.error("Samka delivery queue error:", logisticsError.message);
         }

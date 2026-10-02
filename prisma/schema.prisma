@@ -1067,6 +1067,8 @@ model LogisticsDelivery {
   lastError            String?   @map("last_error")
   requestPayload       Json?     @map("request_payload")
   responsePayload      Json?     @map("response_payload")
+  assignedRider        Json?     @map("assigned_rider")
+  riderLocation        Json?     @map("rider_location")
   createdAt            DateTime  @default(now()) @map("created_at")
   updatedAt            DateTime  @updatedAt @map("updated_at")
 
@@ -1076,6 +1078,21 @@ model LogisticsDelivery {
   @@index([dispatchStatus, nextAttemptAt])
   @@index([externalStatus, lastSyncedAt])
   @@map("logistics_deliveries")
+}
+
+model LogisticsCallbackEvent {
+  id                 String   @id @default(uuid()) @db.Uuid
+  eventId            String   @unique @map("event_id")
+  eventType          String   @map("event_type")
+  externalDeliveryId String?  @map("external_delivery_id") @db.Uuid
+  sourceOrderId      String?  @map("source_order_id")
+  payload            Json
+  processedAt        DateTime @default(now()) @map("processed_at")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  @@index([externalDeliveryId, createdAt])
+  @@index([eventType, createdAt])
+  @@map("logistics_callback_events")
 }
 
 model OrderTermination {
