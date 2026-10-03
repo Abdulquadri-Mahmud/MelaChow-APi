@@ -1,4 +1,5 @@
-﻿import crypto from "crypto";
+import { verifySourcePickupCode } from "../../services/logistics/pickupCode.service.js";
+import crypto from "crypto";
 import prisma from "../../config/prisma.js";
 import { processSamkaCallback } from "../../services/logistics/samkaLogistics.service.js";
 import { sendDeliveryOTP, verifyDeliveryOTP } from "../../services/otp.service.js";
@@ -111,3 +112,15 @@ export const validateSamkaDeliveryCode = async (req, res) => {
   }
 };
 
+
+export const validateSamkaPickupCode = async (req, res, next) => {
+  const signed = parseSignedBody(req, res);
+  if (!signed) return;
+  try {
+    await verifySourcePickupCode(String(signed.body.sourceOrderId || "").trim(), String(signed.body.pickupCode || "").trim());
+    return res.status(204).end();
+  } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
+    return next(error);
+  }
+};
