@@ -11,6 +11,7 @@ const log=async({actorId,action,targetId=null,targetModel="Admin",details="",ipA
 
 export const adminAccountRepository={
  async get(token){const id=await resolve(token);return id?shape(await prisma.admin.findUnique({where:{id}})):null;},
+ async getWithDatabaseId(token){const id=await resolve(token);if(!id)return null;const row=await prisma.admin.findUnique({where:{id}});return row?{admin:shape(row),databaseId:row.id}:null;},
  async findByEmail(email,{raw=false}={}){const row=await prisma.admin.findUnique({where:{email:String(email).trim().toLowerCase()}});return raw?row:shape(row);},
  async register({name,email,password,role}){const normalized=String(email).trim().toLowerCase();if(await prisma.admin.findUnique({where:{email:normalized}}))return{error:"exists"};const hash=await bcrypt.hash(password,12);return prisma.$transaction(async tx=>{const admin=await tx.admin.create({data:{name,email:normalized,password:hash,role:dbRole(role)}});let wallet=null;if(role==="super-admin"){wallet=await tx.wallet.create({data:{ownerId:admin.id,ownerModel:"Admin",balance:0,totalEarned:0,totalWithdrawn:0}});await tx.admin.update({where:{id:admin.id},data:{walletId:wallet.id}});}await tx.activityLog.create({data:{actorId:admin.id,actorModel:"Admin",action:"LOGIN",targetId:admin.id,targetModel:"Admin",metadata:{details:`New admin registered with role: ${role}`}}});return{admin:shape({...admin,walletId:wallet?.id||null}),wallet};});},
  async comparePassword(admin,password){

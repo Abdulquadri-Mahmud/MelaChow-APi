@@ -1,4 +1,5 @@
 import prisma from "../../config/prisma.js";
+import { deliveryContentsFrom } from "./deliveryContents.js";
 
 const SOURCE_MELACHOW = "MelaChow";
 const TERMINAL_STATUSES = new Set([8, 9, 10]);
@@ -70,7 +71,12 @@ const buildPayload = (delivery) => {
   assertLocation(pickup, "Vendor pickup location");
   assertLocation(dropoff, "Customer delivery location");
 
-  const feeKobo = Number(vendorOrder.deliveryShare ?? order.deliveryFee ?? 0);
+  // Platform-managed vendor orders intentionally store deliveryShare as zero. Use the
+  // customer order's per-vendor quote (kobo) as the source of truth for rider earnings.
+  const vendorDeliveryFee = (order.vendorDeliveryFees || []).find(
+    (entry) => String(entry.restaurantId) === String(vendorOrder.restaurantId),
+  );
+  const feeKobo = Number(vendorDeliveryFee?.deliveryFee ?? order.deliveryFee ?? vendorOrder.deliveryShare ?? 0);
   const estimatedFee = Number((feeKobo / 100).toFixed(2));
   const riderCommission = Number(process.env.SAMKA_RIDER_COMMISSION_NAIRA || 0);
   const distanceEntry = order.vendorDeliveryFees?.find((entry) => entry.restaurantId === vendorOrder.restaurantId);
@@ -90,6 +96,7 @@ const buildPayload = (delivery) => {
     commercialPolicyVersion: Number(process.env.SAMKA_COMMERCIAL_POLICY_VERSION || 1),
     riderCommission,
     currency: "NGN",
+    ...deliveryContentsFrom(vendorOrder),
     pickupContactPhone: vendor.phone || null,
     dropoffContactPhone: order.phone || null,
   };
@@ -191,6 +198,21 @@ async function applyExternalStatus(delivery, externalStatus, responsePayload) {
   });
 }
 
+export async function ensureSamkaDeliveryContents(delivery, remote) {
+  // Older Samka deployments do not return items: wait until the new contract is available.
+  if (!Array.isArray(remote?.items)) return;
+  const full = await loadDelivery(delivery.id);
+  if (!full) return;
+  const contents = deliveryContentsFrom(full.vendorOrder);
+  const needsStore = !remote.pickupBusinessName && contents.pickupBusinessName;
+  const needsItems = remote.items.length === 0 && contents.items.length > 0;
+  if (!needsStore && !needsItems) return;
+  const payload = buildPayload(full);
+  const result = await request("/api/source-deliveries", { method: "POST", body: JSON.stringify(payload) });
+  const id = typeof result === "string" ? result : result?.id || result?.deliveryId;
+  if (id !== delivery.externalDeliveryId) throw new Error("Samka contents update did not return the existing delivery");
+  await prisma.logisticsDelivery.update({ where: { id: delivery.id }, data: { requestPayload: payload } });
+}
 export async function reconcileSamkaDelivery(delivery) {
   const result = await request(`/api/source-deliveries/${delivery.externalDeliveryId}?source=${SOURCE_MELACHOW}`);
   const status = typeof result?.status === "string" && STATUS_BY_NAME[result.status]
@@ -202,6 +224,7 @@ export async function reconcileSamkaDelivery(delivery) {
     return;
   }
   await applyExternalStatus(delivery, status, result);
+  if (!TERMINAL_STATUSES.has(status)) await ensureSamkaDeliveryContents(delivery, result);
 }
 
 export async function getSamkaDeliveryDetails(externalDeliveryId) {
@@ -267,9 +290,34 @@ export async function processSamkaCallback({ eventType, externalDeliveryId, sour
   return { delivery, status: status === 8 ? "delivered" : "rider_assigned", statusChanged: true };
 }
 
+export async function assertSamkaSchemaReady() {
+  if (!usesSamkaLogistics()) return;
+  // Validate the schema before the HTTP listener and retry workers start.
+  await prisma.$queryRaw`SELECT assigned_rider, rider_location FROM logistics_deliveries LIMIT 0`;
+  await prisma.$queryRaw`SELECT event_id FROM logistics_callback_events LIMIT 0`;
+}
+
+export async function recoverMissingSamkaHandoffs(limit = 20) {
+  const readyOrders = await prisma.vendorOrder.findMany({
+    where: {
+      orderStatus: "ready_for_pickup",
+      riderId: null,
+      restaurant: { deliveryManagedBy: "admin" },
+      userOrder: { paymentStatus: "paid", orderStatus: "ready_for_pickup", riderId: null },
+      logisticsDelivery: { is: null },
+    },
+    select: { id: true },
+    orderBy: { createdAt: "asc" },
+    take: limit,
+  });
+  for (const order of readyOrders) await queueSamkaDelivery(order.id);
+  return readyOrders.length;
+}
+
 export async function processSamkaLogistics() {
   if (!usesSamkaLogistics()) return { dispatched: 0, reconciled: 0, failed: 0 };
   const result = { dispatched: 0, reconciled: 0, failed: 0 };
+  await recoverMissingSamkaHandoffs();
   const pending = await prisma.logisticsDelivery.findMany({ where: { externalDeliveryId: null, dispatchStatus: { in: ["pending", "retry"] }, nextAttemptAt: { lte: new Date() } }, take: 20, orderBy: { createdAt: "asc" } });
   for (const delivery of pending) {
     try { await dispatchSamkaDelivery(delivery.id); result.dispatched += 1; } catch { result.failed += 1; }

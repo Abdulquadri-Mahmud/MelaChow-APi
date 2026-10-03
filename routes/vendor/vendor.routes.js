@@ -24,6 +24,7 @@ import { getVendorReviews } from "../../controller/user/user.reviews.controller.
 import vendorAuth from "../../middleware/vendor.middleware.js";
 import { getVendorOwnPromoStatus } from "../../controller/Admin/vendorPromo.controller.js";
 
+import { getVendorPickupCode } from "../../controller/vendor/pickupCode.controller.js";
 const router = express.Router();
 
 // Vendor reads their own promo status (read-only)
@@ -42,6 +43,7 @@ router.get("/payout-details", vendorAuth, getVendorPayoutDetails);  // Get hidde
 router.get("/reviews", vendorAuth, getVendorReviews);         // Get vendor reviews
 router.get("/orders", vendorAuth, getVendorOrders);         // Get vendor orders
 router.get("/orders/:vendorOrderId", vendorAuth, getVendorOrderById); // Get single vendor order
+router.post("/orders/:vendorOrderId/pickup-code", vendorAuth, getVendorPickupCode);
 router.patch("/orders/:vendorOrderId/update", vendorAuth, updateVendorOrderStatus); // Update order status
 router.patch("/orders/:vendorOrderId/complete", vendorAuth, completeVendorOrder); // Complete order status
 router.post("/orders/:vendorOrderId/remake-response", vendorAuth, respondToRemakeRequest); // Respond to disputed delivery remake window

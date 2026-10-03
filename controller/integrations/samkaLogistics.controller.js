@@ -1,4 +1,5 @@
-﻿import crypto from "crypto";
+import { verifySourcePickupCode } from "../../services/logistics/pickupCode.service.js";
+import crypto from "crypto";
 import prisma from "../../config/prisma.js";
 import { processSamkaCallback } from "../../services/logistics/samkaLogistics.service.js";
 import { sendDeliveryOTP, verifyDeliveryOTP } from "../../services/otp.service.js";
@@ -99,15 +100,30 @@ export const validateSamkaDeliveryCode = async (req, res) => {
   const context = await loadSourceOrder(sourceOrderId);
   if (!context) return res.status(404).json({ success: false, message: "Source delivery was not found" });
   const { order, vendorOrder } = context;
+  if (order.paymentStatus !== "paid") return res.status(409).json({ success: false, message: "Only a paid order can be completed." });
+  if (["delivered", "completed", "cancelled", "failed"].includes(String(vendorOrder.orderStatus || "").toLowerCase()))
+    return res.status(409).json({ success: false, message: "This delivery is already closed." });
   try {
-    const otherOrders = (order.vendorOrders || []).filter((item) => item.id !== vendorOrder.id);
-    const terminal = new Set(["delivered", "completed", "cancelled", "failed"]);
-    const consume = otherOrders.every((item) => terminal.has(String(item.orderStatus || "").toLowerCase()));
-    const result = await verifyDeliveryOTP(orderOtpId(order), deliveryCode, { consume });
+    // Keep verification retryable until Samka commits Delivered and publishes its
+    // completion callback. Cross-service pre-commit verification cannot consume the code.
+    const result = await verifyDeliveryOTP(orderOtpId(order), deliveryCode, { consume: false });
     if (!result.verified) return res.status(422).json({ success: false, message: "Incorrect delivery code" });
     return res.status(204).end();
   } catch (error) {
-    return res.status(422).json({ success: false, message: error.message || "Delivery code is invalid or expired" });
+    const status = error.statusCode === 429 ? 429 : 422;
+    return res.status(status).json({ success: false, message: error.message || "Delivery code is invalid or expired" });
   }
 };
 
+
+export const validateSamkaPickupCode = async (req, res, next) => {
+  const signed = parseSignedBody(req, res);
+  if (!signed) return;
+  try {
+    await verifySourcePickupCode(String(signed.body.sourceOrderId || "").trim(), String(signed.body.pickupCode || "").trim());
+    return res.status(204).end();
+  } catch (error) {
+    if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
+    return next(error);
+  }
+};

@@ -1,4 +1,5 @@
 import prisma from "../../config/prisma.js";
+import { usesSamkaLogistics } from "../logistics/samkaLogistics.service.js";
 import { koboToNaira, orderItemToNaira } from "../../utils/moneyContract.js";
 import { calculateRiderPayoutKobo } from "./riderPayout.js";
 
@@ -969,6 +970,7 @@ export const adminOrdersRepository = {
     const parentStatus = parentStatusFromVendorStatuses(siblingStatuses);
     const statusLog = Array.isArray(vendorOrder.userOrder.statusLog) ? vendorOrder.userOrder.statusLog : [];
 
+    const ensureSamkaHandoff = usesSamkaLogistics() && isPlatformManaged && status === "ready_for_pickup";
     const [updatedVendorOrder] = await prisma.$transaction([
       prisma.vendorOrder.update({
         where: { id: vendorOrder.id },
@@ -992,6 +994,15 @@ export const adminOrdersRepository = {
           ],
         },
       }),
+      ...(ensureSamkaHandoff ? [prisma.logisticsDelivery.upsert({
+        where: { vendorOrderId: vendorOrder.id },
+        create: {
+          vendorOrderId: vendorOrder.id,
+          sourceOrderId: vendorOrder.id,
+          sourceOrderReference: vendorOrder.userOrder.orderCode + ":" + vendorOrder.id.slice(0, 8),
+        },
+        update: {},
+      })] : []),
     ]);
 
     return {
@@ -1018,6 +1029,7 @@ export const adminOrdersRepository = {
         restaurantName: vendor.storeName,
         totalAmount: koboToNaira(vendorOrder.userOrder.total),
         items: (vendorOrder.items || []).map(orderItemToNaira),
+        ensureSamkaHandoff,
         isReadyTransition: ["ready_for_pickup", "ready"].includes(status) && !["ready_for_pickup", "ready"].includes(previousStatus),
       },
     };

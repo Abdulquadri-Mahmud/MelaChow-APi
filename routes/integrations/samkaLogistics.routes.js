@@ -1,9 +1,10 @@
-﻿import express from "express";
-import { receiveSamkaCallback, requestSamkaDeliveryCode, validateSamkaDeliveryCode } from "../../controller/integrations/samkaLogistics.controller.js";
+import express from "express";
+import { receiveSamkaCallback, requestSamkaDeliveryCode, validateSamkaDeliveryCode, validateSamkaPickupCode } from "../../controller/integrations/samkaLogistics.controller.js";
 
 const router = express.Router();
 const signedJson = express.raw({ type: "application/json", limit: "100kb" });
 
+router.post("/deliveries/validate-pickup", signedJson, validateSamkaPickupCode);
 router.post("/callbacks", signedJson, receiveSamkaCallback);
 router.post("/deliveries/request-completion-code", signedJson, requestSamkaDeliveryCode);
 router.post("/deliveries/validate-completion", signedJson, validateSamkaDeliveryCode);

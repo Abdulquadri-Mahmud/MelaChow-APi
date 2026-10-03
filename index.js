@@ -64,7 +64,7 @@ import { scheduledPayoutWorker, triggerScheduledPayouts } from "./jobs/scheduled
 import { expireStaleRiderAssignments } from "./jobs/riderAssignmentTimeout.job.js";
 import { retryPendingRiderAssignments } from "./jobs/riderAssignmentRetry.job.js";
 import cron from "node-cron";
-import { processSamkaLogistics, usesSamkaLogistics } from "./services/logistics/samkaLogistics.service.js";
+import { assertSamkaSchemaReady, processSamkaLogistics, usesSamkaLogistics } from "./services/logistics/samkaLogistics.service.js";
 import { reconcileStaleWithdrawals } from "./services/transferReconciliation.service.js";
 import { RIDER_SWEEP_CRON, VENDOR_SWEEP_CRON } from "./config/payouts.js";
 import { releaseExpiredOptionStockReservations, releaseExpiredPortionStockReservations } from "./services/optionStock.service.js";
@@ -550,7 +550,8 @@ const startServer = async () => {
       mongoose.set("bufferCommands", false);
       if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
       await prisma.$queryRaw`SELECT 1`;
-      logger.info("PostgreSQL connected as primary database");
+      await assertSamkaSchemaReady();
+      logger.info("PostgreSQL connected as primary database; logistics schema verified");
     } else {
       await connectDB();
     }

@@ -1457,14 +1457,5 @@ export const getVendorMenuItems = async (req, res) => {
 // =====================================================================
 // PLATFORM CATEGORIES — read only for vendors
 // =====================================================================
-export const getPlatformCategories = async (req, res) => {
-    // Proxy through to the existing Category model
-    try {
-        const Category = (await import('../../model/category.model.js')).default;
-        const categories = await Category.find({ isActive: true }).populate('parent', 'name slug').sort('name').lean();
-        res.status(200).json({ success: true, categories });
-    } catch (error) {
-        res.status(500).json({ success: false, message: error.message });
-    }
-};
+export { getPlatformCategories } from './platformCategories.controller.js';
 
