@@ -71,7 +71,12 @@ const buildPayload = (delivery) => {
   assertLocation(pickup, "Vendor pickup location");
   assertLocation(dropoff, "Customer delivery location");
 
-  const feeKobo = Number(vendorOrder.deliveryShare ?? order.deliveryFee ?? 0);
+  // Platform-managed vendor orders intentionally store deliveryShare as zero. Use the
+  // customer order's per-vendor quote (kobo) as the source of truth for rider earnings.
+  const vendorDeliveryFee = (order.vendorDeliveryFees || []).find(
+    (entry) => String(entry.restaurantId) === String(vendorOrder.restaurantId),
+  );
+  const feeKobo = Number(vendorDeliveryFee?.deliveryFee ?? order.deliveryFee ?? vendorOrder.deliveryShare ?? 0);
   const estimatedFee = Number((feeKobo / 100).toFixed(2));
   const riderCommission = Number(process.env.SAMKA_RIDER_COMMISSION_NAIRA || 0);
   const distanceEntry = order.vendorDeliveryFees?.find((entry) => entry.restaurantId === vendorOrder.restaurantId);

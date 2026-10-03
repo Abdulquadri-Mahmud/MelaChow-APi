@@ -10,7 +10,7 @@ import VendorOrder from "../../model/vendor/VendorOrder.js";
 import Food from "../../model/vendor/food.model.js";
 import Vendor from "../../model/vendor/vendor.model.js";
 import Admin from "../../model/Admin/admin.model.js";
-import { getActiveDeliveryOTP } from "../../services/otp.service.js";
+import { ensureDeliveryOTP, getActiveDeliveryOTP } from "../../services/otp.service.js";
 import {
   createOrderV2,
   updateOrderAfterPayment,
@@ -1327,8 +1327,15 @@ export const getSingleOrder = async (req, res) => {
       // PostgreSQL-native orders use UUIDs while migrated orders can retain a
       // legacy Mongo identifier. Delivery OTP storage supports both, so never
       // gate the lookup on the old 24-character ObjectId format.
+      const terminal = new Set(["delivered", "completed", "cancelled", "failed", "refunded"]);
+      const allVendorOrdersTerminal = (result.vendorOrders || []).length > 0
+        && result.vendorOrders.every((vendorOrder) => terminal.has(String(vendorOrder.orderStatus || "").toLowerCase()));
       result.deliveryOtp = result.order?._id
-        ? await getActiveDeliveryOTP(result.order._id).catch(() => null)
+        ? await (allVendorOrdersTerminal
+          ? Promise.resolve(null)
+          : usesSamkaLogistics() && result.order.paymentStatus === "paid"
+            ? ensureDeliveryOTP(result.order._id)
+            : getActiveDeliveryOTP(result.order._id)).catch(() => null)
         : null;
       return res.json({ ...result, message: "Order fetched successfully" });
     }
@@ -1393,7 +1400,13 @@ export const getSingleOrder = async (req, res) => {
     }
 
     // 4️⃣ Get Delivery OTP if active
-    const deliveryOtp = await getActiveDeliveryOTP(order._id);
+    const allVendorOrdersTerminal = vendorOrders.length > 0
+      && vendorOrders.every((vendorOrder) => ["delivered", "completed", "cancelled", "failed", "refunded"].includes(String(vendorOrder.orderStatus || "").toLowerCase()));
+    const deliveryOtp = allVendorOrdersTerminal
+      ? null
+      : usesSamkaLogistics() && order.paymentStatus === "paid"
+        ? await ensureDeliveryOTP(order._id)
+        : await getActiveDeliveryOTP(order._id);
 
     // 5️⃣ Return order with embedded variant info
     return res.json({
