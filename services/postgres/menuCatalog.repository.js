@@ -309,7 +309,16 @@ const vendorMenuListItemShape = (item) => {
 const vendorStorefrontShape = (vendor) => {
   if (!vendor) return null;
 
-  const deliveryFeeKobo = vendor.resolvedDeliveryFeeKobo ?? vendor.platformDeliveryFeeOverride ?? DEFAULT_DISTANCE_DELIVERY_CONFIG.fallbackFlatFeeNaira * 100;
+  const now = new Date();
+  const activePromo = (vendor.vendorDeliveryPromos || []).find((promo) =>
+    promo.isActive &&
+    (!promo.startsAt || promo.startsAt <= now) &&
+    (!promo.endsAt || promo.endsAt >= now) &&
+    (promo.maxOrders == null || promo.usedOrders < promo.maxOrders)
+  ) || null;
+  const deliveryFeeKobo = activePromo
+    ? 0
+    : vendor.resolvedDeliveryFeeKobo ?? vendor.platformDeliveryFeeOverride ?? DEFAULT_DISTANCE_DELIVERY_CONFIG.fallbackFlatFeeNaira * 100;
 
   return {
     _id: legacyId(vendor),
@@ -327,8 +336,15 @@ const vendorStorefrontShape = (vendor) => {
     rating: vendor.rating ?? null,
     ratingCount: vendor.ratingCount ?? 0,
     storeSlug: vendor.storeSlug,
-    hasActiveDeliveryPromo: vendor.hasActiveDeliveryPromo || false,
-    activeDeliveryPromo: null,
+    hasActiveDeliveryPromo: Boolean(activePromo),
+    activeDeliveryPromo: activePromo ? {
+      promoId: legacyId(activePromo),
+      maxOrders: activePromo.maxOrders,
+      usedOrders: activePromo.usedOrders,
+      remainingOrders: activePromo.maxOrders == null ? null : Math.max(0, activePromo.maxOrders - activePromo.usedOrders),
+      startsAt: activePromo.startsAt,
+      endsAt: activePromo.endsAt,
+    } : null,
   };
 };
 
@@ -418,6 +434,7 @@ export const menuCatalogRepository = {
     const resolvedVendorId = await resolveId(prisma.vendor, vendorId);
     if (!resolvedVendorId) return null;
 
+    const now = new Date();
     const vendor = await prisma.vendor.findFirst({
       where: {
         id: resolvedVendorId,
@@ -427,6 +444,25 @@ export const menuCatalogRepository = {
       include: {
         city: {
           include: { state: { select: { name: true, isActive: true } } },
+        },
+        vendorDeliveryPromos: {
+          where: {
+            isActive: true,
+            AND: [
+              { OR: [{ startsAt: null }, { startsAt: { lte: now } }] },
+              { OR: [{ endsAt: null }, { endsAt: { gte: now } }] },
+            ],
+          },
+          orderBy: { createdAt: "desc" },
+          select: {
+            id: true,
+            legacyMongoId: true,
+            maxOrders: true,
+            usedOrders: true,
+            startsAt: true,
+            endsAt: true,
+            isActive: true,
+          },
         },
       },
     });
