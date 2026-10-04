@@ -8,10 +8,13 @@ import {
     markAllVendorAsRead,
     deleteVendorNotification
 } from '../../controller/vendor/vendor.notification.controller.js';
+import { registerNativePushToken, removeNativePushToken } from '../../controller/notification/nativePush.controller.js';
 import authVendor from '../../middleware/vendor.middleware.js';
 
 const router = express.Router();
 
+router.post('/native-token', authVendor, registerNativePushToken);
+router.delete('/native-token', authVendor, removeNativePushToken);
 router.post('/subscribe', authVendor, subscribeVendor);
 router.post('/unsubscribe', authVendor, unsubscribeVendor);
 router.get('/history', authVendor, getVendorNotifications);

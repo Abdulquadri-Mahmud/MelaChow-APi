@@ -9,6 +9,7 @@ import { redisClient, isRedisReady, safeRedisGet, safeRedisSet } from '../config
 import dotenv from 'dotenv';
 import { usePostgresNotificationWrites } from './postgres/compat.js';
 import { notificationRepository } from './postgres/notification.repository.js';
+import { sendFirebasePush } from './firebasePush.service.js';
 
 dotenv.config();
 
@@ -461,15 +462,23 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
 
                 const pushPromises = subscriptions.map(async (sub) => {
                     try {
-                        await webpush.sendNotification(
-                            sub.subscription,
-                            JSON.stringify(pushPayload)
-                        );
-                        console.log(`Push sent to device: ${sub.deviceType}`);
+                        if (sub.subscription?.provider === 'firebase') {
+                            const delivered = await sendFirebasePush(sub.subscription.fcmToken, pushPayload);
+                            console.log(delivered
+                                ? `Firebase push sent to device: ${sub.subscription.platform || 'native'} (${role})`
+                                : `Firebase push skipped because credentials are unavailable (${role})`);
+                        } else {
+                            await webpush.sendNotification(
+                                sub.subscription,
+                                JSON.stringify(pushPayload)
+                            );
+                            console.log(`Web push sent to device: ${sub.deviceType}`);
+                        }
                     } catch (error) {
                         console.error(`Failed to send push to ${sub.deviceType}:`, error.message);
 
-                        if (error.statusCode === 410 || error.statusCode === 404) {
+                        const staleFcmToken = ["messaging/registration-token-not-registered", "messaging/invalid-registration-token"].includes(error.code);
+                        if (staleFcmToken || error.statusCode === 410 || error.statusCode === 404) {
                             if (usePostgresNotificationWrites()) {
                                 await notificationRepository.removeSubscriptionById(sub._id);
                             } else {

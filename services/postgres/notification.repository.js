@@ -93,6 +93,24 @@ export const notificationRepository = {
       deviceType: row.subscription?.deviceType || "web",
     }));
   },
+  async saveNativePushToken(role, tokenId, token, platform = "android", deviceId = null) {
+    const mapping = actor(role), ownerId = await resolve(mapping[0], tokenId);
+    if (!ownerId) throw new Error(role + " not found");
+    const ownerModel = role === "vendor" ? "Vendor" : "User";
+    const endpoint = "fcm:" + token;
+    const subscription = { provider: "firebase", fcmToken: token, platform, deviceId };
+    return prisma.pushSubscription.upsert({
+      where: { endpoint },
+      create: { ownerId, ownerModel, endpoint, subscription },
+      update: { ownerId, ownerModel, subscription },
+    });
+  },
+  async removeNativePushToken(role, tokenId, token) {
+    const mapping = actor(role), ownerId = await resolve(mapping[0], tokenId);
+    if (!ownerId) return 0;
+    const ownerModel = role === "vendor" ? "Vendor" : "User";
+    return (await prisma.pushSubscription.deleteMany({ where: { ownerId, ownerModel, endpoint: "fcm:" + token } })).count;
+  },
   async removeSubscriptionById(id) {
     if (!id || !uuid.test(String(id))) return 0;
     return (await prisma.pushSubscription.deleteMany({ where: { id: String(id) } })).count;
