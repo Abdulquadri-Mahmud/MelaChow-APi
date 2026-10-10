@@ -202,6 +202,145 @@ const orderByFor = (sort) => {
 };
 
 export const searchRepository = {
+  async resolveLocationVendors({ req, city: cityOverride, state: stateOverride } = {}) {
+    let cityName = cityOverride || null;
+    let stateName = stateOverride || null;
+
+    if ((!cityName || !stateName) && req?.user?._id) {
+      const tokenId = String(req.user._id);
+      const user = await prisma.user.findFirst({
+        where: uuidPattern.test(tokenId) ? { id: tokenId } : { legacyMongoId: tokenId },
+        include: { addresses: { orderBy: { createdAt: "asc" }, include: { city: true, state: true } } },
+      });
+      const address = user?.addresses?.find((item) => item.isDefault) || user?.addresses?.[0];
+      cityName ||= address?.cityText || address?.city?.name || address?.cityName || null;
+      stateName ||= address?.stateText || address?.state?.name || address?.stateName || null;
+    }
+
+    if (!cityName && !stateName) return { vendorIds: null, userCity: null, userState: null };
+
+    const state = stateName
+      ? await prisma.state.findFirst({ where: { name: { equals: stateName.trim(), mode: "insensitive" }, isActive: true } })
+      : null;
+    const city = cityName && state
+      ? await prisma.city.findFirst({ where: { name: { equals: cityName.trim(), mode: "insensitive" }, stateId: state.id, isActive: true } })
+      : null;
+
+    if (state && city) {
+      const vendors = await prisma.vendor.findMany({
+        where: { active: true, suspended: false, deletedAt: null, stateId: state.id, cityId: city.id },
+        select: { id: true },
+      });
+      if (vendors.length) {
+        return { vendorIds: vendors.map((vendor) => vendor.id), userCity: cityName, userState: stateName };
+      }
+    }
+
+    // Some migrated vendors only have the legacy address JSON populated.
+    // Resolve that compatibility shape from PostgreSQL itself.
+    const vendors = await prisma.vendor.findMany({
+      where: { active: true, suspended: false, deletedAt: null },
+      select: { id: true, address: true },
+    });
+    const normalize = (value) => String(value || "").trim().toLowerCase();
+    const matches = vendors.filter((vendor) => {
+      const addressCity = vendor.address?.city || vendor.address?.cityName;
+      const addressState = vendor.address?.state || vendor.address?.stateName;
+      return (!cityName || normalize(addressCity) === normalize(cityName)) &&
+        (!stateName || normalize(addressState) === normalize(stateName));
+    });
+    return { vendorIds: matches.map((vendor) => vendor.id), userCity: cityName, userState: stateName };
+  },
+
+  async recordTrend(keyword, { city = null, state = null } = {}) {
+    const normalizedKeyword = String(keyword || "").trim().toLowerCase();
+    if (!normalizedKeyword) return;
+    const cityRow = city && state
+      ? await prisma.city.findFirst({
+          where: { name: { equals: String(city).trim(), mode: "insensitive" }, state: { name: { equals: String(state).trim(), mode: "insensitive" } } },
+          select: { id: true },
+        })
+      : null;
+    const existing = await prisma.searchTrend.findFirst({
+      where: { keyword: { equals: normalizedKeyword, mode: "insensitive" } },
+      select: { id: true },
+    });
+    if (existing) {
+      await prisma.searchTrend.update({
+        where: { id: existing.id },
+        data: { count: { increment: 1 }, ...(cityRow ? { cityId: cityRow.id } : {}) },
+      });
+    } else {
+      await prisma.searchTrend.create({ data: { keyword: normalizedKeyword, count: 1, ...(cityRow ? { cityId: cityRow.id } : {}) } });
+    }
+  },
+
+  async trending({ limit = 10, state = null } = {}) {
+    const rows = await prisma.searchTrend.findMany({
+      where: {
+        keyword: { not: "" },
+        ...(state ? { city: { state: { name: { equals: String(state).trim(), mode: "insensitive" } } } } : {}),
+      },
+      orderBy: [{ count: "desc" }, { updatedAt: "desc" }],
+      take: Number(limit),
+      select: { id: true, legacyMongoId: true, keyword: true, count: true, updatedAt: true },
+    });
+    return rows.map((row) => ({ _id: legacyId(row), keyword: row.keyword, count: row.count, lastSearchedAt: row.updatedAt }));
+  },
+
+  async analytics(period = "month") {
+    const now = new Date();
+    const days = period === "day" ? 1 : period === "week" ? 7 : 30;
+    const since = new Date(now.getTime() - days * 24 * 60 * 60 * 1000);
+    const [totalKeywords, recentTrends, allTrends] = await Promise.all([
+      prisma.searchTrend.count(),
+      prisma.searchTrend.findMany({
+        where: { updatedAt: { gte: since } },
+        orderBy: { count: "desc" },
+        take: 10,
+        include: { city: { include: { state: true } } },
+      }),
+      prisma.searchTrend.findMany({
+        where: { updatedAt: { gte: since } },
+        include: { city: { include: { state: true } } },
+      }),
+    ]);
+    const stateTotals = new Map();
+    const dailyTotals = new Map();
+    for (const trend of allTrends) {
+      const stateName = trend.city?.state?.name;
+      if (stateName) {
+        const aggregate = stateTotals.get(stateName) || { _id: stateName, totalSearches: 0, uniqueKeywords: 0 };
+        aggregate.totalSearches += trend.count;
+        aggregate.uniqueKeywords += 1;
+        stateTotals.set(stateName, aggregate);
+      }
+      const day = trend.updatedAt.toISOString().slice(0, 10);
+      dailyTotals.set(day, (dailyTotals.get(day) || 0) + trend.count);
+    }
+    const topKeywords = recentTrends.map((trend) => ({
+      _id: legacyId(trend),
+      keyword: trend.keyword,
+      count: trend.count,
+      state: trend.city?.state?.name?.toLowerCase() || null,
+      lastSearchedAt: trend.updatedAt,
+    }));
+    const stateStats = [...stateTotals.values()]
+      .sort((a, b) => b.totalSearches - a.totalSearches)
+      .slice(0, 10);
+    const dailyTrend = [...dailyTotals.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([_id, totalSearches]) => ({ _id, totalSearches }));
+    return {
+      success: true,
+      message: `Search analytics for the last ${period}`,
+      summary: { totalKeywords, totalstates: stateStats.length },
+      topKeywords,
+      stateStats,
+      dailyTrend,
+    };
+  },
+
   async resolveVendorIds(vendorIds) {
     if (vendorIds === null) return null;
     return resolveLegacyIds(prisma.vendor, vendorIds);

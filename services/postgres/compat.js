@@ -21,7 +21,13 @@ export const usePostgresBannerReads = () => usesPostgres("DB_BANNER_READ_PROVIDE
 export const usePostgresMenuReads = () => usesPostgres("DB_MENU_READ_PROVIDER");
 export const usePostgresMenuWrites = () => usesPostgres("DB_MENU_WRITE_PROVIDER");
 
-export const usePostgresSearchReads = () => usesPostgres("DB_SEARCH_READ_PROVIDER");
+// Prefer PostgreSQL for search once the migration is enabled, unless the
+// deployment explicitly keeps search reads on Mongo during a staged rollout.
+export const usePostgresSearchReads = () =>
+  postgresMigrationEnabled() &&
+  (providerIsPostgres("DB_PRIMARY_PROVIDER") ||
+    !process.env.DB_SEARCH_READ_PROVIDER ||
+    providerIsPostgres("DB_SEARCH_READ_PROVIDER"));
 
 export const usePostgresFoodsByLocationReads = () => usesPostgres("DB_FOODS_BY_LOCATION_READ_PROVIDER");
 
