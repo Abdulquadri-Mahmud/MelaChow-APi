@@ -1,4 +1,4 @@
-import { applicationDefault, getApps, initializeApp } from "firebase-admin/app";
+import { applicationDefault, cert, getApps, initializeApp } from "firebase-admin/app";
 import { getMessaging } from "firebase-admin/messaging";
 
 const APP_NAME = "melachow-staging-fcm";
@@ -6,9 +6,10 @@ let messagingClient;
 let warnedMissingCredentials = false;
 
 function getMessagingClient() {
-  if (!process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+  const serviceAccountJson = process.env.FIREBASE_SERVICE_ACCOUNT_JSON;
+  if (!serviceAccountJson && !process.env.GOOGLE_APPLICATION_CREDENTIALS) {
     if (!warnedMissingCredentials) {
-      console.warn("[FCM] GOOGLE_APPLICATION_CREDENTIALS is not set; native push is disabled.");
+      console.warn("[FCM] Firebase service-account credentials are not configured; native push is disabled.");
       warnedMissingCredentials = true;
     }
     return null;
@@ -16,7 +17,8 @@ function getMessagingClient() {
 
   if (messagingClient) return messagingClient;
   const existing = getApps().find((app) => app.name === APP_NAME);
-  const app = existing || initializeApp({ credential: applicationDefault() }, APP_NAME);
+  const credential = serviceAccountJson ? cert(JSON.parse(serviceAccountJson)) : applicationDefault();
+  const app = existing || initializeApp({ credential }, APP_NAME);
   messagingClient = getMessaging(app);
   return messagingClient;
 }

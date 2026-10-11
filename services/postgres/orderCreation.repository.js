@@ -292,6 +292,10 @@ const normalizeOrderItems = async (tx, items) => {
       };
     }
 
+    // Keep the customer's packing plate on both the parent and vendor receipt.
+    // Each restaurant still receives one vendor order and one delivery job.
+    normalizedItem.mealGroupLabel = String(cartItem.meal_group_label || cartItem.mealGroupLabel || "").trim().slice(0, 40);
+    normalizedItem.metadata = { ...normalizedItem.metadata, meal_group_label: normalizedItem.mealGroupLabel };
     normalizedItems.push(normalizedItem);
     if (!vendorItemsMap.has(vendorId)) vendorItemsMap.set(vendorId, []);
     vendorItemsMap.get(vendorId).push(normalizedItem);
@@ -322,6 +326,7 @@ const orderShape = (order) => ({
     portion_quantity: item.portionQuantity,
     price: item.price,
     note: item.note,
+    meal_group_label: item.mealGroupLabel,
     dietary_type: item.dietaryType,
     item_type: item.itemType,
     selected_options: item.selectedOptions || [],
@@ -540,6 +545,7 @@ export const postgresOrderCreationRepository = {
               portionQuantity: item.portionQuantity,
               price: item.price,
               note: item.note,
+              mealGroupLabel: item.mealGroupLabel,
               dietaryType: item.dietaryType,
               itemType: item.itemType,
               selectedOptions: item.selectedOptions,
@@ -605,6 +611,7 @@ export const postgresOrderCreationRepository = {
               item_type: item.itemType,
               selected_options: item.selectedOptions,
               note: item.note,
+              meal_group_label: item.mealGroupLabel,
               metadata: item.metadata,
             })),
             commission,

@@ -113,6 +113,15 @@ const userOrderShape = (order) => {
   };
 };
 
+const customerOrderShape = (order) => {
+  const result = userOrderShape(order);
+  if (["delivered", "completed"].includes(String(order?.orderStatus || "").toLowerCase())) {
+    result.riderId = null;
+    result.riderAssignment = null;
+  }
+  return result;
+};
+
 const vendorOrderShape = (vendorOrder) => ({
   _id: legacyId(vendorOrder),
   restaurantId: vendorOrder.restaurant?.legacyMongoId || vendorOrder.restaurantId,
@@ -223,7 +232,7 @@ export const vendorOrdersRepository = {
       where: { userId },
       include: customerOrderInclude,
       orderBy: { createdAt: "desc" },
-    })).map(userOrderShape);
+    })).map(customerOrderShape);
   },
 
   async getCustomerOrder(orderToken, userToken) {
@@ -244,9 +253,14 @@ export const vendorOrdersRepository = {
     const vendorOrders = await prisma.vendorOrder.findMany({ where: { userOrderId: order.id }, include: vendorOrderInclude });
     const statuses = vendorOrders.map((entry) => entry.orderStatus);
     const priority = ["refunded", "failed", "cancelled", "completed", "delivered", "out_for_delivery", "rider_assigned", "ready_for_pickup", "preparing", "accepted", "pending"];
+    const customerOrder = customerOrderShape(order);
+    const customerVendorOrders = vendorOrders.map(vendorOrderShape);
+    if (["delivered", "completed"].includes(String(order.orderStatus || "").toLowerCase())) {
+      customerVendorOrders.forEach((vendorOrder) => { vendorOrder.riderId = null; });
+    }
     return {
-      order: userOrderShape(order),
-      vendorOrders: vendorOrders.map(vendorOrderShape),
+      order: customerOrder,
+      vendorOrders: customerVendorOrders,
       deliveryOtp: null,
       trackingStatus: priority.find((status) => statuses.includes(status)) || order.orderStatus,
     };

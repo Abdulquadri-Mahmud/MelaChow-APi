@@ -1463,6 +1463,11 @@ export const getSingleOrder = async (req, res) => {
         : await getActiveDeliveryOTP(order._id);
 
     // 5️⃣ Return order with embedded variant info
+    if (["delivered", "completed"].includes(String(order.orderStatus || "").toLowerCase())) {
+      order.riderId = null;
+      order.riderAssignment = null;
+      vendorOrders.forEach((vendorOrder) => { vendorOrder.riderId = null; });
+    }
     return res.json({
       order,
       vendorOrders,
@@ -1501,7 +1506,14 @@ export const getUserOrders = async (req, res) => {
     const orders = await Order.find({ userId }).sort({ createdAt: -1 });
     console.log(`✅ Found ${orders.length} orders for user ${userId}`);
 
-    return res.json({ orders });
+    return res.json({ orders: orders.map((order) => {
+      const visible = order.toObject();
+      if (["delivered", "completed"].includes(String(visible.orderStatus || "").toLowerCase())) {
+        visible.riderId = null;
+        visible.riderAssignment = null;
+      }
+      return visible;
+    }) });
   } catch (err) {
     console.error("🔥 GetUserOrders Error:", err.message, err.stack);
     return res.status(500).json({

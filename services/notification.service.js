@@ -286,10 +286,11 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
             adminId: role === 'admin' ? recipientId : null,
             role: role, // Store the role explicitly in the DB for easier filtering
             type,
-            title: config.title,
+            title: data.title || config.title,
             body: data.message || config.getBody({ payout: data.payout,
                 orderId: data.orderId,
                 restaurantName: data.restaurantName,
+                riderName: data.riderName,
                 customerName: data.customerName,
                 location: data.location,
                 cancellationReason: data.cancellationReason,
@@ -562,6 +563,7 @@ export async function sendOrderNotification(userId, orderId, status, orderDetail
         orderId: effectiveOrderId,
         orderDatabaseId: orderDetails.orderDatabaseId,
         restaurantName: orderDetails.restaurantName,
+        message: orderDetails.message,
         additionalData: orderDetails
     });
 }

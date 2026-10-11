@@ -1,5 +1,6 @@
 import prisma from "../../config/prisma.js";
 import { deliveryContentsFrom } from "./deliveryContents.js";
+import { sendOrderNotification, sendVendorNotification } from "../notification.service.js";
 
 const SOURCE_MELACHOW = "MelaChow";
 const TERMINAL_STATUSES = new Set([8, 9, 10]);
@@ -165,8 +166,8 @@ const parentStatus = (statuses) => {
 };
 
 async function applyExternalStatus(delivery, externalStatus, responsePayload) {
-  const mapped = externalStatus >= 6 ? "out_for_delivery" : externalStatus >= 3 ? "rider_assigned" : "ready_for_pickup";
-  await prisma.$transaction(async (tx) => {
+  const mapped = externalStatus >= 6 ? "out_for_delivery" : externalStatus >= 4 ? "rider_assigned" : "ready_for_pickup";
+  const transition = await prisma.$transaction(async (tx) => {
     const current = await tx.vendorOrder.findUnique({ where: { id: delivery.vendorOrderId }, include: { userOrder: { include: { vendorOrders: true } }, restaurant: true } });
     if (!current) throw new Error("Vendor order no longer exists");
     let nextVendorStatus = mapped;
@@ -190,12 +191,84 @@ async function applyExternalStatus(delivery, externalStatus, responsePayload) {
     }
 
     const siblingStatuses = current.userOrder.vendorOrders.map((row) => row.id === current.id ? nextVendorStatus : row.orderStatus);
+    const changed = current.orderStatus !== nextVendorStatus;
     const statusLog = Array.isArray(current.userOrder.statusLog) ? current.userOrder.statusLog : [];
     await tx.vendorOrder.update({ where: { id: current.id }, data: { orderStatus: nextVendorStatus, ...(externalStatus === 8 ? { escrowReleased: true } : {}) } });
-    const assignedRider = responsePayload?.rider || responsePayload?.data?.rider || delivery.assignedRider || null;
-    await tx.order.update({ where: { id: current.userOrderId }, data: { orderStatus: parentStatus(siblingStatuses), riderAssignment: { provider: "samka", externalDeliveryId: delivery.externalDeliveryId, status: nextVendorStatus, rider: assignedRider }, statusLog: [...statusLog, { status: nextVendorStatus, changedBy: "samka_logistics", timestamp: new Date().toISOString() }] } });
+    const assignedRider = responsePayload?.rider || responsePayload?.data?.rider || delivery.assignedRider || current.userOrder.riderAssignment?.rider || null;
+    await tx.order.update({ where: { id: current.userOrderId }, data: { orderStatus: parentStatus(siblingStatuses), riderAssignment: { provider: "samka", externalDeliveryId: delivery.externalDeliveryId, status: nextVendorStatus, rider: assignedRider }, statusLog: changed ? [...statusLog, { status: nextVendorStatus, changedBy: "samka_logistics", timestamp: new Date().toISOString() }] : statusLog } });
     await tx.logisticsDelivery.update({ where: { id: delivery.id }, data: { externalStatus, dispatchStatus: TERMINAL_STATUSES.has(externalStatus) ? "terminal" : "dispatched", lastSyncedAt: new Date(), lastError: null, responsePayload, assignedRider } });
+    return {
+      changed,
+      externalChanged: delivery.externalStatus !== externalStatus,
+      externalStatus,
+      status: nextVendorStatus,
+      orderId: current.userOrder.orderCode,
+      orderDatabaseId: current.userOrder.legacyMongoId || current.userOrder.id,
+      userId: current.userOrder.user?.legacyMongoId || current.userOrder.userId,
+      vendorId: current.restaurant?.legacyMongoId || current.restaurantId,
+      vendorOrderId: current.legacyMongoId || current.id,
+      restaurantName: current.restaurant?.storeName,
+      riderName: assignedRider?.name || null,
+      rider: assignedRider,
+    };
   });
+  if (transition.changed || (transition.externalChanged && [5, 7].includes(externalStatus))) await notifySamkaOrderTransition(transition);
+  return transition;
+}
+
+async function notifySamkaOrderTransition(transition) {
+  const { status, externalStatus, orderId, orderDatabaseId, userId, vendorId, vendorOrderId, restaurantName, riderName } = transition;
+  const customerMessage = externalStatus === 5 ? `Your rider has arrived at ${restaurantName || "the restaurant"} for Order #${orderId}.`
+    : externalStatus === 7 ? `Your rider is on the way with Order #${orderId}.`
+      : status === "rider_assigned" ? `A rider${riderName ? ` (${riderName})` : ""} accepted Order #${orderId} and is heading to the restaurant.` : null;
+  const notifications = [sendOrderNotification(userId, orderId, status, {
+    orderId, orderDatabaseId, restaurantName,
+    ...(customerMessage ? { message: customerMessage } : {}),
+  })];
+  const vendorType = externalStatus === 5 || externalStatus === 7 ? "general"
+    : status === "rider_assigned" ? "vendor_rider_assigned"
+    : status === "delivered" ? "vendor_order_delivered" : "general";
+  const vendorDetails = {
+    orderId,
+    orderDatabaseId: vendorOrderId,
+    restaurantName,
+    riderName,
+    ...(status === "out_for_delivery" ? { title: "Order picked up", message: `Order #${orderId} was picked up and is on its way to the customer.` } : {}),
+    ...(externalStatus === 5 ? { title: "Rider at restaurant", message: `The rider has arrived to collect Order #${orderId}.` } : {}),
+    ...(externalStatus === 7 ? { title: "Rider on the way", message: `The rider is on the way to the customer with Order #${orderId}.` } : {}),
+    ...(["cancelled", "failed"].includes(status) ? { title: "Delivery update", message: `Delivery for Order #${orderId} was ${status}. Check the order for details.` } : {}),
+  };
+  notifications.push(sendVendorNotification(vendorId, orderId, vendorType, vendorDetails));
+  const results = await Promise.allSettled(notifications);
+  results.forEach((result, index) => {
+    if (result.status === "rejected") console.error(`Samka ${index === 0 ? "customer" : "vendor"} notification failed for ${orderId}:`, result.reason);
+  });
+}
+
+async function applyTerminalStatus(delivery, status, responsePayload, reason) {
+  const nextStatus = status === 9 ? "cancelled" : "failed";
+  const transition = await prisma.$transaction(async (tx) => {
+    const current = await tx.vendorOrder.findUnique({ where: { id: delivery.vendorOrderId }, include: { userOrder: { include: { vendorOrders: true } }, restaurant: true } });
+    if (!current) throw new Error("Vendor order was not found");
+    const changed = current.orderStatus !== nextStatus;
+    const siblingStatuses = current.userOrder.vendorOrders.map((row) => row.id === current.id ? nextStatus : row.orderStatus);
+    const statusLog = Array.isArray(current.userOrder.statusLog) ? current.userOrder.statusLog : [];
+    await tx.vendorOrder.update({ where: { id: current.id }, data: { orderStatus: nextStatus } });
+    await tx.order.update({ where: { id: current.userOrderId }, data: { orderStatus: parentStatus(siblingStatuses), riderAssignment: { provider: "samka", externalDeliveryId: delivery.externalDeliveryId, status: nextStatus }, statusLog: changed ? [...statusLog, { status: nextStatus, changedBy: "samka_logistics", timestamp: new Date().toISOString() }] : statusLog } });
+    await tx.logisticsDelivery.update({ where: { id: delivery.id }, data: { externalStatus: status, dispatchStatus: "terminal", lastSyncedAt: new Date(), lastError: reason, responsePayload } });
+    return {
+      changed,
+      status: nextStatus,
+      orderId: current.userOrder.orderCode,
+      orderDatabaseId: current.userOrder.legacyMongoId || current.userOrder.id,
+      userId: current.userOrder.userId,
+      vendorId: current.restaurant?.legacyMongoId || current.restaurantId,
+      vendorOrderId: current.legacyMongoId || current.id,
+      restaurantName: current.restaurant?.storeName,
+    };
+  });
+  if (transition.changed) await notifySamkaOrderTransition(transition);
+  return transition;
 }
 
 export async function ensureSamkaDeliveryContents(delivery, remote) {
@@ -220,15 +293,11 @@ export async function reconcileSamkaDelivery(delivery) {
     : Number(result?.status);
   if (!Number.isInteger(status)) throw new Error("Samka Logistics status response is invalid");
   if (status === 9 || status === 10) {
-    await prisma.logisticsDelivery.update({ where: { id: delivery.id }, data: { externalStatus: status, dispatchStatus: "terminal", lastSyncedAt: new Date(), responsePayload: result, lastError: result?.cancellationReason || result?.failureReason || `Samka terminal status ${status}` } });
+    await applyTerminalStatus(delivery, status, result, result?.cancellationReason || result?.failureReason || `Samka terminal status ${status}`);
     return;
   }
   await applyExternalStatus(delivery, status, result);
   if (!TERMINAL_STATUSES.has(status)) await ensureSamkaDeliveryContents(delivery, result);
-}
-
-export async function getSamkaDeliveryDetails(externalDeliveryId) {
-  return request(`/api/source-deliveries/${externalDeliveryId}/details?source=${SOURCE_MELACHOW}`);
 }
 
 export async function cancelSamkaDelivery(externalDeliveryId, reason = "Cancelled by MelaChow") {
@@ -265,7 +334,7 @@ export async function processSamkaCallback({ eventType, externalDeliveryId, sour
   }
 
   const statusByEvent = {
-    "delivery.rider.assigned": 3,
+    "delivery.rider.assigned": 4,
     "delivery.completed": 8,
     "delivery.cancelled": 9,
     "delivery.failed": 10,
@@ -273,21 +342,12 @@ export async function processSamkaCallback({ eventType, externalDeliveryId, sour
   const status = statusByEvent[eventType];
   if (!status) return { delivery, ignored: true, statusChanged: false };
   if (status === 9 || status === 10) {
-    const nextStatus = status === 9 ? "cancelled" : "failed";
-    await prisma.$transaction(async (tx) => {
-      const current = await tx.vendorOrder.findUnique({ where: { id: delivery.vendorOrderId }, include: { userOrder: { include: { vendorOrders: true } } } });
-      if (!current) throw new Error("Vendor order was not found");
-      const siblingStatuses = current.userOrder.vendorOrders.map((row) => row.id === current.id ? nextStatus : row.orderStatus);
-      const statusLog = Array.isArray(current.userOrder.statusLog) ? current.userOrder.statusLog : [];
-      await tx.vendorOrder.update({ where: { id: current.id }, data: { orderStatus: nextStatus } });
-      await tx.order.update({ where: { id: current.userOrderId }, data: { orderStatus: parentStatus(siblingStatuses), riderAssignment: { provider: "samka", externalDeliveryId: delivery.externalDeliveryId, status: nextStatus }, statusLog: [...statusLog, { status: nextStatus, changedBy: "samka_logistics_callback", timestamp: new Date().toISOString() }] } });
-      await tx.logisticsDelivery.update({ where: { id: delivery.id }, data: { externalStatus: status, dispatchStatus: "terminal", lastSyncedAt: new Date(), lastError: data.reason || `${eventType}`, responsePayload: payload } });
-    });
-    return { delivery, status: nextStatus, statusChanged: true };
+    const transition = await applyTerminalStatus(delivery, status, payload, data.reason || eventType);
+    return { delivery, status: transition.status, statusChanged: transition.changed };
   }
 
-  await applyExternalStatus(delivery, status, { ...payload, rider: data.rider || data });
-  return { delivery, status: status === 8 ? "delivered" : "rider_assigned", statusChanged: true };
+  const transition = await applyExternalStatus(delivery, status, { ...payload, rider: data.rider || delivery.assignedRider || null });
+  return { delivery, status: transition.status, statusChanged: transition.changed, rider: transition.rider };
 }
 
 export async function assertSamkaSchemaReady() {
@@ -326,8 +386,6 @@ export async function processSamkaLogistics() {
   for (const delivery of active) {
     try {
       await reconcileSamkaDelivery(delivery);
-      const details = await getSamkaDeliveryDetails(delivery.externalDeliveryId).catch(() => null);
-      if (details?.rider) await prisma.logisticsDelivery.update({ where: { id: delivery.id }, data: { assignedRider: details.rider } });
       result.reconciled += 1;
     } catch (error) { result.failed += 1; await prisma.logisticsDelivery.update({ where: { id: delivery.id }, data: { lastError: error.message.slice(0, 1000), lastSyncedAt: new Date() } }); }
   }

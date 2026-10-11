@@ -116,6 +116,9 @@ const recommendationItemShape = (item, deliveryConfig) => {
       logo: vendor.logo,
       city: vendor.address?.city,
       state: vendor.address?.state,
+      coordinates: vendor.address?.coordinates,
+      latitude: vendor.address?.latitude ?? vendor.address?.coordinates?.lat,
+      longitude: vendor.address?.longitude ?? vendor.address?.coordinates?.lng,
       openingHours: vendor.openingHours,
     },
   };

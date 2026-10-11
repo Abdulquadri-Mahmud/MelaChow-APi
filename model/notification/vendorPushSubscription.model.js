@@ -8,10 +8,14 @@ const vendorPushSubscriptionSchema = new mongoose.Schema({
     },
     subscription: {
         endpoint: { type: String, required: true },
+        provider: { type: String, default: 'web' },
+        fcmToken: { type: String },
+        platform: { type: String },
+        deviceId: { type: String },
         expirationTime: { type: Number, default: null },
         keys: {
-            p256dh: { type: String, required: true },
-            auth: { type: String, required: true }
+            p256dh: { type: String, required: function () { return this.subscription?.provider !== 'firebase'; } },
+            auth: { type: String, required: function () { return this.subscription?.provider !== 'firebase'; } }
         }
     },
     deviceType: {
