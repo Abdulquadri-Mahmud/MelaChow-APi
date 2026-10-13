@@ -34,23 +34,42 @@ export async function issueVendorPickupCode(vendorOrderId, vendorId) {
   });
 }
 
-export async function verifySourcePickupCode(sourceOrderId, pickupCode, externalDeliveryId = null) {
+export async function verifySourcePickupCode(sourceOrderId, pickupCode, externalDeliveryId = null, sourceOrderReference = null) {
   const normalizedSourceOrderId = String(sourceOrderId || "");
   const normalizedExternalDeliveryId = String(externalDeliveryId || "");
-  if ((!uuid.test(normalizedSourceOrderId) && !uuid.test(normalizedExternalDeliveryId)) || !/^\d{6}$/.test(String(pickupCode))) throw failure("A delivery identifier and a 6-digit pickupCode are required.", 400);
+  const normalizedSourceOrderReference = String(sourceOrderReference || "");
+  if ((!normalizedSourceOrderId && !uuid.test(normalizedExternalDeliveryId))
+    || normalizedSourceOrderId.length > 128
+    || (normalizedExternalDeliveryId && !uuid.test(normalizedExternalDeliveryId))
+    || normalizedSourceOrderReference.length > 256
+    || !/^\d{6}$/.test(String(pickupCode))) throw failure("A delivery identifier and a 6-digit pickupCode are required.", 400);
   const outcome = await prisma.$transaction(async (tx) => {
     const include = { vendorOrder: { include: { restaurant: true, userOrder: true } } };
     const deliveryByExternalId = uuid.test(normalizedExternalDeliveryId)
       ? await tx.logisticsDelivery.findUnique({ where: { externalDeliveryId: normalizedExternalDeliveryId }, include })
       : null;
-    const delivery = deliveryByExternalId || await tx.logisticsDelivery.findFirst({
-      where: { OR: [{ sourceOrderId: normalizedSourceOrderId }, { vendorOrderId: normalizedSourceOrderId }] },
-      include,
-    });
+    const deliveryBySourceReference = !deliveryByExternalId && normalizedSourceOrderReference
+      ? await tx.logisticsDelivery.findFirst({ where: { sourceOrderReference: normalizedSourceOrderReference }, include })
+      : null;
+    const deliveryBySourceOrder = !deliveryByExternalId && !deliveryBySourceReference && normalizedSourceOrderId
+      ? await tx.logisticsDelivery.findFirst({
+        where: { OR: [
+          { sourceOrderId: normalizedSourceOrderId },
+          ...(uuid.test(normalizedSourceOrderId) ? [{ vendorOrderId: normalizedSourceOrderId }] : []),
+          { vendorOrder: { is: { legacyMongoId: normalizedSourceOrderId } } },
+        ] },
+        include,
+      })
+      : null;
+    const delivery = deliveryByExternalId || deliveryBySourceReference || deliveryBySourceOrder;
     if (!delivery || delivery.dispatchStatus === "terminal") return { message: "Source delivery was not found.", statusCode: 404 };
+    if (deliveryBySourceReference && normalizedExternalDeliveryId && delivery.externalDeliveryId
+      && delivery.externalDeliveryId.toLowerCase() !== normalizedExternalDeliveryId.toLowerCase()) {
+      return { message: "Source delivery was not found.", statusCode: 404 };
+    }
     // Samka's delivery UUID is the canonical cross-service link. Keep accepting
     // the source-order key for older jobs that predate this identifier.
-    if (!deliveryByExternalId
+    if (!deliveryByExternalId && !deliveryBySourceReference
       && normalizedSourceOrderId !== delivery.sourceOrderId
       && normalizedSourceOrderId !== delivery.vendorOrderId
       && normalizedSourceOrderId !== delivery.vendorOrder?.legacyMongoId) {
