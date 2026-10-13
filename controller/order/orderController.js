@@ -53,6 +53,17 @@ function normalizePaystackMetadata(rawMetadata) {
   return rawMetadata;
 }
 
+const pendingPaystackStatuses = new Set(["ongoing", "pending", "processing", "queued"]);
+const failedPaystackStatuses = new Set(["failed", "abandoned", "reversed"]);
+
+const getPaystackVerificationState = (payData) => {
+  const status = payData?.status;
+  if (status === "success") return "success";
+  if (pendingPaystackStatuses.has(status)) return "pending";
+  if (failedPaystackStatuses.has(status)) return "failed";
+  return "unknown";
+};
+
 const handlePostgresPaymentVerification = async ({ reference, label = "" }) => {
   const order = await postgresPaymentRepository.findOrderByPaymentReference(reference);
   if (!order) return null;
@@ -79,13 +90,30 @@ const handlePostgresPaymentVerification = async ({ reference, label = "" }) => {
 
   const payData = verifyResp.data?.data;
 
-  if (!payData || payData.status !== "success") {
+  const providerState = getPaystackVerificationState(payData);
+  if (providerState === "pending" || providerState === "unknown") {
+    return {
+      statusCode: providerState === "pending" ? 202 : 503,
+      body: {
+        success: false,
+        paymentPending: providerState === "pending",
+        message: providerState === "pending"
+          ? "Paystack is still processing this payment."
+          : "Paystack could not confirm the payment status. Please retry.",
+        paystack: { status: payData?.status || null },
+        order: postgresPaymentRepository.shapeOrder(order),
+      },
+    };
+  }
+
+  if (providerState === "failed") {
     const failedOrder = await postgresPaymentRepository.markOrderPaymentFailed(order, payData);
     return {
       statusCode: 400,
       body: {
         success: false,
         message: "Payment not successful",
+        paystack: { status: payData.status },
         order: failedOrder,
       },
     };
@@ -1051,9 +1079,21 @@ export const verifyPayment = async (req, res) => {
     }
 
     if (!payData || payData.status !== "success") {
-      // Payment failed
       if (lockAcquired) {
         await PaymentLock.deleteOne({ reference }).catch(e => console.error("Lock release failed:", e.message));
+      }
+
+      const providerState = getPaystackVerificationState(payData);
+      if (providerState !== "failed") {
+        return res.status(providerState === "pending" ? 202 : 503).json({
+          success: false,
+          paymentPending: providerState === "pending",
+          message: providerState === "pending"
+            ? "Paystack is still processing this payment."
+            : "Paystack could not confirm the payment status. Please retry.",
+          paystack: { status: payData?.status || null },
+          order,
+        });
       }
 
       await recordPaymentAttemptEvent({
@@ -1074,6 +1114,7 @@ export const verifyPayment = async (req, res) => {
       console.error(`❌ Payment failed for Order ${order.orderId}`);
       return res.status(400).json({
         message: "Payment not successful",
+        paystack: { status: payData.status },
         order
       });
     }
@@ -1241,9 +1282,21 @@ export const verifyPaymentV2 = async (req, res) => {
     }
 
     if (!payData || payData.status !== "success") {
-      // Payment failed
       if (lockAcquired) {
         await PaymentLock.deleteOne({ reference }).catch(e => console.error("Lock release failed:", e.message));
+      }
+
+      const providerState = getPaystackVerificationState(payData);
+      if (providerState !== "failed") {
+        return res.status(providerState === "pending" ? 202 : 503).json({
+          success: false,
+          paymentPending: providerState === "pending",
+          message: providerState === "pending"
+            ? "Paystack is still processing this payment."
+            : "Paystack could not confirm the payment status. Please retry.",
+          paystack: { status: payData?.status || null },
+          order,
+        });
       }
 
       await recordPaymentAttemptEvent({
@@ -1265,6 +1318,7 @@ export const verifyPaymentV2 = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "Payment not successful",
+        paystack: { status: payData.status },
         order
       });
     }
@@ -1409,6 +1463,11 @@ export const getSingleOrder = async (req, res) => {
         : await getActiveDeliveryOTP(order._id);
 
     // 5️⃣ Return order with embedded variant info
+    if (["delivered", "completed"].includes(String(order.orderStatus || "").toLowerCase())) {
+      order.riderId = null;
+      order.riderAssignment = null;
+      vendorOrders.forEach((vendorOrder) => { vendorOrder.riderId = null; });
+    }
     return res.json({
       order,
       vendorOrders,
@@ -1447,7 +1506,14 @@ export const getUserOrders = async (req, res) => {
     const orders = await Order.find({ userId }).sort({ createdAt: -1 });
     console.log(`✅ Found ${orders.length} orders for user ${userId}`);
 
-    return res.json({ orders });
+    return res.json({ orders: orders.map((order) => {
+      const visible = order.toObject();
+      if (["delivered", "completed"].includes(String(visible.orderStatus || "").toLowerCase())) {
+        visible.riderId = null;
+        visible.riderAssignment = null;
+      }
+      return visible;
+    }) });
   } catch (err) {
     console.error("🔥 GetUserOrders Error:", err.message, err.stack);
     return res.status(500).json({

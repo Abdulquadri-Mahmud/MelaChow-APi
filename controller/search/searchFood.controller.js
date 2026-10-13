@@ -321,7 +321,10 @@ export const autocompleteFoods = async (req, res) => {
     }
 
     // ── Location resolution ──────────────────────────
-    const { vendorIds, userCity, userState } = await resolveLocationVendors(req, null, null);
+    const searchRepository = usePostgresSearchReads() ? await getPostgresSearchRepository() : null;
+    const { vendorIds, userCity, userState } = searchRepository
+      ? await searchRepository.resolveLocationVendors({ req })
+      : await resolveLocationVendors(req, null, null);
 
     // Location known but zero vendors → empty result
     if (vendorIds !== null && vendorIds.length === 0) {
@@ -335,8 +338,7 @@ export const autocompleteFoods = async (req, res) => {
     }
 
     // ── Build Search query ──────────────────────────
-    if (usePostgresSearchReads()) {
-      const searchRepository = await getPostgresSearchRepository();
+    if (searchRepository) {
       const response = await searchRepository.autocomplete({
         q,
         limit,
@@ -476,7 +478,10 @@ export const searchFoods = async (req, res) => {
     // ── Location resolution ──────────────────────────
     // Explicit city/state query params take priority
     // over the user's saved address
-    const { vendorIds, userCity, userState } = await resolveLocationVendors(req, city, state);
+    const searchRepository = usePostgresSearchReads() ? await getPostgresSearchRepository() : null;
+    const { vendorIds, userCity, userState } = searchRepository
+      ? await searchRepository.resolveLocationVendors({ req, city, state })
+      : await resolveLocationVendors(req, city, state);
 
     // Location known but zero vendors → short-circuit
     if (vendorIds !== null && vendorIds.length === 0) {
@@ -490,6 +495,26 @@ export const searchFoods = async (req, res) => {
         city: userCity || "Unknown",
         state: userState || "Unknown",
       });
+    }
+
+    // Use PostgreSQL for the complete primary search path before any of the
+    // legacy Mongo-specific trend, category, or vendor queries are evaluated.
+    if (searchRepository) {
+      if (normalizedQuery) {
+        await searchRepository.recordTrend(normalizedQuery, { city: userCity, state: userState });
+      }
+      const response = await searchRepository.search({
+        q: normalizedQuery,
+        category,
+        available,
+        sort,
+        page: currentPage,
+        limit: pageSize,
+        vendorIds: vendorIds === null ? null : vendorIds,
+        userCity,
+        userState,
+      });
+      return res.status(200).json(response);
     }
 
     // ── Base MenuItem query ──────────────────────────
@@ -608,23 +633,6 @@ export const searchFoods = async (req, res) => {
     // ── Sort ─────────────────────────────────────────
     // price_asc / price_desc DROPPED (no price on MenuItem)
     // Will re-add post-launch via aggregation pipeline
-    if (usePostgresSearchReads()) {
-      const searchRepository = await getPostgresSearchRepository();
-      const response = await searchRepository.search({
-        q: normalizedQuery,
-        category,
-        available,
-        sort,
-        page,
-        limit,
-        vendorIds: vendorIds === null ? null : vendorIds.map(String),
-        userCity,
-        userState,
-      });
-
-      return res.status(200).json(response);
-    }
-
     let sortOption;
     switch (sort) {
       case "rating_desc":
@@ -730,6 +738,12 @@ export const getTrendingSearches = async (req, res) => {
   try {
     const { limit = 10, state } = req.query;
 
+    if (usePostgresSearchReads()) {
+      const searchRepository = await getPostgresSearchRepository();
+      const trending = await searchRepository.trending({ limit, state });
+      return res.status(200).json({ success: true, count: trending.length, trending });
+    }
+
     const filter = {
       keyword: { $exists: true, $regex: /^.{3,}$/ },
     };
@@ -766,6 +780,11 @@ export const getTrendingSearches = async (req, res) => {
 export const getSearchAnalytics = async (req, res) => {
   try {
     const { period = "month" } = req.query;
+    if (usePostgresSearchReads()) {
+      const searchRepository = await getPostgresSearchRepository();
+      return res.status(200).json(await searchRepository.analytics(period));
+    }
+
     const now = new Date();
     let since;
 

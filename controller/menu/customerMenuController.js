@@ -11,6 +11,7 @@ import VendorDeliveryClaim from "../../model/promo/VendorDeliveryClaim.js";
 import { buildPromoIdentity } from "../../utils/promoIdentity.js";
 import mongoose from 'mongoose';
 import { usePostgresMenuReads } from "../../services/postgres/compat.js";
+import prisma from "../../config/prisma.js";
 
 const getPostgresMenuRepository = async () => {
     const { menuCatalogRepository } = await import("../../services/postgres/menuCatalog.repository.js");
@@ -233,10 +234,27 @@ export const getFullVendorMenu = async (req, res) => {
             }
 
             let vendor = menu.vendor;
-            if (req.query.addressId && req.postgresUserId) {
+            let addressId = req.query.addressId;
+            if (!addressId && req.postgresUserId) {
+                const defaultAddress = await prisma.userAddress.findFirst({
+                    where: { userId: req.postgresUserId },
+                    orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
+                    select: { id: true },
+                });
+                addressId = defaultAddress?.id;
+            }
+
+            if (addressId && req.postgresUserId) {
                 const { getDeliveryQuotes } = await import("../../services/deliveryPricing.service.js");
-                const quote = (await getDeliveryQuotes({ addressId: req.query.addressId, vendorIds: [vendor._id], userId: req.postgresUserId, checkout: false }))[0];
-                if (quote) vendor = { ...vendor, deliveryFee: quote.deliveryFeeKobo / 100, distanceKm: quote.distanceKm, deliverable: quote.deliverable, estimatedDeliveryTime: quote.estimatedDurationMinutes || vendor.estimatedDeliveryTime, deliveryQuote: { ...quote, deliveryFee: quote.deliveryFeeKobo / 100, deliveryFeeKobo: undefined } };
+                const quote = (await getDeliveryQuotes({ addressId, vendorIds: [vendor._id], userId: req.postgresUserId, checkout: false }))[0];
+                if (quote) vendor = {
+                    ...vendor,
+                    deliveryFee: vendor.hasActiveDeliveryPromo ? 0 : quote.deliveryFeeKobo / 100,
+                    distanceKm: quote.distanceKm,
+                    deliverable: quote.deliverable,
+                    estimatedDeliveryTime: quote.estimatedDurationMinutes || vendor.estimatedDeliveryTime,
+                    deliveryQuote: { ...quote, deliveryFee: quote.deliveryFeeKobo / 100, deliveryFeeKobo: undefined },
+                };
             }
             return res.status(200).json({
                 success: true,

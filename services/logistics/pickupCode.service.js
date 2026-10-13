@@ -34,17 +34,34 @@ export async function issueVendorPickupCode(vendorOrderId, vendorId) {
   });
 }
 
-export async function verifySourcePickupCode(sourceOrderId, pickupCode) {
-  if (!uuid.test(String(sourceOrderId)) || !/^\d{6}$/.test(String(pickupCode))) throw failure("sourceOrderId and a 6-digit pickupCode are required.", 400);
+export async function verifySourcePickupCode(sourceOrderId, pickupCode, externalDeliveryId = null) {
+  const normalizedSourceOrderId = String(sourceOrderId || "");
+  const normalizedExternalDeliveryId = String(externalDeliveryId || "");
+  if ((!uuid.test(normalizedSourceOrderId) && !uuid.test(normalizedExternalDeliveryId)) || !/^\d{6}$/.test(String(pickupCode))) throw failure("A delivery identifier and a 6-digit pickupCode are required.", 400);
   const outcome = await prisma.$transaction(async (tx) => {
-    const delivery = await tx.logisticsDelivery.findFirst({ where: { sourceOrderId: String(sourceOrderId) }, include: { vendorOrder: { include: { restaurant: true, userOrder: true } } } });
+    const include = { vendorOrder: { include: { restaurant: true, userOrder: true } } };
+    const deliveryByExternalId = uuid.test(normalizedExternalDeliveryId)
+      ? await tx.logisticsDelivery.findUnique({ where: { externalDeliveryId: normalizedExternalDeliveryId }, include })
+      : null;
+    const delivery = deliveryByExternalId || await tx.logisticsDelivery.findFirst({
+      where: { OR: [{ sourceOrderId: normalizedSourceOrderId }, { vendorOrderId: normalizedSourceOrderId }] },
+      include,
+    });
     if (!delivery || delivery.dispatchStatus === "terminal") return { message: "Source delivery was not found.", statusCode: 404 };
+    // Samka's delivery UUID is the canonical cross-service link. Keep accepting
+    // the source-order key for older jobs that predate this identifier.
+    if (!deliveryByExternalId
+      && normalizedSourceOrderId !== delivery.sourceOrderId
+      && normalizedSourceOrderId !== delivery.vendorOrderId
+      && normalizedSourceOrderId !== delivery.vendorOrder?.legacyMongoId) {
+      return { message: "Source delivery was not found.", statusCode: 404 };
+    }
     assertReady(delivery.vendorOrder);
     const key = `samka_pickup:${delivery.vendorOrderId}`;
     await tx.$queryRaw`SELECT key FROM delivery_otp_sessions WHERE key = ${key} FOR UPDATE`;
     const session = await tx.deliveryOtpSession.findUnique({ where: { key } });
     if (!session || session.expiresAt <= new Date()) return { message: "Pickup code is missing or expired. Ask the store to show a new pickup code.", statusCode: 422 };
-    if (session.payload.kind !== "pickup" || session.payload.sourceOrderId !== String(sourceOrderId)) return { message: "Pickup code belongs to another order.", statusCode: 422 };
+    if (session.payload.kind !== "pickup" || session.payload.sourceOrderId !== String(delivery.vendorOrderId)) return { message: "Pickup code belongs to another order.", statusCode: 422 };
     if (Number(session.payload.attempts || 0) >= MAX_ATTEMPTS) return { message: "Too many incorrect pickup codes. Ask the store to generate a new code.", statusCode: 429 };
     const expected = Buffer.from(String(session.payload.pickupCode));
     const supplied = Buffer.from(String(pickupCode));

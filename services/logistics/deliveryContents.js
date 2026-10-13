@@ -10,7 +10,9 @@ export function deliveryContentsFrom(vendorOrder) {
       const portion = item.portion_label || item.portionLabel;
       const portionQuantity = Number(item.portion_quantity ?? item.portionQuantity ?? 1);
       const variantName = item.variant?.name;
+      const mealGroup = String(item.meal_group_label || item.mealGroupLabel || item.metadata?.meal_group_label || "").trim();
       const description = [
+        mealGroup ? `Pack separately: ${mealGroup}` : null,
         portion ? `Size: ${portion}${portionQuantity > 1 ? ` ×${portionQuantity}` : ""}` : null,
         variantName && variantName !== name ? variantName : null,
       ].filter(Boolean).join(" · ").slice(0, 500) || null;

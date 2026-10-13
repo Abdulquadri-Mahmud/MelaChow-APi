@@ -11,11 +11,14 @@ import {
     deleteNotification,
     clearAllNotifications
 } from '../controller/notification/notification.controller.js';
+import { registerNativePushToken, removeNativePushToken } from '../controller/notification/nativePush.controller.js';
 import auth from '../middleware/auth.middleware.js';
 
 const router = express.Router();
 
 router.get('/vapid-public-key', getVapidPublicKey);
+router.post('/native-token', auth, registerNativePushToken);
+router.delete('/native-token', auth, removeNativePushToken);
 router.post('/subscribe', auth, subscribeToNotifications);
 router.post('/unsubscribe', auth, unsubscribeFromNotifications);
 router.delete('/unsubscribe', auth, unsubscribeFromNotifications);
