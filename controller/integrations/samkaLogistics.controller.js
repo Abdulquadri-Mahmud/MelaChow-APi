@@ -124,6 +124,7 @@ export const validateSamkaPickupCode = async (req, res, next) => {
       String(signed.body.sourceOrderId || "").trim(),
       String(signed.body.pickupCode || "").trim(),
       String(signed.body.externalDeliveryId || "").trim(),
+      String(signed.body.sourceOrderReference || "").trim(),
     );
     return res.status(204).end();
   } catch (error) {
