@@ -120,7 +120,11 @@ export const validateSamkaPickupCode = async (req, res, next) => {
   const signed = parseSignedBody(req, res);
   if (!signed) return;
   try {
-    await verifySourcePickupCode(String(signed.body.sourceOrderId || "").trim(), String(signed.body.pickupCode || "").trim());
+    await verifySourcePickupCode(
+      String(signed.body.sourceOrderId || "").trim(),
+      String(signed.body.pickupCode || "").trim(),
+      String(signed.body.externalDeliveryId || "").trim(),
+    );
     return res.status(204).end();
   } catch (error) {
     if (error.statusCode) return res.status(error.statusCode).json({ success: false, message: error.message });
