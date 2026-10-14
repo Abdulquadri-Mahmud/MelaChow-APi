@@ -51,12 +51,33 @@ const request = async (path, init = {}) => {
     const raw = await response.text();
     let body = raw;
     try { body = raw ? JSON.parse(raw) : null; } catch { /* retain diagnostic text */ }
-    if (!response.ok) throw new Error(`Samka Logistics request failed with status ${response.status}`);
+    if (!response.ok) {
+      const error = new Error(`Samka Logistics request failed with status ${response.status}`);
+      error.statusCode = response.status;
+      error.responseBody = body;
+      throw error;
+    }
     return body;
   } finally {
     clearTimeout(timeout);
   }
 };
+
+const deliveryIdFrom = (result) => {
+  const response = result?.data && typeof result.data === "object" ? result.data : result;
+  return typeof response === "string" ? response : response?.id || response?.deliveryId || null;
+};
+
+async function verifySamkaDeliveryIdentity(externalDeliveryId, delivery) {
+  const remote = await request(`/api/source-deliveries/${externalDeliveryId}?source=${SOURCE_MELACHOW}`);
+  // Samka's DeliveryJobDto names the source reference "orderNumber".
+  const remoteReference = remote?.sourceOrderReference ?? remote?.orderNumber;
+  if (String(remote?.sourceOrderId || "") !== String(delivery.sourceOrderId)
+    || String(remoteReference || "") !== String(delivery.sourceOrderReference)) {
+    throw new Error("Samka delivery identity does not match the MelaChow vendor order");
+  }
+  return remote;
+}
 
 const buildPayload = (delivery) => {
   const vendorOrder = delivery.vendorOrder;
@@ -136,20 +157,53 @@ export async function dispatchSamkaDelivery(id) {
   const delivery = await loadDelivery(id);
   if (!delivery || delivery.externalDeliveryId || delivery.dispatchStatus === "dispatched") return delivery;
   const now = new Date();
+  // A request can be triggered by both the ready-status handler and the retry
+  // worker. Claim the row before making the external POST so those paths cannot
+  // create two jobs for the same vendor order concurrently.
+  const leaseExpiredBefore = new Date(Date.now() - 2 * 60_000);
+  const claim = await prisma.logisticsDelivery.updateMany({
+    where: {
+      id,
+      externalDeliveryId: null,
+      OR: [
+        { dispatchStatus: { in: ["pending", "retry"] } },
+        { dispatchStatus: "dispatching", lastAttemptAt: { lt: leaseExpiredBefore } },
+      ],
+    },
+    data: { dispatchStatus: "dispatching", lastAttemptAt: now, attempts: { increment: 1 } },
+  });
+  if (!claim.count) return loadDelivery(id);
+  const attempt = delivery.attempts + 1;
   try {
     const payload = buildPayload(delivery);
     const result = await request("/api/source-deliveries", { method: "POST", body: JSON.stringify(payload) });
-    const externalDeliveryId = typeof result === "string" ? result : result?.id || result?.deliveryId;
-    if (!externalDeliveryId) throw new Error("Samka Logistics did not return a delivery ID");
-    return await prisma.logisticsDelivery.update({
-      where: { id },
-      data: { externalDeliveryId, externalStatus: 1, dispatchStatus: "dispatched", attempts: { increment: 1 }, lastAttemptAt: now, lastSyncedAt: now, lastError: null, requestPayload: payload, responsePayload: result },
+    const response = result?.data && typeof result.data === "object" ? result.data : result;
+    const externalDeliveryId = deliveryIdFrom(result);
+    if (!externalDeliveryId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(externalDeliveryId))) {
+      throw new Error("Samka Logistics did not return a valid delivery ID");
+    }
+    if (response?.sourceOrderId && String(response.sourceOrderId) !== String(delivery.sourceOrderId)) {
+      throw new Error("Samka Logistics returned a delivery for a different source order");
+    }
+    if (response?.sourceOrderReference && String(response.sourceOrderReference) !== String(delivery.sourceOrderReference)) {
+      throw new Error("Samka Logistics returned a delivery with a different order reference");
+    }
+    const remote = await verifySamkaDeliveryIdentity(externalDeliveryId, delivery);
+    const remoteStatus = STATUS_BY_NAME[remote?.status] || Number(remote?.status) || 1;
+    const saved = await prisma.logisticsDelivery.updateMany({
+      where: { id, externalDeliveryId: null, dispatchStatus: "dispatching", lastAttemptAt: now },
+      data: { externalDeliveryId, externalStatus: remoteStatus, dispatchStatus: "dispatched", lastSyncedAt: now, lastError: null, requestPayload: payload, responsePayload: remote },
     });
+    if (!saved.count) {
+      const current = await loadDelivery(id);
+      if (current?.externalDeliveryId === externalDeliveryId) return current;
+      throw new Error("Samka delivery claim changed before its response could be saved; reconcile by source order before retrying");
+    }
+    return loadDelivery(id);
   } catch (error) {
-    const attempts = delivery.attempts + 1;
-    await prisma.logisticsDelivery.update({
-      where: { id },
-      data: { dispatchStatus: "retry", attempts, lastAttemptAt: now, nextAttemptAt: new Date(Date.now() + Math.min(15 * 60_000, 30_000 * (2 ** Math.min(attempts - 1, 5)))), lastError: error.message.slice(0, 1000) },
+    await prisma.logisticsDelivery.updateMany({
+      where: { id, dispatchStatus: "dispatching", lastAttemptAt: now },
+      data: { dispatchStatus: "retry", nextAttemptAt: new Date(Date.now() + Math.min(15 * 60_000, 30_000 * (2 ** Math.min(attempt - 1, 5)))), lastError: error.message.slice(0, 1000) },
     });
     throw error;
   }
@@ -287,7 +341,29 @@ export async function ensureSamkaDeliveryContents(delivery, remote) {
   await prisma.logisticsDelivery.update({ where: { id: delivery.id }, data: { requestPayload: payload } });
 }
 export async function reconcileSamkaDelivery(delivery) {
-  const result = await request(`/api/source-deliveries/${delivery.externalDeliveryId}?source=${SOURCE_MELACHOW}`);
+  let result;
+  try {
+    result = await request(`/api/source-deliveries/${delivery.externalDeliveryId}?source=${SOURCE_MELACHOW}`);
+  } catch (error) {
+    // An idempotent POST by sourceOrderId recovers Samka's canonical ID if a
+    // stale MelaChow mapping points elsewhere. Verify both order identifiers
+    // before changing the stored external ID.
+    if (error.statusCode !== 404) throw error;
+    const fullDelivery = await loadDelivery(delivery.id);
+    if (!fullDelivery) throw new Error("MelaChow source delivery no longer exists");
+    const payload = buildPayload(fullDelivery);
+    const createResult = await request("/api/source-deliveries", { method: "POST", body: JSON.stringify(payload) });
+    const canonicalId = deliveryIdFrom(createResult);
+    if (!canonicalId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(canonicalId))) {
+      throw new Error("Samka could not return a canonical delivery ID for this source order");
+    }
+    result = await verifySamkaDeliveryIdentity(canonicalId, fullDelivery);
+    await prisma.logisticsDelivery.update({
+      where: { id: delivery.id },
+      data: { externalDeliveryId: canonicalId, lastError: null, lastSyncedAt: new Date(), responsePayload: result },
+    });
+    delivery = { ...delivery, externalDeliveryId: canonicalId };
+  }
   const status = typeof result?.status === "string" && STATUS_BY_NAME[result.status]
     ? STATUS_BY_NAME[result.status]
     : Number(result?.status);
@@ -318,11 +394,16 @@ export async function cancelQueuedSamkaDeliveryForVendorOrder(vendorOrderId, rea
 }
 
 export async function processSamkaCallback({ eventType, externalDeliveryId, sourceOrderId, data = {}, payload = {} }) {
+  const normalizedExternalId = String(externalDeliveryId || "").trim();
+  const normalizedSourceId = String(sourceOrderId || "").trim();
   const delivery = await prisma.logisticsDelivery.findFirst({
-    where: externalDeliveryId ? { externalDeliveryId } : { sourceOrderId: String(sourceOrderId || "") },
+    where: normalizedExternalId ? { externalDeliveryId: normalizedExternalId } : { sourceOrderId: normalizedSourceId },
     include: { vendorOrder: { include: { userOrder: true } } },
   });
   if (!delivery) throw new Error("MelaChow logistics delivery was not found");
+  if (normalizedSourceId && normalizedSourceId !== String(delivery.sourceOrderId)) {
+    throw new Error("Samka callback source order does not match the mapped MelaChow delivery");
+  }
 
   if (eventType === "delivery.rider.location.updated") {
     const latitude = numberFrom(data.latitude);
@@ -378,7 +459,19 @@ export async function processSamkaLogistics() {
   if (!usesSamkaLogistics()) return { dispatched: 0, reconciled: 0, failed: 0 };
   const result = { dispatched: 0, reconciled: 0, failed: 0 };
   await recoverMissingSamkaHandoffs();
-  const pending = await prisma.logisticsDelivery.findMany({ where: { externalDeliveryId: null, dispatchStatus: { in: ["pending", "retry"] }, nextAttemptAt: { lte: new Date() } }, take: 20, orderBy: { createdAt: "asc" } });
+  const now = new Date();
+  const staleDispatchBefore = new Date(now.getTime() - 2 * 60_000);
+  const pending = await prisma.logisticsDelivery.findMany({
+    where: {
+      externalDeliveryId: null,
+      OR: [
+        { dispatchStatus: { in: ["pending", "retry"] }, nextAttemptAt: { lte: now } },
+        { dispatchStatus: "dispatching", lastAttemptAt: { lt: staleDispatchBefore } },
+      ],
+    },
+    take: 20,
+    orderBy: { createdAt: "asc" },
+  });
   for (const delivery of pending) {
     try { await dispatchSamkaDelivery(delivery.id); result.dispatched += 1; } catch { result.failed += 1; }
   }
