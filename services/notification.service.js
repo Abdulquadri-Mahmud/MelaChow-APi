@@ -57,6 +57,24 @@ const NOTIFICATION_CONFIGS = {
         icon: '/icons/icon-192x192.png',
         requireInteraction: false
     },
+    order_rider_assigned: {
+        title: 'Rider Assigned',
+        getBody: (data) => `A rider${data.riderName ? ` (${data.riderName})` : ''} accepted Order #${data.orderId} and is heading to the restaurant.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: false
+    },
+    order_rider_arrived: {
+        title: 'Rider at Restaurant',
+        getBody: (data) => `Your rider has arrived at ${data.restaurantName || 'the restaurant'} for Order #${data.orderId}.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: false
+    },
+    order_on_the_way: {
+        title: 'Order on the Way',
+        getBody: (data) => `Your rider picked up Order #${data.orderId}; it is on the way to you.`,
+        icon: '/icons/icon-192x192.png',
+        requireInteraction: false
+    },
     order_delivered: {
         title: 'Order Delivered',
         getBody: (data) => `Your order #${data.orderId} has been delivered. Enjoy your meal from ${data.restaurantName || 'the restaurant'}!`,
@@ -455,6 +473,7 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
                                         data: {
                         url: notificationData.url,
                         orderId: notificationData.orderId,
+                        orderDatabaseId: notificationData.data?.orderDatabaseId,
                         type: notificationData.type,
                         role: notificationData.role,
                         ...data.additionalData
@@ -540,7 +559,9 @@ export async function sendOrderNotification(userId, orderId, status, orderDetail
         'preparing': 'order_preparing',
         'ready': 'order_ready',
         'ready_for_pickup': 'order_ready',
-        'rider_assigned': 'order_dispatched',
+        'rider_assigned': 'order_rider_assigned',
+        'rider_arrived': 'order_rider_arrived',
+        'rider_on_the_way': 'order_on_the_way',
         'dispatched': 'order_dispatched',
         'out_for_delivery': 'order_dispatched',
         'delivered': 'order_delivered',
@@ -563,6 +584,7 @@ export async function sendOrderNotification(userId, orderId, status, orderDetail
         orderId: effectiveOrderId,
         orderDatabaseId: orderDetails.orderDatabaseId,
         restaurantName: orderDetails.restaurantName,
+        riderName: orderDetails.riderName,
         message: orderDetails.message,
         additionalData: orderDetails
     });

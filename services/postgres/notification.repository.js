@@ -17,7 +17,7 @@ export const notificationRepository = {
       resolve(prisma.admin, data.adminId), resolve(prisma.vendor, data.vendorId || data.restaurantId),
     ]);
     const role = ["user", "vendor", "rider", "admin"].includes(data.role) ? data.role : "user";
-    const allowedTypes = ["order_placed","order_confirmed","order_preparing","order_ready","order_dispatched","order_delivered","order_cancelled","order_assigned","rider_order_rejected","vendor_new_order","vendor_order_cancelled","vendor_rider_assigned","admin_order_ready","admin_order_delivered","rider_assignment_needed","rider_assignment_accepted","rider_assignment_timeout","vendor_review","support_ticket","system","promo","discount","delivery_nearby","account_update","general"];
+    const allowedTypes = ["order_placed","order_confirmed","order_preparing","order_ready","order_dispatched","order_rider_assigned","order_rider_arrived","order_on_the_way","order_delivered","order_cancelled","order_assigned","rider_order_rejected","vendor_new_order","vendor_order_cancelled","vendor_rider_assigned","admin_order_ready","admin_order_delivered","rider_assignment_needed","rider_assignment_accepted","rider_assignment_timeout","vendor_review","support_ticket","system","promo","discount","delivery_nearby","account_update","general"];
     const typeAliases = {
       delivery_confirmation_code: "account_update",
       rider_payout_credited: "account_update",

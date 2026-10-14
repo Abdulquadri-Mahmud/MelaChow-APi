@@ -224,6 +224,10 @@ async function applyExternalStatus(delivery, externalStatus, responsePayload) {
   const transition = await prisma.$transaction(async (tx) => {
     const current = await tx.vendorOrder.findUnique({ where: { id: delivery.vendorOrderId }, include: { userOrder: { include: { vendorOrders: true } }, restaurant: true } });
     if (!current) throw new Error("Vendor order no longer exists");
+    const freshDelivery = await tx.logisticsDelivery.findUnique({ where: { id: delivery.id }, select: { externalStatus: true } });
+    if (Number.isFinite(Number(freshDelivery?.externalStatus)) && Number(freshDelivery.externalStatus) > externalStatus) {
+      return { stale: true, changed: false, externalChanged: false, status: current.orderStatus, customerMilestone: null };
+    }
     let nextVendorStatus = mapped;
 
     if (externalStatus === 8) {
@@ -249,13 +253,33 @@ async function applyExternalStatus(delivery, externalStatus, responsePayload) {
     const statusLog = Array.isArray(current.userOrder.statusLog) ? current.userOrder.statusLog : [];
     await tx.vendorOrder.update({ where: { id: current.id }, data: { orderStatus: nextVendorStatus, ...(externalStatus === 8 ? { escrowReleased: true } : {}) } });
     const assignedRider = responsePayload?.rider || responsePayload?.data?.rider || delivery.assignedRider || current.userOrder.riderAssignment?.rider || null;
-    await tx.order.update({ where: { id: current.userOrderId }, data: { orderStatus: parentStatus(siblingStatuses), riderAssignment: { provider: "samka", externalDeliveryId: delivery.externalDeliveryId, status: nextVendorStatus, rider: assignedRider }, statusLog: changed ? [...statusLog, { status: nextVendorStatus, changedBy: "samka_logistics", timestamp: new Date().toISOString() }] : statusLog } });
+    const assignment = current.userOrder.riderAssignment && typeof current.userOrder.riderAssignment === "object"
+      ? current.userOrder.riderAssignment : {};
+    const notifiedMilestones = assignment.customerNotifiedMilestones && typeof assignment.customerNotifiedMilestones === "object"
+      ? assignment.customerNotifiedMilestones : {};
+    const previousCustomerMilestone = Number(notifiedMilestones[delivery.externalDeliveryId] || 0);
+    const customerMilestone = [4, 5, 7, 8].includes(externalStatus) && externalStatus > previousCustomerMilestone
+      ? externalStatus : null;
+    await tx.order.update({ where: { id: current.userOrderId }, data: {
+      orderStatus: parentStatus(siblingStatuses),
+      riderAssignment: {
+        ...assignment,
+        provider: "samka",
+        externalDeliveryId: delivery.externalDeliveryId,
+        status: nextVendorStatus,
+        externalStatus,
+        rider: assignedRider,
+        ...(customerMilestone ? { customerNotifiedMilestones: { ...notifiedMilestones, [delivery.externalDeliveryId]: customerMilestone } } : {}),
+      },
+      statusLog: changed ? [...statusLog, { status: nextVendorStatus, changedBy: "samka_logistics", timestamp: new Date().toISOString() }] : statusLog,
+    } });
     await tx.logisticsDelivery.update({ where: { id: delivery.id }, data: { externalStatus, dispatchStatus: TERMINAL_STATUSES.has(externalStatus) ? "terminal" : "dispatched", lastSyncedAt: new Date(), lastError: null, responsePayload, assignedRider } });
     return {
       changed,
-      externalChanged: delivery.externalStatus !== externalStatus,
+      externalChanged: freshDelivery?.externalStatus !== externalStatus,
       externalStatus,
       status: nextVendorStatus,
+      customerMilestone,
       orderId: current.userOrder.orderCode,
       orderDatabaseId: current.userOrder.legacyMongoId || current.userOrder.id,
       userId: current.userOrder.user?.legacyMongoId || current.userOrder.userId,
@@ -265,20 +289,19 @@ async function applyExternalStatus(delivery, externalStatus, responsePayload) {
       riderName: assignedRider?.name || null,
       rider: assignedRider,
     };
-  });
-  if (transition.changed || (transition.externalChanged && [5, 7].includes(externalStatus))) await notifySamkaOrderTransition(transition);
+  }, { isolationLevel: "Serializable" });
+  if (transition.stale) return transition;
+  if (transition.changed || transition.customerMilestone || (transition.externalChanged && [5, 7].includes(externalStatus))) await notifySamkaOrderTransition(transition);
   return transition;
 }
 
 async function notifySamkaOrderTransition(transition) {
-  const { status, externalStatus, orderId, orderDatabaseId, userId, vendorId, vendorOrderId, restaurantName, riderName } = transition;
-  const customerMessage = externalStatus === 5 ? `Your rider has arrived at ${restaurantName || "the restaurant"} for Order #${orderId}.`
-    : externalStatus === 7 ? `Your rider is on the way with Order #${orderId}.`
-      : status === "rider_assigned" ? `A rider${riderName ? ` (${riderName})` : ""} accepted Order #${orderId} and is heading to the restaurant.` : null;
-  const notifications = [sendOrderNotification(userId, orderId, status, {
-    orderId, orderDatabaseId, restaurantName,
-    ...(customerMessage ? { message: customerMessage } : {}),
-  })];
+  const { status, externalStatus, customerMilestone, orderId, orderDatabaseId, userId, vendorId, vendorOrderId, restaurantName, riderName } = transition;
+  const milestoneStatus = ({ 4: "rider_assigned", 5: "rider_arrived", 7: "rider_on_the_way", 8: "delivered" })[customerMilestone];
+  const shouldNotifyCustomer = Boolean(milestoneStatus) || ["cancelled", "failed"].includes(status);
+  const notifications = shouldNotifyCustomer ? [sendOrderNotification(userId, orderId, milestoneStatus || status, {
+    orderId, orderDatabaseId, restaurantName, riderName,
+  })] : [];
   const vendorType = externalStatus === 5 || externalStatus === 7 ? "general"
     : status === "rider_assigned" ? "vendor_rider_assigned"
     : status === "delivered" ? "vendor_order_delivered" : "general";
@@ -295,7 +318,7 @@ async function notifySamkaOrderTransition(transition) {
   notifications.push(sendVendorNotification(vendorId, orderId, vendorType, vendorDetails));
   const results = await Promise.allSettled(notifications);
   results.forEach((result, index) => {
-    if (result.status === "rejected") console.error(`Samka ${index === 0 ? "customer" : "vendor"} notification failed for ${orderId}:`, result.reason);
+    if (result.status === "rejected") console.error(`Samka ${index === 0 && shouldNotifyCustomer ? "customer" : "vendor"} notification failed for ${orderId}:`, result.reason);
   });
 }
 
@@ -420,8 +443,10 @@ export async function processSamkaCallback({ eventType, externalDeliveryId, sour
     "delivery.cancelled": 9,
     "delivery.failed": 10,
   };
-  const status = statusByEvent[eventType];
-  if (!status) return { delivery, ignored: true, statusChanged: false };
+  const statusFromData = data.status;
+  const statusFromName = typeof statusFromData === "string" ? STATUS_BY_NAME[statusFromData] : null;
+  const status = statusByEvent[eventType] || (eventType === "delivery.status.changed" ? statusFromName || Number(statusFromData) : null);
+  if (!Number.isInteger(status) || status < 1 || status > 10) return { delivery, ignored: true, statusChanged: false };
   if (status === 9 || status === 10) {
     const transition = await applyTerminalStatus(delivery, status, payload, data.reason || eventType);
     return { delivery, status: transition.status, statusChanged: transition.changed };
