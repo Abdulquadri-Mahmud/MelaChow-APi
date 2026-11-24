@@ -1,6 +1,10 @@
 import axios from "axios";
+import prisma from "../config/prisma.js";
 import Order from "../model/order/Order.js";
 import PaymentAttempt from "../model/order/PaymentAttempt.js";
+
+const usePostgres = () =>
+    String(process.env.DB_PRIMARY_PROVIDER || "mongo").trim().toLowerCase() === "postgres";
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const PAYSTACK_BASE_URL = "https://api.paystack.co";
@@ -139,15 +143,83 @@ export const enrichAndSanitizeTransactions = async (transactions = []) => {
     }
 
     const references = transactions.map((t) => t.reference).filter(Boolean);
+    if (references.length === 0) {
+        return transactions.map((tx) => enrichTransactionWithLocalStatus(tx, null, null));
+    }
 
-    // Query local Mongo orders and payment attempts by reference
-    const [localOrders, localAttempts] = await Promise.all([
-        Order.find({ paymentReference: { $in: references } }).lean().exec(),
-        PaymentAttempt.find({ paymentReference: { $in: references } }).lean().exec(),
-    ]);
+    let orderMap;
+    let attemptMap;
 
-    const orderMap = new Map(localOrders.map((o) => [o.paymentReference, o]));
-    const attemptMap = new Map(localAttempts.map((a) => [a.paymentReference, a]));
+    if (usePostgres()) {
+        const [pgOrders, pgAttempts] = await Promise.all([
+            prisma.order.findMany({
+                where: { paymentReference: { in: references } },
+                select: {
+                    id: true,
+                    legacyMongoId: true,
+                    orderCode: true,
+                    total: true,
+                    orderStatus: true,
+                    paymentStatus: true,
+                    paymentReference: true,
+                    createdAt: true,
+                },
+            }),
+            prisma.paymentAttempt.findMany({
+                where: { reference: { in: references } },
+                select: {
+                    id: true,
+                    legacyMongoId: true,
+                    reference: true,
+                    status: true,
+                    failureReason: true,
+                    createdAt: true,
+                },
+            }),
+        ]);
+
+        orderMap = new Map(
+            pgOrders.map((o) => [
+                o.paymentReference,
+                {
+                    _id: o.legacyMongoId || o.id,
+                    orderId: o.orderCode,
+                    total: Number(o.total || 0) / 100,
+                    status: o.orderStatus,
+                    paymentStatus: o.paymentStatus,
+                    paymentReference: o.paymentReference,
+                    createdAt: o.createdAt,
+                },
+            ])
+        );
+        attemptMap = new Map(
+            pgAttempts.map((a) => [
+                a.reference,
+                {
+                    _id: a.legacyMongoId || a.id,
+                    reference: a.reference,
+                    status: a.status,
+                    reason: a.failureReason || null,
+                    createdAt: a.createdAt,
+                },
+            ])
+        );
+    } else {
+        const [localOrders, localAttempts] = await Promise.all([
+            Order.find({ paymentReference: { $in: references } }).lean().exec(),
+            PaymentAttempt.find({
+                $or: [
+                    { reference: { $in: references } },
+                    { paymentReference: { $in: references } },
+                ],
+            }).lean().exec(),
+        ]);
+
+        orderMap = new Map(localOrders.map((o) => [o.paymentReference, o]));
+        attemptMap = new Map(
+            localAttempts.map((a) => [a.reference || a.paymentReference, a])
+        );
+    }
 
     return transactions.map((tx) => {
         const order = orderMap.get(tx.reference);
