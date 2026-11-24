@@ -103,6 +103,9 @@ const allowedOrigins = [
   'https://melachow.com',
   'http://localhost:3000',
   'http://localhost:3001',
+  ...(process.env.NODE_ENV !== 'production'
+    ? ['http://localhost:3100', 'http://localhost:3101', 'http://localhost:3102']
+    : []),
   'http://localhost:3002',
   'http://localhost:3003',
   'http://localhost:3004',
@@ -492,7 +495,7 @@ app.use("/v1/cart", cartRoutes);
 
 // Ã¢Å“â€¦ DEBUG: Log registered auth routes (dev only)
 if (process.env.NODE_ENV !== 'production') {
-  console.log('\nÃ°Å¸â€Â Registered User Auth Routes (/api/user/auth):');
+  console.log('\nRegistered User Auth Routes (/api/user/auth):');
   // Note: userRoutes is a router, so we can inspect its stack
   // Since it's mounted, we can only see paths relative to mount point
   userRoutes.stack.forEach(layer => {
