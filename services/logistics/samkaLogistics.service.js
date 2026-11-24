@@ -327,15 +327,102 @@ async function applyTerminalStatus(delivery, status, responsePayload, reason) {
   const transition = await prisma.$transaction(async (tx) => {
     const current = await tx.vendorOrder.findUnique({ where: { id: delivery.vendorOrderId }, include: { userOrder: { include: { vendorOrders: true } }, restaurant: true } });
     if (!current) throw new Error("Vendor order was not found");
-    const changed = current.orderStatus !== nextStatus;
+    const previousStatus = current.orderStatus;
+    const changed = previousStatus !== nextStatus;
     const siblingStatuses = current.userOrder.vendorOrders.map((row) => row.id === current.id ? nextStatus : row.orderStatus);
+    const nextParentStatus = parentStatus(siblingStatuses);
     const statusLog = Array.isArray(current.userOrder.statusLog) ? current.userOrder.statusLog : [];
     await tx.vendorOrder.update({ where: { id: current.id }, data: { orderStatus: nextStatus } });
-    await tx.order.update({ where: { id: current.userOrderId }, data: { orderStatus: parentStatus(siblingStatuses), riderAssignment: { provider: "samka", externalDeliveryId: delivery.externalDeliveryId, status: nextStatus }, statusLog: changed ? [...statusLog, { status: nextStatus, changedBy: "samka_logistics", timestamp: new Date().toISOString() }] : statusLog } });
+
+    let paymentStatus = current.userOrder.paymentStatus;
+    let refundCreated = null;
+    if (
+      current.userOrder.paymentStatus === "paid"
+      && !current.escrowReleased
+      && ["cancelled", "failed"].includes(nextParentStatus)
+    ) {
+      const existingRefund = await tx.refund.findFirst({ where: { orderId: current.userOrderId } });
+      if (existingRefund) {
+        paymentStatus = existingRefund.status === "completed" ? "refunded" : current.userOrder.paymentStatus;
+      } else {
+        const refundAmount = BigInt(current.userOrder.total || 0);
+        if (refundAmount > 0n) {
+          const adminWallet = await tx.wallet.findFirst({ where: { ownerModel: "Admin" } });
+          let credited = false;
+          if (adminWallet) {
+            const debited = await tx.wallet.updateMany({
+              where: { id: adminWallet.id, balance: { gte: refundAmount } },
+              data: { balance: { decrement: refundAmount } },
+            });
+            if (debited.count === 1) {
+              const userWallet = await tx.wallet.upsert({
+                where: { ownerId_ownerModel: { ownerId: current.userOrder.userId, ownerModel: "User" } },
+                create: { ownerId: current.userOrder.userId, ownerModel: "User", balance: refundAmount },
+                update: { balance: { increment: refundAmount } },
+              });
+              await tx.walletTransaction.createMany({
+                data: [
+                  {
+                    walletId: adminWallet.id,
+                    type: "debit",
+                    amount: refundAmount,
+                    transactionType: "refund",
+                    orderId: current.userOrderId,
+                    description: `Auto-refund for Samka ${nextStatus} Order ${current.userOrder.orderCode}`,
+                    metadata: { source: "samka_terminal_auto_refund", externalDeliveryId: delivery.externalDeliveryId, reason },
+                  },
+                  {
+                    walletId: userWallet.id,
+                    type: "credit",
+                    amount: refundAmount,
+                    transactionType: "refund",
+                    orderId: current.userOrderId,
+                    description: `Refund for ${nextStatus} delivery on Order ${current.userOrder.orderCode}`,
+                    metadata: { source: "samka_terminal_auto_refund", externalDeliveryId: delivery.externalDeliveryId, reason },
+                  },
+                ],
+              });
+              credited = true;
+              paymentStatus = "refunded";
+            }
+          }
+          refundCreated = await tx.refund.create({
+            data: {
+              orderId: current.userOrderId,
+              userId: current.userOrder.userId,
+              amount: refundAmount,
+              reason: reason || `Samka delivery ${nextStatus}`,
+              status: credited ? "completed" : "pending",
+              metadata: {
+                originalTotal: Number(refundAmount),
+                commissionRetained: 0,
+                orderStatusAtCancellation: previousStatus,
+                walletCreditSucceeded: credited,
+                externalDeliveryId: delivery.externalDeliveryId,
+                notes: credited
+                  ? "Automatic full refund credited to customer wallet after Samka terminal delivery status"
+                  : "Admin wallet missing or insufficient; manual wallet credit required",
+              },
+            },
+          });
+        }
+      }
+    }
+
+    await tx.order.update({
+      where: { id: current.userOrderId },
+      data: {
+        orderStatus: nextParentStatus,
+        paymentStatus,
+        riderAssignment: { provider: "samka", externalDeliveryId: delivery.externalDeliveryId, status: nextStatus },
+        statusLog: changed ? [...statusLog, { status: nextStatus, changedBy: "samka_logistics", timestamp: new Date().toISOString() }] : statusLog,
+      },
+    });
     await tx.logisticsDelivery.update({ where: { id: delivery.id }, data: { externalStatus: status, dispatchStatus: "terminal", lastSyncedAt: new Date(), lastError: reason, responsePayload } });
     return {
       changed,
       status: nextStatus,
+      refundStatus: refundCreated?.status || null,
       orderId: current.userOrder.orderCode,
       orderDatabaseId: current.userOrder.legacyMongoId || current.userOrder.id,
       userId: current.userOrder.userId,
@@ -343,7 +430,7 @@ async function applyTerminalStatus(delivery, status, responsePayload, reason) {
       vendorOrderId: current.legacyMongoId || current.id,
       restaurantName: current.restaurant?.storeName,
     };
-  });
+  }, { isolationLevel: "Serializable" });
   if (transition.changed) await notifySamkaOrderTransition(transition);
   return transition;
 }

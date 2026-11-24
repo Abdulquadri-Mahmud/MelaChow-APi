@@ -66,7 +66,7 @@ const UserSchema = new mongoose.Schema(
       },
     ],
 
-    role: { type: String, default: "user" },
+    role: { type: String, enum: ["user"], default: "user" },
 
     // ✅ OTP fields (keep for registration/reset) - also hidden by default
     otp: { type: String, select: false },

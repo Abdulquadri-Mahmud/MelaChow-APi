@@ -3,7 +3,7 @@ import { generateAccessToken, generateRefreshToken, generateOTP, generateResetTo
 import { sendMail } from '../../config/mailer.js';
 import { sendAuthCookies } from '../../utils/sendTokenCookie.js';
 import jwt from "jsonwebtoken";
-import { blockToken } from "../../middleware/tokenBlocklist.js";
+import { blockToken, isTokenBlocked } from "../../middleware/tokenBlocklist.js";
 import crypto from "crypto";
 import ActivityLog from "../../model/ActivityLog.js";
 import { usePostgresAdminWrites } from "../../services/postgres/compat.js";
@@ -483,6 +483,10 @@ export const refreshAdminToken = async (req, res) => {
             return res.status(401).json({ message: 'No refresh token provided' });
         }
 
+        if (await isTokenBlocked(token)) {
+            return res.status(401).json({ message: 'Session has been revoked. Please log in again.' });
+        }
+
         // Verify token
         const decoded = verifyToken(token);
 
@@ -502,9 +506,14 @@ export const refreshAdminToken = async (req, res) => {
             return res.status(401).json({ message: 'Admin not found or inactive' });
         }
 
-        // Generate new access token
+        if (decoded.exp) {
+            await blockToken(token, decoded.exp);
+        }
+
+        // Rotate refresh token and issue new access token
         const accessToken = generateAccessToken(admin._id, admin.role);
-        sendAuthCookies(res, accessToken, token, 'admin');
+        const nextRefreshToken = generateRefreshToken(admin._id, admin.role);
+        sendAuthCookies(res, accessToken, nextRefreshToken, 'admin');
 
         res.status(200).json({
             success: true,
@@ -521,9 +530,13 @@ export const logoutAdmin = async (req, res) => {
     try {
         const isProduction = process.env.NODE_ENV === "production";
 
-        // Block the current token if it exists
-        const token = req.cookies?.adminToken;
-        if (token) {
+        const tokensToBlock = [
+            req.cookies?.adminToken,
+            req.cookies?.adminRefreshToken,
+            req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice(7) : null,
+        ].filter(Boolean);
+
+        for (const token of tokensToBlock) {
             try {
                 const decoded = jwt.decode(token);
                 if (decoded?.exp) {
@@ -534,18 +547,14 @@ export const logoutAdmin = async (req, res) => {
             }
         }
 
-        res.clearCookie("adminToken", {
+        const clearOpts = {
             httpOnly: true,
             secure: isProduction,
-            sameSite: "lax",
+            sameSite: isProduction ? "none" : "lax",
             path: "/",
-        });
-        res.clearCookie('adminRefreshToken', {
-            httpOnly: true,
-            secure: isProduction,
-            sameSite: isProduction ? 'none' : 'lax',
-            path: '/',
-        });
+        };
+        res.clearCookie("adminToken", clearOpts);
+        res.clearCookie("adminRefreshToken", clearOpts);
 
         res.status(200).json({
             success: true,

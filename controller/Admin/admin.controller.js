@@ -1,6 +1,7 @@
 // controllers/admin.controller.js
 import User from "../../model/user.model.js";
 
+import crypto from "node:crypto";
 import jwt from "jsonwebtoken";
 import { sendAdminEmail } from "../../config/Admin/admin.mailer.js";
 import Admin from "../../model/Admin/admin.model.js";
@@ -137,11 +138,11 @@ export const loginAdmin = async (req, res) => {
 export const forgotPassword = async (req, res) => {
   try {
     const { email } = req.body;
-    if(usePostgresAdminWrites()){const admin=await adminAccountRepository.findByEmail(email,{raw:true});if(!admin)return res.status(404).json({success:false,message:"Admin not found"});const otp=Math.floor(100000+Math.random()*900000).toString();await adminAccountRepository.setResetOtp(admin.id,otp,new Date(Date.now()+10*60*1000));await sendAdminEmail({...admin,role:admin.role==="super_admin"?"super-admin":admin.role},otp,"reset");return res.status(200).json({success:true,message:"OTP sent to your email"});}
+    if(usePostgresAdminWrites()){const admin=await adminAccountRepository.findByEmail(email,{raw:true});if(!admin)return res.status(404).json({success:false,message:"Admin not found"});const otp=crypto.randomInt(100000,1000000).toString();await adminAccountRepository.setResetOtp(admin.id,otp,new Date(Date.now()+10*60*1000));await sendAdminEmail({...admin,role:admin.role==="super_admin"?"super-admin":admin.role},otp,"reset");return res.status(200).json({success:true,message:"OTP sent to your email"});}
     const admin = await Admin.findOne({ email });
     if (!admin) return res.status(404).json({ success: false, message: "Admin not found" });
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otp = crypto.randomInt(100000, 1000000).toString();
     admin.otp = otp;
     admin.otpExpires = Date.now() + 10 * 60 * 1000;
     await admin.save();

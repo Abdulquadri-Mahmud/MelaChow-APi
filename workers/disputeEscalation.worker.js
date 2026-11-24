@@ -62,6 +62,6 @@ new Worker("dispute-escalation", async (job) => {
         throw err;
     }
 }, {
-    connection: redisConnection,
+    connection: redisConnection.duplicate(),
     concurrency: 5,
 });

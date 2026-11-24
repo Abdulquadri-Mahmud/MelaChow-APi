@@ -65,12 +65,19 @@ const authVendor = async (req, res, next) => {
       });
     }
 
-    // Check vendor is active and not soft-deleted
+    // Check vendor is active, approved, and not soft-deleted
     // NOTE: Schema field is `active`, not `isActive`
     if (!vendor.active || vendor.suspended || vendor.deletedAt) {
       return res.status(403).json({
         success: false,
         message: "Vendor account is inactive, suspended, or has been removed"
+      });
+    }
+
+    if (!vendor.isApproved) {
+      return res.status(403).json({
+        success: false,
+        message: "Vendor account is pending admin approval"
       });
     }
 

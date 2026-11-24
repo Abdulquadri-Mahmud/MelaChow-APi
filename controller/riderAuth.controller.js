@@ -1,5 +1,5 @@
 import jwt from "jsonwebtoken";
-import { blockToken } from "../middleware/tokenBlocklist.js";
+import { blockToken, isTokenBlocked } from "../middleware/tokenBlocklist.js";
 import Rider from "../model/rider.model.js";
 import { generateAccessToken, generateRefreshToken } from "../utils/generateTokens.js";
 import { sendAuthCookies } from '../utils/sendTokenCookie.js';
@@ -98,9 +98,10 @@ export const loginRider = async (req, res, next) => {
 
 export const logoutRider = async (req, res) => {
     try {
-        // Block the current tokens (both refresh from cookie and access from header)
+        // Block the current tokens (access, refresh, and bearer header)
         const tokensToBlock = [
             req.cookies?.riderToken,
+            req.cookies?.riderRefreshToken,
             req.headers.authorization?.split(" ")[1]
         ].filter(Boolean);
 
@@ -139,6 +140,10 @@ export const refreshRiderToken = async (req, res) => {
         const token = req.cookies.riderRefreshToken;
         if (!token) return res.status(401).json({ success: false, message: "No refresh token provided" });
 
+        if (await isTokenBlocked(token)) {
+            return res.status(401).json({ success: false, message: "Session has been revoked. Please log in again." });
+        }
+
         const decoded = verifyToken(token);
         if (decoded.type !== "refresh" || decoded.role !== "rider") {
             return res.status(401).json({ success: false, message: "Invalid rider refresh token" });
@@ -151,8 +156,14 @@ export const refreshRiderToken = async (req, res) => {
             return res.status(401).json({ success: false, message: "Rider not found or inactive" });
         }
 
-        const accessToken = generateAccessToken({ riderId: usePostgresRiderReads() ? decoded.id : rider._id, role: "rider" });
-        sendAuthCookies(res, accessToken, token, "rider");
+        if (decoded.exp) {
+            await blockToken(token, decoded.exp);
+        }
+
+        const payload = { riderId: usePostgresRiderReads() ? decoded.id : rider._id, role: "rider" };
+        const accessToken = generateAccessToken(payload);
+        const nextRefreshToken = generateRefreshToken(payload);
+        sendAuthCookies(res, accessToken, nextRefreshToken, "rider");
         return res.status(200).json({ success: true, accessToken });
     } catch (error) {
         return res.status(401).json({ success: false, message: "Token refresh failed", error: error.message });
@@ -175,6 +186,11 @@ export const subscribeRider = async (req, res, next) => {
 
         if (!subscription || !subscription.endpoint) {
             return res.status(400).json({ success: false, message: "Subscription is required" });
+        }
+
+        if (usePostgresNotificationWrites()) {
+            await notificationRepository.saveSubscription("rider", req.rider._id, subscription, deviceType, req.headers["user-agent"]);
+            return res.status(200).json({ success: true, message: "Subscribed to push notifications" });
         }
 
         const RiderPushSubscription = (await import("../model/notification/riderPushSubscription.model.js")).default;
@@ -207,11 +223,6 @@ export const forgotRiderPassword = async (req, res, next) => {
 
         if (!identifier) {
             return res.status(400).json({ success: false, message: "Phone number or email is required" });
-        }
-
-        if (usePostgresNotificationWrites()) {
-            await notificationRepository.saveSubscription("rider", req.rider._id, subscription, deviceType, req.headers["user-agent"]);
-            return res.status(200).json({ success: true, message: "Subscribed to push notifications" });
         }
 
         if (usePostgresRiderReads()) {
@@ -253,7 +264,9 @@ export const forgotRiderPassword = async (req, res, next) => {
         rider.otpExpires = otpExpires;
         await rider.save();
 
-        console.log(`[RiderForgotPassword] 🔑 OTP generated for Rider ${rider._id} (${rider.phone}): ${otp}`);
+        if (process.env.NODE_ENV !== "production") {
+            console.log(`[RiderForgotPassword] OTP generated for Rider ${rider._id}`);
+        }
 
         if (rider.email) {
             try {

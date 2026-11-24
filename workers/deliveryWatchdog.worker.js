@@ -151,7 +151,7 @@ new Worker("delivery-watchdog", async (job) => {
     }
 
 }, {
-    connection: redisConnection,
+    connection: redisConnection.duplicate(),
     concurrency: 5,
     limiter: { max: 10, duration: 1_000 },
 });

@@ -2,6 +2,7 @@ import User from '../../model/user.model.js';
 import { generateAccessToken, generateRefreshToken, generateOTP, generateResetToken, verifyToken } from '../../utils/jwt.js';
 import { sendMail } from '../../config/mailer.js';
 import { sendAuthCookies } from '../../utils/sendTokenCookie.js';
+import { blockToken, isTokenBlocked } from '../../middleware/tokenBlocklist.js';
 import { wrapLayout } from '../../services/emailTemplate.service.js';
 import {
     authenticateIdentity,
@@ -124,15 +125,26 @@ export const verifyRegistration = async (req, res) => {
         }
 
         if (postgresUserIdentityEnabled()) {
-            const result = await verifyIdentity({ email, otp });
+            const passwordSetupToken = generateResetToken();
+            const result = await verifyIdentity({
+                email,
+                otp,
+                setupToken: passwordSetupToken,
+                setupExpires: new Date(Date.now() + 30 * 60 * 1000),
+            });
             if (result.error === 'not_found') return res.status(404).json({ message: 'User not found' });
             if (result.error === 'invalid_otp') return res.status(400).json({ message: 'Invalid OTP' });
             if (result.error === 'expired_otp') return res.status(400).json({ message: 'OTP expired. Please request a new one.' });
-            return res.status(200).json({ message: 'Account verified successfully. Please set your password.', email: result.user.email, requiresPassword: !result.user.password });
+            return res.status(200).json({
+                message: 'Account verified successfully. Please set your password.',
+                email: result.user.email,
+                requiresPassword: !result.user.password,
+                ...(!result.user.password ? { passwordSetupToken } : {}),
+            });
         }
 
         // Find user with OTP (need to explicitly select OTP fields)
-        const user = await User.findOne({ email }).select('+otp +otpExpires +password');
+        const user = await User.findOne({ email }).select('+otp +otpExpires +password +resetPasswordToken +resetPasswordExpires');
 
         if (!user) {
             return res.status(404).json({ message: 'User not found' });
@@ -147,16 +159,22 @@ export const verifyRegistration = async (req, res) => {
             return res.status(400).json({ message: 'OTP expired. Please request a new one.' });
         }
 
-        // Mark as verified
+        // Mark as verified and issue one-time password setup token
+        const passwordSetupToken = !user.password ? generateResetToken() : null;
         user.isVerified = true;
         user.otp = undefined;
         user.otpExpires = undefined;
+        if (passwordSetupToken) {
+            user.resetPasswordToken = passwordSetupToken;
+            user.resetPasswordExpires = new Date(Date.now() + 30 * 60 * 1000);
+        }
         await user.save();
 
         res.status(200).json({
             message: 'Account verified successfully. Please set your password.',
             email: user.email,
-            requiresPassword: !user.password
+            requiresPassword: !user.password,
+            ...(passwordSetupToken ? { passwordSetupToken } : {}),
         });
 
     } catch (error) {
@@ -171,10 +189,10 @@ export const verifyRegistration = async (req, res) => {
 
 export const setPassword = async (req, res) => {
     try {
-        const { email, password } = req.body;
+        const { email, password, passwordSetupToken } = req.body;
 
-        if (!email || !password) {
-            return res.status(400).json({ message: 'Email and password are required' });
+        if (!email || !password || !passwordSetupToken) {
+            return res.status(400).json({ message: 'Email, password, and a valid setup token are required' });
         }
 
         // Validate password strength
@@ -183,9 +201,10 @@ export const setPassword = async (req, res) => {
         }
 
         if (postgresUserIdentityEnabled()) {
-            const result = await setIdentityPassword({ email, password });
+            const result = await setIdentityPassword({ email, password, setupToken: passwordSetupToken });
             if (result.error === 'not_found') return res.status(404).json({ message: 'Verified user not found' });
             if (result.error === 'already_set') return res.status(400).json({ message: 'Password already set. Use login instead.' });
+            if (result.error === 'invalid_setup') return res.status(400).json({ message: 'This password setup session is invalid or expired. Please verify your email or use Forgot Password.' });
             const tokenId = result.user.legacyMongoId || result.user.id;
             const accessToken = generateAccessToken(tokenId, 'user');
             const refreshToken = generateRefreshToken(tokenId, 'user');
@@ -193,10 +212,15 @@ export const setPassword = async (req, res) => {
             return res.status(200).json({ message: 'Password set successfully', user: publicUser(result.user), accessToken });
         }
 
-        const user = await User.findOne({ email, isVerified: true }).select('+password');
+        const user = await User.findOne({
+            email,
+            isVerified: true,
+            resetPasswordToken: passwordSetupToken,
+            resetPasswordExpires: { $gt: Date.now() },
+        }).select('+password +resetPasswordToken +resetPasswordExpires');
 
         if (!user) {
-            return res.status(404).json({ message: 'Verified user not found' });
+            return res.status(400).json({ message: 'This password setup session is invalid or expired. Please verify your email or use Forgot Password.' });
         }
 
         if (user.password) {
@@ -208,8 +232,10 @@ export const setPassword = async (req, res) => {
         const accessToken = generateAccessToken(user._id, 'user');
         const refreshToken = generateRefreshToken(user._id, 'user');
 
-        // Set password (will be hashed by pre-save hook)
+        // Set password (will be hashed by pre-save hook) and consume setup token
         user.password = password;
+        user.resetPasswordToken = undefined;
+        user.resetPasswordExpires = undefined;
         user.lastLogin = Date.now();
         await user.save();
 
@@ -557,11 +583,15 @@ export const refreshToken = async (req, res) => {
             return res.status(401).json({ message: 'No refresh token provided' });
         }
 
+        if (await isTokenBlocked(token)) {
+            return res.status(401).json({ message: 'Session has been revoked. Please log in again.' });
+        }
+
         // Verify refresh token
         const decoded = verifyToken(token);
 
-        if (decoded.type !== 'refresh') {
-            return res.status(401).json({ message: 'Invalid token type' });
+        if (decoded.type !== 'refresh' || (decoded.role && decoded.role !== 'user')) {
+            return res.status(401).json({ message: 'Invalid token type or role' });
         }
 
         // Get user
@@ -569,13 +599,18 @@ export const refreshToken = async (req, res) => {
             ? await findIdentityByTokenId(decoded.id)
             : await User.findById(decoded.id);
 
-        if (!user || !user.isActive) {
+        if (!user || !user.isActive || user.suspended || user.banned) {
             return res.status(401).json({ message: 'User not found or inactive' });
         }
 
-        // Generate new access token
-        const accessToken = generateAccessToken(postgresUserIdentityEnabled() ? user.id : user._id, user.role);
-        sendAuthCookies(res, accessToken, token, 'user');
+        // Rotate refresh token and block the old one
+        if (decoded.exp) {
+            await blockToken(token, decoded.exp);
+        }
+        const tokenId = postgresUserIdentityEnabled() ? (user.legacyMongoId || user.id) : user._id;
+        const accessToken = generateAccessToken(tokenId, user.role || 'user');
+        const nextRefreshToken = generateRefreshToken(tokenId, user.role || 'user');
+        sendAuthCookies(res, accessToken, nextRefreshToken, 'user');
 
         res.status(200).json({
             success: true,

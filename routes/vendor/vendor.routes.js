@@ -30,7 +30,13 @@ const router = express.Router();
 // Vendor reads their own promo status (read-only)
 router.get("/promo/delivery-status", vendorAuth, getVendorOwnPromoStatus);
 
-router.post("/create", createVendor);          // Create vendor
+// Legacy unauthenticated vendor creation retired (mass-assignment risk); use /api/vendor/auth/register
+router.post("/create", (_req, res) =>
+  res.status(410).json({
+    success: false,
+    message: "This endpoint is retired. Use POST /api/vendor/auth/register.",
+  })
+);
 
 router.get("/vendor", getVendorForUserDisplay); // Get nearby vendors
 

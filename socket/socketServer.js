@@ -8,6 +8,12 @@ import { registerRiderSocketHandlers } from './rider.socket.js';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { pubClient, subClient, isRedisReady } from '../config/redis.js';
 import { JWT_SECRET } from '../utils/jwt.js';
+import { isTokenBlocked } from '../middleware/tokenBlocklist.js';
+import { findIdentityByTokenId, postgresUserIdentityEnabled, publicUser } from '../services/postgres/userIdentity.repository.js';
+import { findVendorByTokenId, postgresVendorIdentityEnabled, publicVendor } from '../services/postgres/vendorIdentity.repository.js';
+import { usePostgresAdminWrites, usePostgresRiderReads } from '../services/postgres/compat.js';
+import { adminAccountRepository } from '../services/postgres/adminAccount.repository.js';
+import { riderAccountsRepository } from '../services/postgres/riderAccounts.repository.js';
 
 let io;
 
@@ -22,9 +28,13 @@ export async function initializeSocket(server) {
                 'http://localhost',
                 'https://localhost',
                 'capacitor://localhost',
-                // 'http://localhost:3001',
-                // 'http://localhost:5000',
                 'https://grub-dash-frontend-xi.vercel.app',
+                'https://www.melachow.com',
+                'https://melachow.com',
+                'https://admin.melachow.com',
+                'https://vendor.melachow.com',
+                'https://rider.melachow.com',
+                'https://melachow-admin.vercel.app',
                 process.env.CLIENT_URL,
             ].filter(Boolean),
             credentials: true,
@@ -89,6 +99,10 @@ export async function initializeSocket(server) {
                 return next(new Error('Authentication token required'));
             }
 
+            if (await isTokenBlocked(token)) {
+                return next(new Error('Session has been revoked'));
+            }
+
             let decoded;
             try {
                 decoded = jwt.verify(token, JWT_SECRET);
@@ -103,18 +117,32 @@ export async function initializeSocket(server) {
 
             const role = decoded.role || 'user';
             
-            // Resolve identity based on role and available IDs
+            // Resolve identity based on role and active DB provider (PostgreSQL or MongoDB)
             let identity;
             const targetId = decoded.id || decoded.userId || decoded.riderId || decoded.adminId || decoded.vendorId;
 
             if (role === 'rider') {
-                identity = await Rider.findById(targetId).select('-password');
+                identity = usePostgresRiderReads()
+                    ? await riderAccountsRepository.getByToken(targetId)
+                    : await Rider.findById(targetId).select('-password');
             } else if (role === 'vendor') {
-                identity = await Vendor.findById(targetId).select('-password');
-            } else if (role === 'admin' || role === 'super-admin') {
-                identity = await Admin.findById(targetId).select('-password');
+                if (postgresVendorIdentityEnabled()) {
+                    const pgVendor = await findVendorByTokenId(targetId);
+                    identity = pgVendor ? publicVendor(pgVendor) : null;
+                } else {
+                    identity = await Vendor.findById(targetId).select('-password');
+                }
+            } else if (role === 'admin' || role === 'super-admin' || role === 'finance-admin') {
+                identity = usePostgresAdminWrites()
+                    ? await adminAccountRepository.get(targetId)
+                    : await Admin.findById(targetId).select('-password');
             } else {
-                identity = await User.findById(targetId).select('-password');
+                if (postgresUserIdentityEnabled()) {
+                    const pgUser = await findIdentityByTokenId(targetId);
+                    identity = pgUser ? publicUser(pgUser) : null;
+                } else {
+                    identity = await User.findById(targetId).select('-password');
+                }
             }
 
             if (!identity) {
@@ -123,10 +151,11 @@ export async function initializeSocket(server) {
             }
 
             const inactive = identity.deletedAt || identity.suspended || identity.banned ||
-                identity.isActive === false || (role === 'vendor' && identity.active === false);
+                identity.isActive === false ||
+                (role === 'vendor' && (identity.active === false || identity.isApproved === false));
             if (inactive) return next(new Error('Account is inactive'));
 
-            socket.userId   = identity._id.toString();
+            socket.userId   = (identity._id || identity.id).toString();
             socket.userEmail = identity.email || identity.name || identity.phone;
             socket.userRole  = role;
 

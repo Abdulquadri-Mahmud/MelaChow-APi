@@ -388,7 +388,11 @@ app.use([
   '/api/vendor/auth/verify-registration',
   '/api/vendor/auth/verify-otp',
   '/api/vendor/auth/verify-reset-code',
+  '/api/user/auth/verify-account',
+  '/api/vendor/auth/verify-reset',
   '/api/admin/auth/verify-reset-code',
+  '/api/admin/auth/login/verify',
+  '/api/auth/rider/verify-reset-code',
 ], otpLimiter);
 app.use('/api/wallet', walletLimiter);
 app.use('/api/order', orderLimiter);

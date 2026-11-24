@@ -84,6 +84,6 @@ export const broadcastTimeoutWorker = new Worker("broadcast-timeout", async (job
     }
 
 }, {
-    connection: redisConnection,
+    connection: redisConnection.duplicate(),
     concurrency: 10,
 });
