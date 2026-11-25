@@ -63,17 +63,23 @@ export async function verifySourcePickupCode(sourceOrderId, pickupCode, external
       : null;
     const delivery = deliveryByExternalId || deliveryBySourceReference || deliveryBySourceOrder;
     if (!delivery || delivery.dispatchStatus === "terminal") return { message: "Source delivery was not found.", statusCode: 404 };
-    if (deliveryBySourceReference && normalizedExternalDeliveryId && delivery.externalDeliveryId
-      && delivery.externalDeliveryId.toLowerCase() !== normalizedExternalDeliveryId.toLowerCase()) {
-      return { message: "Source delivery was not found.", statusCode: 404 };
+    // Every identifier supplied by Samka must resolve to the same MelaChow
+    // vendor order. Returning a conflict here gives the rider a useful mismatch
+    // message instead of disguising a cross-order request as a missing row.
+    const acceptedSourceOrderIds = new Set([
+      delivery.sourceOrderId,
+      delivery.vendorOrderId,
+      delivery.vendorOrder?.legacyMongoId,
+    ].filter(Boolean).map(String));
+    if (normalizedExternalDeliveryId
+      && String(delivery.externalDeliveryId || "").toLowerCase() !== normalizedExternalDeliveryId.toLowerCase()) {
+      return { message: "This rider delivery does not match the store order. Confirm the order reference with the store before entering the pickup code.", statusCode: 409 };
     }
-    // Samka's delivery UUID is the canonical cross-service link. Keep accepting
-    // the source-order key for older jobs that predate this identifier.
-    if (!deliveryByExternalId && !deliveryBySourceReference
-      && normalizedSourceOrderId !== delivery.sourceOrderId
-      && normalizedSourceOrderId !== delivery.vendorOrderId
-      && normalizedSourceOrderId !== delivery.vendorOrder?.legacyMongoId) {
-      return { message: "Source delivery was not found.", statusCode: 404 };
+    if (normalizedSourceOrderId && !acceptedSourceOrderIds.has(normalizedSourceOrderId)) {
+      return { message: "This rider delivery is linked to a different store order. Confirm the order reference with the store before entering the pickup code.", statusCode: 409 };
+    }
+    if (normalizedSourceOrderReference && normalizedSourceOrderReference !== delivery.sourceOrderReference) {
+      return { message: "This rider delivery has a different order reference. Confirm the order reference with the store before entering the pickup code.", statusCode: 409 };
     }
     assertReady(delivery.vendorOrder);
     const key = `samka_pickup:${delivery.vendorOrderId}`;

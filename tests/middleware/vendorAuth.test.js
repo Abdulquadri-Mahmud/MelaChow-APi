@@ -28,6 +28,7 @@ const mockVendor = {
     storeName: "Test Buka",
     email: "vendor@melachow.com",
     active: true,
+    isApproved: true,
     deletedAt: null,
 };
 

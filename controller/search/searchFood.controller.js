@@ -536,31 +536,36 @@ export const searchFoods = async (req, res) => {
     if (category) {
       const mongoose = (await import("mongoose")).default;
 
-      if (mongoose.isValidObjectId(category)) {
-        // Direct ID match
-        itemQuery.platform_category_id = category;
-      } else {
-        // Name match — find the category doc first
-        const categoryDoc = await Category.findOne({
-          name: { $regex: `^${category.trim()}$`, $options: "i" },
-        })
-          .select("_id")
-          .lean();
+      const categoryDoc = mongoose.isValidObjectId(category)
+        ? await Category.findById(category).select("_id").lean()
+        : await Category.findOne({
+            name: { $regex: `^${category.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, $options: "i" },
+          }).select("_id").lean();
 
-        if (categoryDoc) {
-          itemQuery.platform_category_id = categoryDoc._id;
-        } else {
-          // Category not found → return empty, don't crash
-          return res.status(200).json({
-            success: true,
-            count: 0,
-            total: 0,
-            data: [],
-            vendors: [],
-            city: userCity || "Unknown",
-            state: userState || "Unknown",
-          });
+      if (categoryDoc) {
+        // Include nested menu categories when a parent is selected on Home.
+        const categoryIds = [categoryDoc._id];
+        let parentIds = [categoryDoc._id];
+        while (parentIds.length) {
+          const children = await Category.find({ parent: { $in: parentIds } }).select("_id").lean();
+          const nextIds = children
+            .map((child) => child._id)
+            .filter((id) => !categoryIds.some((existing) => existing.equals(id)));
+          categoryIds.push(...nextIds);
+          parentIds = nextIds;
         }
+        itemQuery.platform_category_id = { $in: categoryIds };
+      } else {
+        // Category not found → return empty, don't crash
+        return res.status(200).json({
+          success: true,
+          count: 0,
+          total: 0,
+          data: [],
+          vendors: [],
+          city: userCity || "Unknown",
+          state: userState || "Unknown",
+        });
       }
     }
 

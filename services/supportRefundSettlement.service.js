@@ -46,6 +46,7 @@ export async function settleSupportRefund({ ticketId, refundAmount, liabilities,
     const customerWallet = await getWallet(order.userId, "User", session);
     const vendorOrders = await VendorOrder.find({ userOrderId: order._id }).session(session);
     const settlementLiabilities = [];
+    let recoveredFromPartnerWallets = 0;
 
     for (const input of liabilities) {
       const share = round(input.amount);
@@ -73,6 +74,7 @@ export async function settleSupportRefund({ ticketId, refundAmount, liabilities,
           wallet.transactions.push({ type: "debit", amount: remaining, transactionType: "manual_debit", description: "Support refund liability for order " + order.orderId, orderId: order._id });
           await wallet.save({ session });
           recoveredAmount += remaining;
+          recoveredFromPartnerWallets = round(recoveredFromPartnerWallets + remaining);
           recoverySource = "wallet";
         }
       } else if (input.party === "rider") {
@@ -83,14 +85,19 @@ export async function settleSupportRefund({ ticketId, refundAmount, liabilities,
         wallet.transactions.push({ type: "debit", amount: share, transactionType: "manual_debit", description: "Support refund liability for order " + order.orderId, orderId: order._id });
         await wallet.save({ session });
         recoveredAmount = share;
+        recoveredFromPartnerWallets = round(recoveredFromPartnerWallets + share);
         recoverySource = "wallet";
       }
       settlementLiabilities.push({ party: input.party, partyId, amount: share, recoverySource, recoveredAmount, outstandingAmount: 0 });
     }
 
-    adminWallet.balance = round(adminWallet.balance - amount);
-    adminWallet.transactions.push({ type: "debit", amount, transactionType: "refund", description: "Customer wallet refund for support ticket " + ticket.ticketNumber, orderId: order._id });
-    await adminWallet.save({ session });
+    // Only debit adminWallet for the portion funded by platform/escrow (not already debited from partner wallets)
+    const netAdminDebit = round(Math.max(0, amount - recoveredFromPartnerWallets));
+    if (netAdminDebit > 0) {
+      adminWallet.balance = round(adminWallet.balance - netAdminDebit);
+      adminWallet.transactions.push({ type: "debit", amount: netAdminDebit, transactionType: "refund", description: "Customer wallet refund for support ticket " + ticket.ticketNumber, orderId: order._id });
+      await adminWallet.save({ session });
+    }
     customerWallet.balance = round(customerWallet.balance + amount);
     customerWallet.transactions.push({ type: "credit", amount, transactionType: "refund", description: "Support refund for order " + order.orderId, orderId: order._id });
     await customerWallet.save({ session });

@@ -3,6 +3,7 @@ import { bullmqRedisConnection } from '../config/redis.js';
 import { QUEUE_NAMES } from '../config/queue.js';
 import logger from '../config/logger.js';
 import { refundOrderToWallet, refundVendorOrderToWallet } from '../services/refund.service.js';
+import { usePostgresOrderWrites } from '../services/postgres/compat.js';
 import { broadcastTimeoutWorker } from './broadcastTimeout.worker.js';
 import './deliveryWatchdog.worker.js';
 import './disputeEscalation.worker.js';
@@ -58,6 +59,11 @@ const orderAutoCancelWorker = new Worker(
     QUEUE_NAMES.ORDER_AUTO_CANCEL,
     async (job) => {
         const { orderId, orderCode, vendorOrderId } = job.data;
+
+        if (usePostgresOrderWrites()) {
+            logger.info({ orderId, vendorOrderId }, 'Skipping Mongo order-auto-cancel worker in PostgreSQL mode (handled by cancelStalePostgresOrders cron)');
+            return;
+        }
 
         logger.info({ orderId, vendorOrderId }, 'Checking vendor order for auto-cancellation');
 

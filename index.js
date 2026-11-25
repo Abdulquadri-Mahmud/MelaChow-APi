@@ -51,6 +51,7 @@ import bannerRoutes from "./routes/Admin/banner.routes.js";
 import platformConfigPublicRoutes from "./routes/public/platformConfig.public.routes.js";
 import samkaLogisticsRoutes from "./routes/integrations/samkaLogistics.routes.js";
 import samkaLogisticsAdminRoutes from "./routes/Admin/samkaLogisticsAdmin.routes.js";
+import callRoutes from "./routes/call.routes.js";
 import supportTicketRoutes from "./routes/supportTicket.routes.js";
 import qrRoutes from "./routes/qr.routes.js";
 import adminSupportTicketRoutes from "./routes/Admin/supportTicket.routes.js";
@@ -102,6 +103,9 @@ const allowedOrigins = [
   'https://melachow.com',
   'http://localhost:3000',
   'http://localhost:3001',
+  ...(process.env.NODE_ENV !== 'production'
+    ? ['http://localhost:3100', 'http://localhost:3101', 'http://localhost:3102']
+    : []),
   'http://localhost:3002',
   'http://localhost:3003',
   'http://localhost:3004',
@@ -388,7 +392,11 @@ app.use([
   '/api/vendor/auth/verify-registration',
   '/api/vendor/auth/verify-otp',
   '/api/vendor/auth/verify-reset-code',
+  '/api/user/auth/verify-account',
+  '/api/vendor/auth/verify-reset',
   '/api/admin/auth/verify-reset-code',
+  '/api/admin/auth/login/verify',
+  '/api/auth/rider/verify-reset-code',
 ], otpLimiter);
 app.use('/api/wallet', walletLimiter);
 app.use('/api/order', orderLimiter);
@@ -426,6 +434,15 @@ app.use('/api/categories', categoryRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/locations', publicLocationRoutes);
 app.use('/api/notifications', notificationRoutes);
+const callLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many call requests, please try again shortly.' },
+});
+
+app.use('/api/calls', callLimiter, callRoutes);
 app.use('/api/socket', socketHealthRoutes);
 app.use("/api/promos", publicPromoRoutes);
 app.use("/api/banners", bannerRoutes);
@@ -478,7 +495,7 @@ app.use("/v1/cart", cartRoutes);
 
 // Ã¢Å“â€¦ DEBUG: Log registered auth routes (dev only)
 if (process.env.NODE_ENV !== 'production') {
-  console.log('\nÃ°Å¸â€Â Registered User Auth Routes (/api/user/auth):');
+  console.log('\nRegistered User Auth Routes (/api/user/auth):');
   // Note: userRoutes is a router, so we can inspect its stack
   // Since it's mounted, we can only see paths relative to mount point
   userRoutes.stack.forEach(layer => {

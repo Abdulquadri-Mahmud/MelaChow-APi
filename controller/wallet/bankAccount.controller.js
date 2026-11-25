@@ -1,6 +1,8 @@
 import axios from "axios";
 import Vendor from "../../model/vendor/vendor.model.js";
 import { fetchBankList, resolveBankAccount as resolveAccountService, createTransferRecipient, deleteTransferRecipient } from "../../services/bank.service.js";
+import { usePostgresPayoutWrites } from "../../services/postgres/compat.js";
+import { payoutRepository } from "../../services/postgres/payout.repository.js";
 
 const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY;
 const PAYSTACK_BASE_URL = "https://api.paystack.co";
@@ -67,6 +69,34 @@ export const saveBankAccount = async (req, res) => {
 
     if (!bank_name || !bank_code || !account_number || !account_name) {
       return res.status(400).json({ message: "All fields are required: bank_name, bank_code, account_number, account_name" });
+    }
+
+    if (usePostgresPayoutWrites()) {
+      const context = await payoutRepository.getOwnerContext("vendor", req.vendor._id);
+      if (!context?.owner) return res.status(404).json({ message: "Vendor not found" });
+      const existing = context.owner.payoutDetails && typeof context.owner.payoutDetails === "object" ? context.owner.payoutDetails : {};
+      if (existing.payoutEnabled && existing.accountNumber) {
+        return res.status(403).json({
+          message: "Bank account details are already registered and cannot be changed self-service. Please contact MelaChow support to update your payout account.",
+          code: "BANK_DETAILS_LOCKED"
+        });
+      }
+      const recipient_code = useLocalPayoutBypass()
+        ? `local_${bank_code}_${String(account_number).slice(-4)}`
+        : await createTransferRecipient({ name: account_name, account_number, bank_code });
+      await payoutRepository.updateOwnerPayoutDetails("vendor", req.vendor._id, {
+        bankName: bank_name,
+        bankCode: bank_code,
+        accountName: account_name,
+        accountNumber: account_number,
+        recipientCode: recipient_code,
+        payoutMethod: "paystack",
+        payoutEnabled: true,
+      });
+      return res.json({
+        message: "Bank account registered successfully",
+        bank: { bankName: bank_name, accountName: account_name, accountNumber: account_number },
+      });
     }
 
     const vendor = await Vendor.findById(req.vendor._id).select("+payoutDetails");

@@ -105,7 +105,7 @@ const getMinPayoutBalance = async () => {
 
 // ── Queue & Scheduler ─────────────────────────────────────────────────────────
 export const scheduledPayoutQueue = new Queue(QUEUE_NAME, {
-    connection: bullmqRedisConnection,
+    connection: bullmqRedisConnection.duplicate(),
     defaultJobOptions: {
         // ── LOOPHOLE 5 FIX ────────────────────────────────────────────────────
         // attempts: was 2 — audit requires minimum 3 for financial operations
@@ -282,7 +282,7 @@ const processPayoutJob = async (job) => {
 };
 
 export const scheduledPayoutWorker = new Worker(QUEUE_NAME, processPayoutJob, {
-    connection: bullmqRedisConnection,
+    connection: bullmqRedisConnection.duplicate(),
     concurrency: 5,
 });
 
@@ -439,11 +439,12 @@ export const triggerScheduledPayouts = async (actorType = "all") => {
     console.log(`🕗 [ScheduledPayout] Starting ${actorType} payout sweep...`);
     const today = new Date().toDateString(); // e.g. "Sat Apr 19 2026"
 
-    // Clean old completed/failed jobs from Redis to release deduplication locks for retries
+    // Clean only completed/failed jobs older than 24h so same-day jobId deduplication stays intact
     try {
-        await scheduledPayoutQueue.clean(0, 1000, "completed");
-        await scheduledPayoutQueue.clean(0, 1000, "failed");
-        console.log(`🕗 [ScheduledPayout] Cleaned old completed/failed queue jobs from Redis`);
+        const oneDayMs = 24 * 60 * 60 * 1000;
+        await scheduledPayoutQueue.clean(oneDayMs, 1000, "completed");
+        await scheduledPayoutQueue.clean(oneDayMs, 1000, "failed");
+        console.log(`🕗 [ScheduledPayout] Cleaned old (>24h) completed/failed queue jobs from Redis`);
     } catch (cleanErr) {
         console.warn(`⚠️ [ScheduledPayout] Failed to clean queue: ${cleanErr.message}`);
     }

@@ -219,6 +219,7 @@ export const initiateWithdrawal = async (req, res) => {
             Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
             "Content-Type": "application/json",
           },
+                    timeout: 15000,
         }
       );
 
@@ -299,7 +300,7 @@ export const getWithdrawalHistory = async (req, res) => {
     return res.json({ withdrawals });
   } catch (error) {
     console.error("Get Withdrawal History Error:", error);
-    return res.status(500).json({ message: "Failed to fetch withdrawal history", error: error.message, stack: error.stack });
+    return res.status(500).json({ message: "Failed to fetch withdrawal history" });
   }
 };
 
@@ -586,6 +587,7 @@ export const approvePendingWithdrawal = async (req, res) => {
             Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
             "Content-Type": "application/json",
           },
+                    timeout: 15000,
         }
       );
 

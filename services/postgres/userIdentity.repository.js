@@ -98,31 +98,51 @@ export const registerIdentity = async ({ email, firstname, lastname, phone, otp,
   return { conflict: false, user };
 };
 
-export const verifyIdentity = async ({ email, otp }) => {
+export const verifyIdentity = async ({ email, otp, setupToken = null, setupExpires = null }) => {
   const user = await findIdentityByEmail(email);
   if (!user) return { error: "not_found" };
   if (String(user.otp || "").trim() !== String(otp).trim()) return { error: "invalid_otp" };
   if (!user.otpExpires || user.otpExpires < new Date()) return { error: "expired_otp" };
   const updated = await prisma.user.update({
     where: { id: user.id },
-    data: { isVerified: true, otp: null, otpExpires: null },
+    data: {
+      isVerified: true,
+      otp: null,
+      otpExpires: null,
+      ...(setupToken ? { resetPasswordToken: setupToken, resetPasswordExpires: setupExpires } : {}),
+    },
     include: includeAddresses,
   });
-  MongoUser.updateOne({ email: user.email }, { $set: { isVerified: true }, $unset: { otp: 1, otpExpires: 1 } })
-    .catch((error) => console.error("[user-identity] Mongo verification mirror failed:", error.message));
+  MongoUser.updateOne(
+    { email: user.email },
+    {
+      $set: {
+        isVerified: true,
+        ...(setupToken ? { resetPasswordToken: setupToken, resetPasswordExpires: setupExpires } : {}),
+      },
+      $unset: { otp: 1, otpExpires: 1 },
+    }
+  ).catch((error) => console.error("[user-identity] Mongo verification mirror failed:", error.message));
   return { user: updated };
 };
 
-export const setIdentityPassword = async ({ email, password }) => {
+export const setIdentityPassword = async ({ email, password, setupToken }) => {
   const user = await findIdentityByEmail(email);
   if (!user || !user.isVerified) return { error: "not_found" };
   if (user.password) return { error: "already_set" };
+  if (!setupToken || !user.resetPasswordToken || user.resetPasswordToken !== setupToken || !user.resetPasswordExpires || user.resetPasswordExpires < new Date()) {
+    return { error: "invalid_setup" };
+  }
   const passwordHash = await bcrypt.hash(password, 12);
   const updated = await prisma.user.update({
-    where: { id: user.id }, data: { password: passwordHash, lastLogin: new Date() }, include: includeAddresses,
+    where: { id: user.id },
+    data: { password: passwordHash, resetPasswordToken: null, resetPasswordExpires: null, lastLogin: new Date() },
+    include: includeAddresses,
   });
-  MongoUser.updateOne({ email: user.email }, { $set: { password: passwordHash, lastLogin: new Date() } })
-    .catch((error) => console.error("[user-identity] Mongo password mirror failed:", error.message));
+  MongoUser.updateOne(
+    { email: user.email },
+    { $set: { password: passwordHash, lastLogin: new Date() }, $unset: { resetPasswordToken: 1, resetPasswordExpires: 1 } }
+  ).catch((error) => console.error("[user-identity] Mongo password mirror failed:", error.message));
   return { user: updated };
 };
 

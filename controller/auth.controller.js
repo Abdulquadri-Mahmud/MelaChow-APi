@@ -7,9 +7,14 @@ import { blockToken } from "../middleware/tokenBlocklist.js";
  */
 export const logout = async (req, res) => {
     try {
-        // Block the current token if it exists
-        const token = req.cookies?.token;
-        if (token) {
+        const isProduction = process.env.NODE_ENV === "production";
+        const tokensToBlock = [
+            req.cookies?.token,
+            req.cookies?.refreshToken,
+            req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice(7) : null,
+        ].filter(Boolean);
+
+        for (const token of tokensToBlock) {
             try {
                 const decoded = jwt.decode(token);
                 if (decoded?.exp) {
@@ -20,20 +25,15 @@ export const logout = async (req, res) => {
             }
         }
 
-        // ✅ Clear the authentication cookie
-        res.clearCookie("token", {
+        // ✅ Clear the authentication cookies with matching attributes
+        const clearOpts = {
             httpOnly: true,
-            secure: true,
-            sameSite: "none",
+            secure: isProduction,
+            sameSite: isProduction ? "none" : "lax",
             path: "/",
-            // ❌ NO domain attribute (same as when it was set)
-        });
-        res.clearCookie('refreshToken', {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-            path: '/',
-        });
+        };
+        res.clearCookie("token", clearOpts);
+        res.clearCookie("refreshToken", clearOpts);
 
         // ✅ Debug logging
         if (process.env.NODE_ENV !== 'production') {

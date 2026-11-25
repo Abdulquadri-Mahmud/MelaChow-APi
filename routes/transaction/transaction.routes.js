@@ -10,8 +10,13 @@ import auth from "../../middleware/auth.middleware.js";
 
 const router = express.Router();
 
-// Initialize a new transaction
-router.post("/initialize", auth, initializePayment);
+// Legacy transaction initialization retired (accepted client-supplied amount); use /api/orders/v2/create
+router.post("/initialize", auth, (_req, res) =>
+    res.status(410).json({
+        success: false,
+        message: "This legacy endpoint is retired. Use POST /api/orders/v2/create.",
+    })
+);
 
 // Verify transaction after Paystack redirect
 router.get("/verify", auth, verifyPayment);

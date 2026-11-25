@@ -230,4 +230,101 @@ export const walletRepository = {
       data: { bankName, accountNumber, accountName, payoutEnabled: !!payoutEnabled },
     };
   },
+
+  async fundUserWalletFromPaystack({ userId, reference, amountKobo, providerPayload = {} }) {
+    const resolvedUserId = await resolveOwnerId("User", userId);
+    if (!resolvedUserId) {
+      const error = new Error("User not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    try {
+      return await prisma.$transaction(async (tx) => {
+        await tx.paymentAttempt.create({
+          data: {
+            reference,
+            provider: "paystack",
+            userId: resolvedUserId,
+            status: "success",
+            recoveryState: "recovered",
+            expectedAmount: BigInt(amountKobo),
+            expectedAmountKobo: BigInt(amountKobo),
+            paidAmount: BigInt(amountKobo),
+            paidAmountKobo: BigInt(amountKobo),
+            currency: "NGN",
+            providerStatus: "success",
+            providerPayload,
+            events: [{ type: "wallet_funding_verified", message: `Wallet funded via ${reference}`, metadata: { type: "wallet_funding" }, at: new Date().toISOString() }],
+          },
+        });
+
+        const wallet = await tx.wallet.upsert({
+          where: { ownerId_ownerModel: { ownerId: resolvedUserId, ownerModel: "User" } },
+          create: { ownerId: resolvedUserId, ownerModel: "User", balance: BigInt(amountKobo), totalEarned: 0n, totalWithdrawn: 0n },
+          update: { balance: { increment: BigInt(amountKobo) } },
+          include: walletInclude,
+        });
+
+        await tx.walletTransaction.create({
+          data: {
+            walletId: wallet.id,
+            type: "credit",
+            amount: BigInt(amountKobo),
+            transactionType: "top_up",
+            description: `Wallet funding via ${reference}`,
+            metadata: { reference, source: "paystack_wallet_funding" },
+          },
+        });
+
+        const updated = await tx.wallet.findUnique({
+          where: { id: wallet.id },
+          include: walletInclude,
+        });
+
+        return { alreadyCredited: false, wallet: walletShape(updated) };
+      }, { isolationLevel: "Serializable" });
+    } catch (error) {
+      if (error?.code === "P2002") {
+        const existingAttempt = await prisma.paymentAttempt.findUnique({ where: { reference }, select: { userId: true } });
+        if (existingAttempt && existingAttempt.userId !== resolvedUserId) {
+          const conflict = new Error("This payment reference has already been used.");
+          conflict.statusCode = 409;
+          throw conflict;
+        }
+        const wallet = await getWallet("User", resolvedUserId);
+        return { alreadyCredited: true, wallet: wallet ? walletShape(wallet) : null };
+      }
+      throw error;
+    }
+  },
+
+  async creditUserWalletAdmin({ userId, amountNaira, reason }) {
+    const resolvedUserId = await resolveOwnerId("User", userId);
+    if (!resolvedUserId) {
+      const error = new Error("User not found");
+      error.statusCode = 404;
+      throw error;
+    }
+    const amountKobo = BigInt(Math.round(Number(amountNaira) * 100));
+    return prisma.$transaction(async (tx) => {
+      const wallet = await tx.wallet.upsert({
+        where: { ownerId_ownerModel: { ownerId: resolvedUserId, ownerModel: "User" } },
+        create: { ownerId: resolvedUserId, ownerModel: "User", balance: amountKobo, totalEarned: 0n, totalWithdrawn: 0n },
+        update: { balance: { increment: amountKobo } },
+      });
+      await tx.walletTransaction.create({
+        data: {
+          walletId: wallet.id,
+          type: "credit",
+          amount: amountKobo,
+          transactionType: "manual_credit",
+          description: `Refund/Adjustment: ${reason}`,
+          metadata: { source: "admin_wallet_credit" },
+        },
+      });
+      const updated = await tx.wallet.findUnique({ where: { id: wallet.id }, include: walletInclude });
+      return walletShape(updated);
+    });
+  },
 };

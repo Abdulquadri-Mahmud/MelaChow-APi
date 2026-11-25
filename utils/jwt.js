@@ -2,9 +2,9 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 
 export const JWT_SECRET = process.env.JWT_SECRET;
-// Keep signed-in sessions usable across browser refreshes. Refresh tokens still
-// provide the longer 30-day recovery window.
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '7d';
+// Short-lived access tokens limit blast radius; 30-day refresh tokens handle
+// silent session renewal via /api/*/auth/refresh.
+const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '1h';
 const REFRESH_TOKEN_EXPIRES_IN = '30d'; // 30 days
 
 const requireJwtSecret = () => {

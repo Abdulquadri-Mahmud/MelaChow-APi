@@ -5,9 +5,17 @@ import Vendor from '../model/vendor/vendor.model.js';
 import Admin from '../model/Admin/admin.model.js';
 import Rider from '../model/rider.model.js';
 import { registerRiderSocketHandlers } from './rider.socket.js';
+import { registerCallSocketHandlers } from './call.socket.js';
+import { verifySamkaRiderCallToken } from '../services/call/callAuth.service.js';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { pubClient, subClient, isRedisReady } from '../config/redis.js';
 import { JWT_SECRET } from '../utils/jwt.js';
+import { isTokenBlocked } from '../middleware/tokenBlocklist.js';
+import { findIdentityByTokenId, postgresUserIdentityEnabled, publicUser } from '../services/postgres/userIdentity.repository.js';
+import { findVendorByTokenId, postgresVendorIdentityEnabled, publicVendor } from '../services/postgres/vendorIdentity.repository.js';
+import { usePostgresAdminWrites, usePostgresRiderReads } from '../services/postgres/compat.js';
+import { adminAccountRepository } from '../services/postgres/adminAccount.repository.js';
+import { riderAccountsRepository } from '../services/postgres/riderAccounts.repository.js';
 
 let io;
 
@@ -22,9 +30,13 @@ export async function initializeSocket(server) {
                 'http://localhost',
                 'https://localhost',
                 'capacitor://localhost',
-                // 'http://localhost:3001',
-                // 'http://localhost:5000',
                 'https://grub-dash-frontend-xi.vercel.app',
+                'https://www.melachow.com',
+                'https://melachow.com',
+                'https://admin.melachow.com',
+                'https://vendor.melachow.com',
+                'https://rider.melachow.com',
+                'https://melachow-admin.vercel.app',
                 process.env.CLIENT_URL,
             ].filter(Boolean),
             credentials: true,
@@ -89,6 +101,27 @@ export async function initializeSocket(server) {
                 return next(new Error('Authentication token required'));
             }
 
+            // Check for short-lived Samka Rider Call Token (minted by SamkaTech.Logistics)
+            try {
+                const samkaActor = verifySamkaRiderCallToken(token);
+                if (samkaActor) {
+                    socket.userId = samkaActor.riderId;
+                    socket.riderId = samkaActor.riderId;
+                    socket.riderName = samkaActor.name;
+                    socket.userEmail = samkaActor.name;
+                    socket.userRole = 'samka_rider';
+                    console.log(`✅ Socket authenticated: samka_rider ${socket.riderId} (${socket.id})`);
+                    return next();
+                }
+            } catch (samkaErr) {
+                console.error('❌ Socket Auth Failed: Invalid Samka rider call token', samkaErr.message);
+                return next(new Error('Authentication failed'));
+            }
+
+            if (await isTokenBlocked(token)) {
+                return next(new Error('Session has been revoked'));
+            }
+
             let decoded;
             try {
                 decoded = jwt.verify(token, JWT_SECRET);
@@ -103,18 +136,39 @@ export async function initializeSocket(server) {
 
             const role = decoded.role || 'user';
             
-            // Resolve identity based on role and available IDs
+            // Resolve identity based on role and active DB provider (PostgreSQL or MongoDB)
             let identity;
             const targetId = decoded.id || decoded.userId || decoded.riderId || decoded.adminId || decoded.vendorId;
 
             if (role === 'rider') {
-                identity = await Rider.findById(targetId).select('-password');
+                identity = usePostgresRiderReads()
+                    ? await riderAccountsRepository.getByToken(targetId)
+                    : await Rider.findById(targetId).select('-password');
             } else if (role === 'vendor') {
-                identity = await Vendor.findById(targetId).select('-password');
-            } else if (role === 'admin' || role === 'super-admin') {
-                identity = await Admin.findById(targetId).select('-password');
+                if (postgresVendorIdentityEnabled()) {
+                    const pgVendor = await findVendorByTokenId(targetId);
+                    identity = pgVendor ? publicVendor(pgVendor) : null;
+                } else {
+                    identity = await Vendor.findById(targetId).select('-password');
+                }
+            } else if (role === 'admin' || role === 'super-admin' || role === 'finance-admin') {
+                identity = usePostgresAdminWrites()
+                    ? await adminAccountRepository.get(targetId)
+                    : await Admin.findById(targetId).select('-password');
             } else {
-                identity = await User.findById(targetId).select('-password');
+                if (postgresUserIdentityEnabled()) {
+                    const pgUser = await findIdentityByTokenId(targetId);
+                    identity = pgUser ? publicUser(pgUser) : null;
+                    if (pgUser) {
+                        socket.postgresUserId = String(pgUser.id);
+                        socket.userName = pgUser.fullName || [pgUser.firstname, pgUser.lastname].filter(Boolean).join(' ').trim() || 'Customer';
+                    }
+                } else {
+                    identity = await User.findById(targetId).select('-password');
+                    if (identity) {
+                        socket.userName = identity.fullName || identity.name || [identity.firstname, identity.lastname].filter(Boolean).join(' ').trim() || 'Customer';
+                    }
+                }
             }
 
             if (!identity) {
@@ -123,10 +177,11 @@ export async function initializeSocket(server) {
             }
 
             const inactive = identity.deletedAt || identity.suspended || identity.banned ||
-                identity.isActive === false || (role === 'vendor' && identity.active === false);
+                identity.isActive === false ||
+                (role === 'vendor' && (identity.active === false || identity.isApproved === false));
             if (inactive) return next(new Error('Account is inactive'));
 
-            socket.userId   = identity._id.toString();
+            socket.userId   = (identity._id || identity.id).toString();
             socket.userEmail = identity.email || identity.name || identity.phone;
             socket.userRole  = role;
 
@@ -143,11 +198,24 @@ export async function initializeSocket(server) {
     io.on('connection', async (socket) => {
         console.log(`🔌 Client connected: ${socket.id} | Role: ${socket.userRole} | User: ${socket.userEmail}`);
 
+        // Register Voice Calling Signaling Handlers (Customer + Samka Rider)
+        registerCallSocketHandlers(io, socket);
+
+        // Samka Riders only use the calling signaling channel and join their dedicated room
+        if (socket.userRole === 'samka_rider' && socket.riderId) {
+            socket.join(`samka_rider_${socket.riderId}`);
+            console.log(`🛵 Samka Rider ${socket.riderId} joined calling room: samka_rider_${socket.riderId}`);
+            return;
+        }
+
         // Register Rider Specific Handlers
         registerRiderSocketHandlers(io, socket);
 
         // Join personal room (used by emitToUser, emitToAdmin)
         socket.join(`user_${socket.userId}`);
+        if (socket.postgresUserId && socket.postgresUserId !== socket.userId) {
+            socket.join(`user_${socket.postgresUserId}`);
+        }
         console.log(`👤 ${socket.userRole} ${socket.userId} joined personal room`);
 
         // ── Rider room handlers ────────────────────────────────────────────
@@ -371,6 +439,15 @@ export function emitToRider(riderId, event, data) {
     // Match the room format used in rider_connect
     io.to(`rider:${riderId}`).emit(event, data);
     console.log(`📤 Emitted '${event}' to rider ${riderId}`);
+}
+
+/**
+ * Emit event to a connected Samka Rider (voice calling signaling)
+ */
+export function emitToSamkaRider(riderId, event, data) {
+    if (!io || !riderId) return;
+    io.to(`samka_rider_${riderId}`).emit(event, data);
+    console.log(`📤 Emitted '${event}' to Samka rider ${riderId}`);
 }
 
 /**

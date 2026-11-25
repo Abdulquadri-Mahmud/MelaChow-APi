@@ -10,7 +10,7 @@ import {
     getRecentActivities,
     getMe
 } from "../../controller/Admin/admin.controller.js";
-import { adminAuth, superAdminOnly } from '../../middleware/adminAuth.js';
+import { adminAuth, financeAdminOnly, superAdminOnly } from '../../middleware/adminAuth.js';
 import { getOperationalVelocity } from "../../controller/Admin/dashboard.controller.js";
 import { getVendorMetrics } from "../../controller/Admin/vendorMetrics.controller.js";
 import { getUserMetrics } from "../../controller/Admin/userMetrics.controller.js";
@@ -60,12 +60,17 @@ router.get("/categories/metrics", adminAuth, getCategoryMetrics);
 // Location Management Routes
 router.get("/locations/metrics", adminAuth, getLocationMetrics);
 
-// Auth routes
+// Auth routes (legacy passwordless/non-MFA routes retired; use /api/admin/auth/*)
+const retiredAdminAuth = (_req, res) =>
+    res.status(410).json({
+        success: false,
+        message: "This legacy admin auth endpoint is retired. Use /api/admin/auth/*.",
+    });
 router.post('/register', superAdminOnly, registerAdmin);
-router.post("/login", loginAdmin);
-router.post("/forgot-password", forgotPassword);
-router.post("/reset-password", resetPassword);
-router.post("/logout", logoutAdmin);
+router.post("/login", retiredAdminAuth);
+router.post("/forgot-password", retiredAdminAuth);
+router.post("/reset-password", retiredAdminAuth);
+router.post("/logout", retiredAdminAuth);
 
 // Admin management
 router.get("/me", adminAuth, getMe);
@@ -117,27 +122,27 @@ router.get("/vendors/performance", adminAuth, getVendorPerformance);
 router.get("/vendors/foods", adminAuth, getVendorFoods);
 
 // Withdrawal/Payout Oversight Routes
-router.get("/finance/withdrawals", adminAuth, getAdminWithdrawals);
-router.post("/finance/withdrawals/:id/retry", adminAuth, retryWithdrawal);
-router.patch("/finance/withdrawals/:id/approve", adminAuth, approvePendingWithdrawal);
+router.get("/finance/withdrawals", financeAdminOnly, getAdminWithdrawals);
+router.post("/finance/withdrawals/:id/retry", financeAdminOnly, retryWithdrawal);
+router.patch("/finance/withdrawals/:id/approve", financeAdminOnly, approvePendingWithdrawal);
 router.patch('/withdrawals/:withdrawalId/force-fail', superAdminOnly, forceFailWithdrawal);
 
 // Finance Summary Routes
-router.get("/finance/wallet-breakdown", adminAuth, getAdminWalletBreakdown);
-router.get("/finance/payout-history", adminAuth, getPayoutHistory);
+router.get("/finance/wallet-breakdown", financeAdminOnly, getAdminWalletBreakdown);
+router.get("/finance/payout-history", financeAdminOnly, getPayoutHistory);
 
 // Platform Configuration
 router.get("/platform-config", adminAuth, getAdminPlatformConfig);
-router.put('/platform-config', adminAuth, updateAdminPlatformConfig);
+router.put('/platform-config', superAdminOnly, updateAdminPlatformConfig);
 router.get("/delivery-pricing", superAdminOnly, getDeliveryPricingConfig);
 router.get("/delivery-pricing/locations/autocomplete", superAdminOnly, autocompleteDeliveryAddress);
 router.get("/delivery-pricing/locations/place/:placeId", superAdminOnly, getDeliveryPlaceDetails);
 router.put("/delivery-pricing/global", superAdminOnly, updateGlobalDeliveryPricing);
 router.put("/delivery-pricing/vendors/:vendorId", superAdminOnly, updateVendorDeliveryLocation);
 
-// Manual payout trigger — admin only, fires the same sweep as the nightly cron
+// Manual payout trigger — finance/super admin only, fires the same sweep as the nightly cron
 // POST /api/admin/payouts/trigger?type=rider|vendor|all
-router.post("/payouts/trigger", adminAuth, async (req, res) => {
+router.post("/payouts/trigger", financeAdminOnly, async (req, res) => {
     const { type = "all" } = req.query;
     if (!["rider", "vendor", "all"].includes(type)) {
         return res.status(400).json({ success: false, message: "type must be rider, vendor, or all" });

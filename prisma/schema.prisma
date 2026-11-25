@@ -1936,3 +1936,39 @@ model DeliveryOtpSession {
   @@map("delivery_otp_sessions")
 }
 
+
+model CallSession {
+  id                  String    @id @default(uuid()) @db.Uuid
+  orderId             String    @map("order_id") @db.Uuid
+  vendorOrderId       String    @map("vendor_order_id") @db.Uuid
+  logisticsDeliveryId String?   @map("logistics_delivery_id") @db.Uuid
+  externalDeliveryId  String?   @map("external_delivery_id") @db.Uuid
+  customerId          String    @map("customer_id") @db.Uuid
+  riderId             String    @map("rider_id")
+  riderProvider       String    @default("samka") @map("rider_provider")
+  callerRole          String    @map("caller_role")
+  calleeRole          String    @map("callee_role")
+  customerDisplayName String    @default("Customer") @map("customer_display_name")
+  riderDisplayName    String    @default("Rider") @map("rider_display_name")
+  riderAvatarUrl      String?   @map("rider_avatar_url")
+  orderCode           String    @map("order_code")
+  status              String    @default("initiating")
+  endReason           String?   @map("end_reason")
+  endedByRole         String?   @map("ended_by_role")
+  ringingAt           DateTime? @map("ringing_at")
+  acceptedAt          DateTime? @map("accepted_at")
+  connectedAt         DateTime? @map("connected_at")
+  endedAt             DateTime? @map("ended_at")
+  expiresAt           DateTime  @map("expires_at")
+  durationSeconds     Int?      @map("duration_seconds")
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  @@index([orderId, status])
+  @@index([vendorOrderId, status])
+  @@index([externalDeliveryId, status])
+  @@index([customerId, status])
+  @@index([riderId, status])
+  @@index([status, expiresAt])
+  @@map("call_sessions")
+}

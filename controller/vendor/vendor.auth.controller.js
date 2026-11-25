@@ -3,7 +3,7 @@ import { generateAccessToken, generateRefreshToken, generateOTP, generateResetTo
 import { sendMail } from '../../config/mailer.js';
 import { sendAuthCookies } from '../../utils/sendTokenCookie.js';
 import jwt from "jsonwebtoken";
-import { blockToken } from "../../middleware/tokenBlocklist.js";
+import { blockToken, isTokenBlocked } from "../../middleware/tokenBlocklist.js";
 import { createTransferRecipient, resolveBankAccount } from '../../services/bank.service.js';
 import { validateVendorLocation } from '../../services/locationService.js';
 import {
@@ -163,11 +163,6 @@ export const registerVendor = async (req, res) => {
       });
     }
 
-    const existingVendor = await Vendor.findOne({ email: normalizedEmail });
-    if (existingVendor && existingVendor.verified) {
-      return res.status(400).json({ message: 'Email already registered' });
-    }
-
     // Generate OTP
     const otp = generateOTP();
     const otpExpires = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
@@ -202,6 +197,11 @@ export const registerVendor = async (req, res) => {
         message: 'Verification code sent to your email', email: normalizedEmail,
         ...(process.env.NODE_ENV !== 'production' && !process.env.RESEND_API_KEY ? { devOtp: otp } : {}),
       });
+    }
+
+    const existingVendor = await Vendor.findOne({ email: normalizedEmail });
+    if (existingVendor && existingVendor.verified) {
+      return res.status(400).json({ message: 'Email already registered' });
     }
 
     if (existingVendor) {
@@ -735,7 +735,13 @@ export const resetVendorPasswordNew = async (req, res) => {
     if (postgresVendorIdentityEnabled()) {
       const result = await completeVendorPasswordResetIdentity({ email, resetToken, password: newPassword });
       if (result.error) return res.status(400).json({ message: 'Invalid or expired reset token' });
-      const tokenId = result.vendor.id;
+      if (result.vendor.suspended || !result.vendor.active) {
+        return res.status(403).json({ success: false, message: 'Password reset successful, but your account is suspended or inactive.' });
+      }
+      if (!result.vendor.isApproved) {
+        return res.status(200).json({ success: true, message: 'Password reset successful. Your account is pending admin approval.', requiresApproval: true });
+      }
+      const tokenId = result.vendor.legacyMongoId || result.vendor.id;
       const accessToken = generateAccessToken(tokenId, 'vendor'), refreshToken = generateRefreshToken(tokenId, 'vendor');
       sendAuthCookies(res, accessToken, refreshToken, 'vendor');
       return res.status(200).json({ success: true, message: 'Password reset successful', vendor: publicVendor(result.vendor), accessToken });
@@ -758,6 +764,21 @@ export const resetVendorPasswordNew = async (req, res) => {
     vendor.lockUntil = undefined;
     vendor.lastLogin = Date.now();
     await vendor.save();
+
+    if (vendor.suspended || vendor.active === false) {
+      return res.status(403).json({
+        success: false,
+        message: 'Password reset successful, but your account is suspended or inactive.'
+      });
+    }
+
+    if (!vendor.isApproved) {
+      return res.status(200).json({
+        success: true,
+        message: 'Password reset successful. Your account is pending admin approval.',
+        requiresApproval: true
+      });
+    }
 
     // Generate tokens
     const accessToken = generateAccessToken(vendor._id, 'vendor');
@@ -790,6 +811,10 @@ export const refreshVendorToken = async (req, res) => {
       return res.status(401).json({ message: 'No refresh token provided' });
     }
 
+    if (await isTokenBlocked(token)) {
+      return res.status(401).json({ message: 'Session has been revoked. Please log in again.' });
+    }
+
     // Verify token
     const decoded = verifyToken(token);
 
@@ -803,9 +828,15 @@ export const refreshVendorToken = async (req, res) => {
       return res.status(401).json({ message: 'Vendor not found, inactive, or pending approval' });
     }
 
-    // Generate new access token
-    const accessToken = generateAccessToken(postgresVendorIdentityEnabled() ? vendor.id : vendor._id, 'vendor');
-    sendAuthCookies(res, accessToken, token, 'vendor');
+    if (decoded.exp) {
+      await blockToken(token, decoded.exp);
+    }
+
+    // Rotate refresh token and issue new access token
+    const tokenId = postgresVendorIdentityEnabled() ? (vendor.legacyMongoId || vendor.id) : vendor._id;
+    const accessToken = generateAccessToken(tokenId, 'vendor');
+    const nextRefreshToken = generateRefreshToken(tokenId, 'vendor');
+    sendAuthCookies(res, accessToken, nextRefreshToken, 'vendor');
 
     res.status(200).json({
       success: true,
@@ -821,9 +852,13 @@ export const vendorLogout = async (req, res) => {
   try {
     const isProduction = process.env.NODE_ENV === "production";
 
-    // Block the current token if it exists
-    const token = req.cookies?.vendorToken;
-    if (token) {
+    const tokensToBlock = [
+      req.cookies?.vendorToken,
+      req.cookies?.vendorRefreshToken,
+      req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice(7) : null,
+    ].filter(Boolean);
+
+    for (const token of tokensToBlock) {
       try {
         const decoded = jwt.decode(token);
         if (decoded?.exp) {
@@ -834,18 +869,14 @@ export const vendorLogout = async (req, res) => {
       }
     }
 
-    res.clearCookie("vendorToken", {
+    const clearOpts = {
       httpOnly: true,
       secure: isProduction,
-      sameSite: "lax",
+      sameSite: isProduction ? "none" : "lax",
       path: "/",
-    });
-    res.clearCookie('vendorRefreshToken', {
-      httpOnly: true,
-      secure: isProduction,
-      sameSite: isProduction ? 'none' : 'lax',
-      path: '/',
-    });
+    };
+    res.clearCookie("vendorToken", clearOpts);
+    res.clearCookie("vendorRefreshToken", clearOpts);
 
     res.status(200).json({
       success: true,

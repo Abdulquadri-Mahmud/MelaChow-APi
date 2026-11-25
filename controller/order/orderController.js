@@ -64,9 +64,20 @@ const getPaystackVerificationState = (payData) => {
   return "unknown";
 };
 
-const handlePostgresPaymentVerification = async ({ reference, label = "" }) => {
+const handlePostgresPaymentVerification = async ({ reference, userId = null, postgresUserId = null, label = "" }) => {
   const order = await postgresPaymentRepository.findOrderByPaymentReference(reference);
   if (!order) return null;
+
+  if (userId) {
+    const allowedIds = new Set([String(order.userId), order.user?.legacyMongoId ? String(order.user.legacyMongoId) : null].filter(Boolean));
+    const callerMatches = allowedIds.has(String(userId)) || (postgresUserId && allowedIds.has(String(postgresUserId)));
+    if (!callerMatches) {
+      return {
+        statusCode: 403,
+        body: { success: false, message: "Unauthorized to verify payment for this order." },
+      };
+    }
+  }
 
   if (order.paymentStatus === "paid") {
     return {
@@ -85,6 +96,7 @@ const handlePostgresPaymentVerification = async ({ reference, label = "" }) => {
       headers: {
         Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
       },
+    timeout: 15000,
     }
   );
 
@@ -974,7 +986,7 @@ export const verifyPayment = async (req, res) => {
 
   try {
     if (usePostgresPaymentWrites()) {
-      const postgresResult = await handlePostgresPaymentVerification({ reference });
+      const postgresResult = await handlePostgresPaymentVerification({ reference, userId: req.userId, postgresUserId: req.postgresUserId });
       if (postgresResult) {
         return res.status(postgresResult.statusCode).json(postgresResult.body);
       }
@@ -993,6 +1005,10 @@ export const verifyPayment = async (req, res) => {
         message: "Order not found. Please contact support.",
         debug: "ORDER_NOT_FOUND"
       });
+    }
+
+    if (String(order.userId) !== String(req.userId)) {
+      return res.status(403).json({ success: false, message: "Unauthorized to verify payment for this order." });
     }
 
     /* ========================================
@@ -1051,6 +1067,7 @@ export const verifyPayment = async (req, res) => {
         headers: {
           Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
         },
+      timeout: 15000,
       }
     );
 
@@ -1178,7 +1195,7 @@ export const verifyPaymentV2 = async (req, res) => {
 
   try {
     if (usePostgresPaymentWrites()) {
-      const postgresResult = await handlePostgresPaymentVerification({ reference, label: "[V2]" });
+      const postgresResult = await handlePostgresPaymentVerification({ reference, userId: req.userId, postgresUserId: req.postgresUserId, label: "[V2]" });
       if (postgresResult) {
         return res.status(postgresResult.statusCode).json(postgresResult.body);
       }
@@ -1196,6 +1213,10 @@ export const verifyPaymentV2 = async (req, res) => {
         message: "Order not found. Please contact support.",
         debug: "ORDER_NOT_FOUND"
       });
+    }
+
+    if (String(order.userId) !== String(req.userId)) {
+      return res.status(403).json({ success: false, message: "Unauthorized to verify payment for this order." });
     }
 
     /* ========================================
@@ -1254,6 +1275,7 @@ export const verifyPaymentV2 = async (req, res) => {
         headers: {
           Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
         },
+      timeout: 15000,
       }
     );
 
@@ -2279,12 +2301,13 @@ export const paystackWebhook = async (req, res) => {
   /* -------------------------------
    * 1️⃣ VERIFY SIGNATURE
    * ------------------------------- */
-  const hash = crypto
-    .createHmac("sha512", secret)
-    .update(rawBody)
-    .digest("hex");
+  const sigHeader = String(req.headers["x-paystack-signature"] || "");
+  const hash = secret
+    ? crypto.createHmac("sha512", secret).update(rawBody).digest("hex")
+    : "";
+  const sigOk = Boolean(secret) && hash.length === sigHeader.length && crypto.timingSafeEqual(Buffer.from(hash, "utf8"), Buffer.from(sigHeader, "utf8"));
 
-  if (hash !== req.headers["x-paystack-signature"]) {
+  if (!sigOk) {
     console.warn("❌ Invalid Paystack signature");
     return res.status(400).send("Invalid signature");
   }

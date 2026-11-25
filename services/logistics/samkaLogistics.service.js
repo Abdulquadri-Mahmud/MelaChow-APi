@@ -1,6 +1,7 @@
 import prisma from "../../config/prisma.js";
 import { deliveryContentsFrom } from "./deliveryContents.js";
 import { sendOrderNotification, sendVendorNotification } from "../notification.service.js";
+import { registerSamkaCallHooks, terminateActiveCallsForOrder } from "../call/callSession.service.js";
 
 const SOURCE_MELACHOW = "MelaChow";
 const TERMINAL_STATUSES = new Set([8, 9, 10]);
@@ -51,12 +52,33 @@ const request = async (path, init = {}) => {
     const raw = await response.text();
     let body = raw;
     try { body = raw ? JSON.parse(raw) : null; } catch { /* retain diagnostic text */ }
-    if (!response.ok) throw new Error(`Samka Logistics request failed with status ${response.status}`);
+    if (!response.ok) {
+      const error = new Error(`Samka Logistics request failed with status ${response.status}`);
+      error.statusCode = response.status;
+      error.responseBody = body;
+      throw error;
+    }
     return body;
   } finally {
     clearTimeout(timeout);
   }
 };
+
+const deliveryIdFrom = (result) => {
+  const response = result?.data && typeof result.data === "object" ? result.data : result;
+  return typeof response === "string" ? response : response?.id || response?.deliveryId || null;
+};
+
+async function verifySamkaDeliveryIdentity(externalDeliveryId, delivery) {
+  const remote = await request(`/api/source-deliveries/${externalDeliveryId}?source=${SOURCE_MELACHOW}`);
+  // Samka's DeliveryJobDto names the source reference "orderNumber".
+  const remoteReference = remote?.sourceOrderReference ?? remote?.orderNumber;
+  if (String(remote?.sourceOrderId || "") !== String(delivery.sourceOrderId)
+    || String(remoteReference || "") !== String(delivery.sourceOrderReference)) {
+    throw new Error("Samka delivery identity does not match the MelaChow vendor order");
+  }
+  return remote;
+}
 
 const buildPayload = (delivery) => {
   const vendorOrder = delivery.vendorOrder;
@@ -136,20 +158,53 @@ export async function dispatchSamkaDelivery(id) {
   const delivery = await loadDelivery(id);
   if (!delivery || delivery.externalDeliveryId || delivery.dispatchStatus === "dispatched") return delivery;
   const now = new Date();
+  // A request can be triggered by both the ready-status handler and the retry
+  // worker. Claim the row before making the external POST so those paths cannot
+  // create two jobs for the same vendor order concurrently.
+  const leaseExpiredBefore = new Date(Date.now() - 2 * 60_000);
+  const claim = await prisma.logisticsDelivery.updateMany({
+    where: {
+      id,
+      externalDeliveryId: null,
+      OR: [
+        { dispatchStatus: { in: ["pending", "retry"] } },
+        { dispatchStatus: "dispatching", lastAttemptAt: { lt: leaseExpiredBefore } },
+      ],
+    },
+    data: { dispatchStatus: "dispatching", lastAttemptAt: now, attempts: { increment: 1 } },
+  });
+  if (!claim.count) return loadDelivery(id);
+  const attempt = delivery.attempts + 1;
   try {
     const payload = buildPayload(delivery);
     const result = await request("/api/source-deliveries", { method: "POST", body: JSON.stringify(payload) });
-    const externalDeliveryId = typeof result === "string" ? result : result?.id || result?.deliveryId;
-    if (!externalDeliveryId) throw new Error("Samka Logistics did not return a delivery ID");
-    return await prisma.logisticsDelivery.update({
-      where: { id },
-      data: { externalDeliveryId, externalStatus: 1, dispatchStatus: "dispatched", attempts: { increment: 1 }, lastAttemptAt: now, lastSyncedAt: now, lastError: null, requestPayload: payload, responsePayload: result },
+    const response = result?.data && typeof result.data === "object" ? result.data : result;
+    const externalDeliveryId = deliveryIdFrom(result);
+    if (!externalDeliveryId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(externalDeliveryId))) {
+      throw new Error("Samka Logistics did not return a valid delivery ID");
+    }
+    if (response?.sourceOrderId && String(response.sourceOrderId) !== String(delivery.sourceOrderId)) {
+      throw new Error("Samka Logistics returned a delivery for a different source order");
+    }
+    if (response?.sourceOrderReference && String(response.sourceOrderReference) !== String(delivery.sourceOrderReference)) {
+      throw new Error("Samka Logistics returned a delivery with a different order reference");
+    }
+    const remote = await verifySamkaDeliveryIdentity(externalDeliveryId, delivery);
+    const remoteStatus = STATUS_BY_NAME[remote?.status] || Number(remote?.status) || 1;
+    const saved = await prisma.logisticsDelivery.updateMany({
+      where: { id, externalDeliveryId: null, dispatchStatus: "dispatching", lastAttemptAt: now },
+      data: { externalDeliveryId, externalStatus: remoteStatus, dispatchStatus: "dispatched", lastSyncedAt: now, lastError: null, requestPayload: payload, responsePayload: remote },
     });
+    if (!saved.count) {
+      const current = await loadDelivery(id);
+      if (current?.externalDeliveryId === externalDeliveryId) return current;
+      throw new Error("Samka delivery claim changed before its response could be saved; reconcile by source order before retrying");
+    }
+    return loadDelivery(id);
   } catch (error) {
-    const attempts = delivery.attempts + 1;
-    await prisma.logisticsDelivery.update({
-      where: { id },
-      data: { dispatchStatus: "retry", attempts, lastAttemptAt: now, nextAttemptAt: new Date(Date.now() + Math.min(15 * 60_000, 30_000 * (2 ** Math.min(attempts - 1, 5)))), lastError: error.message.slice(0, 1000) },
+    await prisma.logisticsDelivery.updateMany({
+      where: { id, dispatchStatus: "dispatching", lastAttemptAt: now },
+      data: { dispatchStatus: "retry", nextAttemptAt: new Date(Date.now() + Math.min(15 * 60_000, 30_000 * (2 ** Math.min(attempt - 1, 5)))), lastError: error.message.slice(0, 1000) },
     });
     throw error;
   }
@@ -170,6 +225,10 @@ async function applyExternalStatus(delivery, externalStatus, responsePayload) {
   const transition = await prisma.$transaction(async (tx) => {
     const current = await tx.vendorOrder.findUnique({ where: { id: delivery.vendorOrderId }, include: { userOrder: { include: { vendorOrders: true } }, restaurant: true } });
     if (!current) throw new Error("Vendor order no longer exists");
+    const freshDelivery = await tx.logisticsDelivery.findUnique({ where: { id: delivery.id }, select: { externalStatus: true } });
+    if (Number.isFinite(Number(freshDelivery?.externalStatus)) && Number(freshDelivery.externalStatus) > externalStatus) {
+      return { stale: true, changed: false, externalChanged: false, status: current.orderStatus, customerMilestone: null };
+    }
     let nextVendorStatus = mapped;
 
     if (externalStatus === 8) {
@@ -194,14 +253,37 @@ async function applyExternalStatus(delivery, externalStatus, responsePayload) {
     const changed = current.orderStatus !== nextVendorStatus;
     const statusLog = Array.isArray(current.userOrder.statusLog) ? current.userOrder.statusLog : [];
     await tx.vendorOrder.update({ where: { id: current.id }, data: { orderStatus: nextVendorStatus, ...(externalStatus === 8 ? { escrowReleased: true } : {}) } });
+    const previousRiderId = String(delivery.assignedRider?.id || delivery.assignedRider?.riderId || current.userOrder.riderAssignment?.rider?.id || "").trim() || null;
     const assignedRider = responsePayload?.rider || responsePayload?.data?.rider || delivery.assignedRider || current.userOrder.riderAssignment?.rider || null;
-    await tx.order.update({ where: { id: current.userOrderId }, data: { orderStatus: parentStatus(siblingStatuses), riderAssignment: { provider: "samka", externalDeliveryId: delivery.externalDeliveryId, status: nextVendorStatus, rider: assignedRider }, statusLog: changed ? [...statusLog, { status: nextVendorStatus, changedBy: "samka_logistics", timestamp: new Date().toISOString() }] : statusLog } });
+    const nextRiderId = String(assignedRider?.id || assignedRider?.riderId || "").trim() || null;
+    const riderReassigned = Boolean(previousRiderId && nextRiderId && previousRiderId.toLowerCase() !== nextRiderId.toLowerCase());
+    const assignment = current.userOrder.riderAssignment && typeof current.userOrder.riderAssignment === "object"
+      ? current.userOrder.riderAssignment : {};
+    const notifiedMilestones = assignment.customerNotifiedMilestones && typeof assignment.customerNotifiedMilestones === "object"
+      ? assignment.customerNotifiedMilestones : {};
+    const previousCustomerMilestone = Number(notifiedMilestones[delivery.externalDeliveryId] || 0);
+    const customerMilestone = [4, 5, 7, 8].includes(externalStatus) && externalStatus > previousCustomerMilestone
+      ? externalStatus : null;
+    await tx.order.update({ where: { id: current.userOrderId }, data: {
+      orderStatus: parentStatus(siblingStatuses),
+      riderAssignment: {
+        ...assignment,
+        provider: "samka",
+        externalDeliveryId: delivery.externalDeliveryId,
+        status: nextVendorStatus,
+        externalStatus,
+        rider: assignedRider,
+        ...(customerMilestone ? { customerNotifiedMilestones: { ...notifiedMilestones, [delivery.externalDeliveryId]: customerMilestone } } : {}),
+      },
+      statusLog: changed ? [...statusLog, { status: nextVendorStatus, changedBy: "samka_logistics", timestamp: new Date().toISOString() }] : statusLog,
+    } });
     await tx.logisticsDelivery.update({ where: { id: delivery.id }, data: { externalStatus, dispatchStatus: TERMINAL_STATUSES.has(externalStatus) ? "terminal" : "dispatched", lastSyncedAt: new Date(), lastError: null, responsePayload, assignedRider } });
     return {
       changed,
-      externalChanged: delivery.externalStatus !== externalStatus,
+      externalChanged: freshDelivery?.externalStatus !== externalStatus,
       externalStatus,
       status: nextVendorStatus,
+      customerMilestone,
       orderId: current.userOrder.orderCode,
       orderDatabaseId: current.userOrder.legacyMongoId || current.userOrder.id,
       userId: current.userOrder.user?.legacyMongoId || current.userOrder.userId,
@@ -210,21 +292,31 @@ async function applyExternalStatus(delivery, externalStatus, responsePayload) {
       restaurantName: current.restaurant?.storeName,
       riderName: assignedRider?.name || null,
       rider: assignedRider,
+      riderReassigned,
+      orderUuid: current.userOrderId,
+      vendorOrderUuid: current.id,
     };
-  });
-  if (transition.changed || (transition.externalChanged && [5, 7].includes(externalStatus))) await notifySamkaOrderTransition(transition);
+  }, { isolationLevel: "Serializable" });
+  if (transition.stale) return transition;
+  if (externalStatus === 8 || transition.riderReassigned) {
+    await terminateActiveCallsForOrder({
+      orderId: transition.orderUuid,
+      vendorOrderId: transition.vendorOrderUuid,
+      externalDeliveryId: delivery.externalDeliveryId,
+      reason: externalStatus === 8 ? "order_delivered" : "rider_reassigned",
+    });
+  }
+  if (transition.changed || transition.customerMilestone || (transition.externalChanged && [5, 7].includes(externalStatus))) await notifySamkaOrderTransition(transition);
   return transition;
 }
 
 async function notifySamkaOrderTransition(transition) {
-  const { status, externalStatus, orderId, orderDatabaseId, userId, vendorId, vendorOrderId, restaurantName, riderName } = transition;
-  const customerMessage = externalStatus === 5 ? `Your rider has arrived at ${restaurantName || "the restaurant"} for Order #${orderId}.`
-    : externalStatus === 7 ? `Your rider is on the way with Order #${orderId}.`
-      : status === "rider_assigned" ? `A rider${riderName ? ` (${riderName})` : ""} accepted Order #${orderId} and is heading to the restaurant.` : null;
-  const notifications = [sendOrderNotification(userId, orderId, status, {
-    orderId, orderDatabaseId, restaurantName,
-    ...(customerMessage ? { message: customerMessage } : {}),
-  })];
+  const { status, externalStatus, customerMilestone, orderId, orderDatabaseId, userId, vendorId, vendorOrderId, restaurantName, riderName } = transition;
+  const milestoneStatus = ({ 4: "rider_assigned", 5: "rider_arrived", 7: "rider_on_the_way", 8: "delivered" })[customerMilestone];
+  const shouldNotifyCustomer = Boolean(milestoneStatus) || ["cancelled", "failed"].includes(status);
+  const notifications = shouldNotifyCustomer ? [sendOrderNotification(userId, orderId, milestoneStatus || status, {
+    orderId, orderDatabaseId, restaurantName, riderName,
+  })] : [];
   const vendorType = externalStatus === 5 || externalStatus === 7 ? "general"
     : status === "rider_assigned" ? "vendor_rider_assigned"
     : status === "delivered" ? "vendor_order_delivered" : "general";
@@ -241,7 +333,7 @@ async function notifySamkaOrderTransition(transition) {
   notifications.push(sendVendorNotification(vendorId, orderId, vendorType, vendorDetails));
   const results = await Promise.allSettled(notifications);
   results.forEach((result, index) => {
-    if (result.status === "rejected") console.error(`Samka ${index === 0 ? "customer" : "vendor"} notification failed for ${orderId}:`, result.reason);
+    if (result.status === "rejected") console.error(`Samka ${index === 0 && shouldNotifyCustomer ? "customer" : "vendor"} notification failed for ${orderId}:`, result.reason);
   });
 }
 
@@ -250,22 +342,117 @@ async function applyTerminalStatus(delivery, status, responsePayload, reason) {
   const transition = await prisma.$transaction(async (tx) => {
     const current = await tx.vendorOrder.findUnique({ where: { id: delivery.vendorOrderId }, include: { userOrder: { include: { vendorOrders: true } }, restaurant: true } });
     if (!current) throw new Error("Vendor order was not found");
-    const changed = current.orderStatus !== nextStatus;
+    const previousStatus = current.orderStatus;
+    const changed = previousStatus !== nextStatus;
     const siblingStatuses = current.userOrder.vendorOrders.map((row) => row.id === current.id ? nextStatus : row.orderStatus);
+    const nextParentStatus = parentStatus(siblingStatuses);
     const statusLog = Array.isArray(current.userOrder.statusLog) ? current.userOrder.statusLog : [];
     await tx.vendorOrder.update({ where: { id: current.id }, data: { orderStatus: nextStatus } });
-    await tx.order.update({ where: { id: current.userOrderId }, data: { orderStatus: parentStatus(siblingStatuses), riderAssignment: { provider: "samka", externalDeliveryId: delivery.externalDeliveryId, status: nextStatus }, statusLog: changed ? [...statusLog, { status: nextStatus, changedBy: "samka_logistics", timestamp: new Date().toISOString() }] : statusLog } });
+
+    let paymentStatus = current.userOrder.paymentStatus;
+    let refundCreated = null;
+    if (
+      current.userOrder.paymentStatus === "paid"
+      && !current.escrowReleased
+      && ["cancelled", "failed"].includes(nextParentStatus)
+    ) {
+      const existingRefund = await tx.refund.findFirst({ where: { orderId: current.userOrderId } });
+      if (existingRefund) {
+        paymentStatus = existingRefund.status === "completed" ? "refunded" : current.userOrder.paymentStatus;
+      } else {
+        const refundAmount = BigInt(current.userOrder.total || 0);
+        if (refundAmount > 0n) {
+          const adminWallet = await tx.wallet.findFirst({ where: { ownerModel: "Admin" } });
+          let credited = false;
+          if (adminWallet) {
+            const debited = await tx.wallet.updateMany({
+              where: { id: adminWallet.id, balance: { gte: refundAmount } },
+              data: { balance: { decrement: refundAmount } },
+            });
+            if (debited.count === 1) {
+              const userWallet = await tx.wallet.upsert({
+                where: { ownerId_ownerModel: { ownerId: current.userOrder.userId, ownerModel: "User" } },
+                create: { ownerId: current.userOrder.userId, ownerModel: "User", balance: refundAmount },
+                update: { balance: { increment: refundAmount } },
+              });
+              await tx.walletTransaction.createMany({
+                data: [
+                  {
+                    walletId: adminWallet.id,
+                    type: "debit",
+                    amount: refundAmount,
+                    transactionType: "refund",
+                    orderId: current.userOrderId,
+                    description: `Auto-refund for Samka ${nextStatus} Order ${current.userOrder.orderCode}`,
+                    metadata: { source: "samka_terminal_auto_refund", externalDeliveryId: delivery.externalDeliveryId, reason },
+                  },
+                  {
+                    walletId: userWallet.id,
+                    type: "credit",
+                    amount: refundAmount,
+                    transactionType: "refund",
+                    orderId: current.userOrderId,
+                    description: `Refund for ${nextStatus} delivery on Order ${current.userOrder.orderCode}`,
+                    metadata: { source: "samka_terminal_auto_refund", externalDeliveryId: delivery.externalDeliveryId, reason },
+                  },
+                ],
+              });
+              credited = true;
+              paymentStatus = "refunded";
+            }
+          }
+          refundCreated = await tx.refund.create({
+            data: {
+              orderId: current.userOrderId,
+              userId: current.userOrder.userId,
+              amount: refundAmount,
+              reason: reason || `Samka delivery ${nextStatus}`,
+              status: credited ? "completed" : "pending",
+              metadata: {
+                originalTotal: Number(refundAmount),
+                commissionRetained: 0,
+                orderStatusAtCancellation: previousStatus,
+                walletCreditSucceeded: credited,
+                externalDeliveryId: delivery.externalDeliveryId,
+                notes: credited
+                  ? "Automatic full refund credited to customer wallet after Samka terminal delivery status"
+                  : "Admin wallet missing or insufficient; manual wallet credit required",
+              },
+            },
+          });
+        }
+      }
+    }
+
+    await tx.order.update({
+      where: { id: current.userOrderId },
+      data: {
+        orderStatus: nextParentStatus,
+        paymentStatus,
+        riderAssignment: { provider: "samka", externalDeliveryId: delivery.externalDeliveryId, status: nextStatus },
+        statusLog: changed ? [...statusLog, { status: nextStatus, changedBy: "samka_logistics", timestamp: new Date().toISOString() }] : statusLog,
+      },
+    });
     await tx.logisticsDelivery.update({ where: { id: delivery.id }, data: { externalStatus: status, dispatchStatus: "terminal", lastSyncedAt: new Date(), lastError: reason, responsePayload } });
     return {
       changed,
       status: nextStatus,
+      refundStatus: refundCreated?.status || null,
       orderId: current.userOrder.orderCode,
       orderDatabaseId: current.userOrder.legacyMongoId || current.userOrder.id,
       userId: current.userOrder.userId,
       vendorId: current.restaurant?.legacyMongoId || current.restaurantId,
       vendorOrderId: current.legacyMongoId || current.id,
       restaurantName: current.restaurant?.storeName,
+      orderUuid: current.userOrderId,
+      vendorOrderUuid: current.id,
     };
+  }, { isolationLevel: "Serializable" });
+  await terminateActiveCallsForOrder({
+    orderId: transition.orderUuid,
+    vendorOrderId: transition.vendorOrderUuid,
+    externalDeliveryId: delivery.externalDeliveryId,
+    reason: `order_${nextStatus}`,
   });
   if (transition.changed) await notifySamkaOrderTransition(transition);
   return transition;
@@ -287,7 +474,29 @@ export async function ensureSamkaDeliveryContents(delivery, remote) {
   await prisma.logisticsDelivery.update({ where: { id: delivery.id }, data: { requestPayload: payload } });
 }
 export async function reconcileSamkaDelivery(delivery) {
-  const result = await request(`/api/source-deliveries/${delivery.externalDeliveryId}?source=${SOURCE_MELACHOW}`);
+  let result;
+  try {
+    result = await request(`/api/source-deliveries/${delivery.externalDeliveryId}?source=${SOURCE_MELACHOW}`);
+  } catch (error) {
+    // An idempotent POST by sourceOrderId recovers Samka's canonical ID if a
+    // stale MelaChow mapping points elsewhere. Verify both order identifiers
+    // before changing the stored external ID.
+    if (error.statusCode !== 404) throw error;
+    const fullDelivery = await loadDelivery(delivery.id);
+    if (!fullDelivery) throw new Error("MelaChow source delivery no longer exists");
+    const payload = buildPayload(fullDelivery);
+    const createResult = await request("/api/source-deliveries", { method: "POST", body: JSON.stringify(payload) });
+    const canonicalId = deliveryIdFrom(createResult);
+    if (!canonicalId || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(canonicalId))) {
+      throw new Error("Samka could not return a canonical delivery ID for this source order");
+    }
+    result = await verifySamkaDeliveryIdentity(canonicalId, fullDelivery);
+    await prisma.logisticsDelivery.update({
+      where: { id: delivery.id },
+      data: { externalDeliveryId: canonicalId, lastError: null, lastSyncedAt: new Date(), responsePayload: result },
+    });
+    delivery = { ...delivery, externalDeliveryId: canonicalId };
+  }
   const status = typeof result?.status === "string" && STATUS_BY_NAME[result.status]
     ? STATUS_BY_NAME[result.status]
     : Number(result?.status);
@@ -311,18 +520,61 @@ export async function cancelQueuedSamkaDeliveryForVendorOrder(vendorOrderId, rea
   const delivery = await prisma.logisticsDelivery.findUnique({ where: { vendorOrderId } });
   if (!delivery || delivery.dispatchStatus === "terminal") return delivery;
   if (delivery.externalDeliveryId) await cancelSamkaDelivery(delivery.externalDeliveryId, reason);
+  await terminateActiveCallsForOrder({
+    vendorOrderId,
+    externalDeliveryId: delivery.externalDeliveryId,
+    reason: "order_cancelled",
+  });
   return prisma.logisticsDelivery.update({
     where: { id: delivery.id },
     data: { dispatchStatus: "terminal", externalStatus: 9, lastError: String(reason || "Cancelled by MelaChow"), lastSyncedAt: new Date() },
   });
 }
 
+export async function notifySamkaRiderCallEvent(externalDeliveryId, payload) {
+  if (!externalDeliveryId) return null;
+  return request(`/api/source-deliveries/${externalDeliveryId}/call-notification?source=${SOURCE_MELACHOW}`, {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+export async function refreshSamkaDeliveryRider(delivery) {
+  if (!delivery?.externalDeliveryId) return null;
+  const details = await request(`/api/source-deliveries/${delivery.externalDeliveryId}/details?source=${SOURCE_MELACHOW}`);
+  const rawRider = details?.rider || details?.data?.rider || null;
+  if (!rawRider) return null;
+  const normalized = {
+    id: rawRider.id || rawRider.riderId || null,
+    name: rawRider.fullName || rawRider.name || "Delivery Rider",
+    fullName: rawRider.fullName || rawRider.name || "Delivery Rider",
+    avatar: rawRider.profileImageUrl || rawRider.avatar || null,
+    profileImageUrl: rawRider.profileImageUrl || rawRider.avatar || null,
+    vehicleType: rawRider.vehicleType || null,
+  };
+  await prisma.logisticsDelivery.update({
+    where: { id: delivery.id },
+    data: { assignedRider: normalized, lastSyncedAt: new Date() },
+  });
+  return normalized;
+}
+
+registerSamkaCallHooks({
+  notifyRiderCallEvent: notifySamkaRiderCallEvent,
+  refreshDeliveryRider: refreshSamkaDeliveryRider,
+});
+
 export async function processSamkaCallback({ eventType, externalDeliveryId, sourceOrderId, data = {}, payload = {} }) {
+  const normalizedExternalId = String(externalDeliveryId || "").trim();
+  const normalizedSourceId = String(sourceOrderId || "").trim();
   const delivery = await prisma.logisticsDelivery.findFirst({
-    where: externalDeliveryId ? { externalDeliveryId } : { sourceOrderId: String(sourceOrderId || "") },
+    where: normalizedExternalId ? { externalDeliveryId: normalizedExternalId } : { sourceOrderId: normalizedSourceId },
     include: { vendorOrder: { include: { userOrder: true } } },
   });
   if (!delivery) throw new Error("MelaChow logistics delivery was not found");
+  if (normalizedSourceId && normalizedSourceId !== String(delivery.sourceOrderId)) {
+    throw new Error("Samka callback source order does not match the mapped MelaChow delivery");
+  }
 
   if (eventType === "delivery.rider.location.updated") {
     const latitude = numberFrom(data.latitude);
@@ -339,8 +591,10 @@ export async function processSamkaCallback({ eventType, externalDeliveryId, sour
     "delivery.cancelled": 9,
     "delivery.failed": 10,
   };
-  const status = statusByEvent[eventType];
-  if (!status) return { delivery, ignored: true, statusChanged: false };
+  const statusFromData = data.status;
+  const statusFromName = typeof statusFromData === "string" ? STATUS_BY_NAME[statusFromData] : null;
+  const status = statusByEvent[eventType] || (eventType === "delivery.status.changed" ? statusFromName || Number(statusFromData) : null);
+  if (!Number.isInteger(status) || status < 1 || status > 10) return { delivery, ignored: true, statusChanged: false };
   if (status === 9 || status === 10) {
     const transition = await applyTerminalStatus(delivery, status, payload, data.reason || eventType);
     return { delivery, status: transition.status, statusChanged: transition.changed };
@@ -378,7 +632,19 @@ export async function processSamkaLogistics() {
   if (!usesSamkaLogistics()) return { dispatched: 0, reconciled: 0, failed: 0 };
   const result = { dispatched: 0, reconciled: 0, failed: 0 };
   await recoverMissingSamkaHandoffs();
-  const pending = await prisma.logisticsDelivery.findMany({ where: { externalDeliveryId: null, dispatchStatus: { in: ["pending", "retry"] }, nextAttemptAt: { lte: new Date() } }, take: 20, orderBy: { createdAt: "asc" } });
+  const now = new Date();
+  const staleDispatchBefore = new Date(now.getTime() - 2 * 60_000);
+  const pending = await prisma.logisticsDelivery.findMany({
+    where: {
+      externalDeliveryId: null,
+      OR: [
+        { dispatchStatus: { in: ["pending", "retry"] }, nextAttemptAt: { lte: now } },
+        { dispatchStatus: "dispatching", lastAttemptAt: { lt: staleDispatchBefore } },
+      ],
+    },
+    take: 20,
+    orderBy: { createdAt: "asc" },
+  });
   for (const delivery of pending) {
     try { await dispatchSamkaDelivery(delivery.id); result.dispatched += 1; } catch { result.failed += 1; }
   }

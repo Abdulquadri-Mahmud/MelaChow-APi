@@ -29,10 +29,11 @@ const providerSnapshot = (payData) => ({
 export const verifyPaystackReference = async (reference) => {
   if (!reference) throw new Error("Payment reference is required");
 
-  const verifyResp = await axios.get(`${PAYSTACK_VERIFY_URL}/${reference}`, {
+  const verifyResp = await axios.get(`${PAYSTACK_VERIFY_URL}/${encodeURIComponent(reference)}`, {
     headers: {
       Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
     },
+    timeout: 15000,
   });
 
   return verifyResp.data?.data || null;

@@ -28,7 +28,8 @@ import { assertVendorIsOpen } from "../../utils/vendorOpenStatus.js";
 import { assertVendorAcceptingOrders } from "../../utils/vendorAvailability.js";
 import { recordPaymentAttemptEvent } from "../../services/paymentHardening.service.js";
 import { generateOrderInvoice } from "../../services/invoice.service.js";
-import { usePostgresOrderWrites, usePostgresPaymentWrites } from "../../services/postgres/compat.js";
+import { usePostgresOrderStatusWrites, usePostgresOrderWrites, usePostgresPaymentWrites } from "../../services/postgres/compat.js";
+import prisma from "../../config/prisma.js";
 import { postgresOrderCreationRepository } from "../../services/postgres/orderCreation.repository.js";
 import { postgresPaymentRepository } from "../../services/postgres/payment.repository.js";
 import { reserveOptionStockForOrder, restoreOptionStockForOrder, reservePortionStockForOrder } from "../../services/optionStock.service.js";
@@ -1956,6 +1957,40 @@ export const createVendorOrdersAndUpdateWallets = async (order, session) => {
  * Idempotent — safe to call multiple times (escrowReleased flag prevents double-pay).
  */
 export const releaseEscrowToVendor = async (vendorOrderId) => {
+    if (usePostgresOrderStatusWrites()) {
+        const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+        const where = uuidPattern.test(String(vendorOrderId))
+            ? { id: String(vendorOrderId) }
+            : { legacyMongoId: String(vendorOrderId) };
+        await prisma.$transaction(async (tx) => {
+            const vendorOrder = await tx.vendorOrder.findUnique({ where });
+            if (!vendorOrder) throw new Error(`VendorOrder ${vendorOrderId} not found`);
+            if (vendorOrder.escrowReleased) return;
+            const escrowKobo = BigInt(vendorOrder.escrowAmount || 0);
+            if (escrowKobo > 0n) {
+                const adminWallet = await tx.wallet.findFirst({ where: { ownerModel: "Admin" }, orderBy: { createdAt: "asc" } });
+                if (!adminWallet || BigInt(adminWallet.balance) < escrowKobo) {
+                    throw new Error(`Admin wallet insufficient for escrow release for VendorOrder ${vendorOrder.id}`);
+                }
+                const vendorWallet = await tx.wallet.upsert({
+                    where: { ownerId_ownerModel: { ownerId: vendorOrder.restaurantId, ownerModel: "Vendor" } },
+                    create: { ownerId: vendorOrder.restaurantId, ownerModel: "Vendor", balance: 0n, totalEarned: 0n, totalWithdrawn: 0n },
+                    update: {},
+                });
+                await tx.wallet.update({ where: { id: adminWallet.id }, data: { balance: { decrement: escrowKobo } } });
+                await tx.wallet.update({ where: { id: vendorWallet.id }, data: { balance: { increment: escrowKobo }, totalEarned: { increment: escrowKobo } } });
+                await tx.walletTransaction.createMany({
+                    data: [
+                        { walletId: adminWallet.id, type: "debit", amount: escrowKobo, description: `Escrow release to vendor for VendorOrder ${vendorOrder.id}`, transactionType: "escrow_release", orderId: vendorOrder.userOrderId },
+                        { walletId: vendorWallet.id, type: "credit", amount: escrowKobo, description: `Food revenue released from escrow for VendorOrder ${vendorOrder.id}`, transactionType: "escrow_release", orderId: vendorOrder.userOrderId },
+                    ],
+                });
+            }
+            await tx.vendorOrder.update({ where: { id: vendorOrder.id }, data: { escrowReleased: true } });
+        }, { isolationLevel: "Serializable" });
+        return;
+    }
+
     const session = await mongoose.startSession();
     session.startTransaction();
 
@@ -2306,7 +2341,8 @@ export const createOrderController = async (req, res) => {
                         headers: {
                             Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
                             "Content-Type": "application/json"
-                        }
+                        },
+                        timeout: 15000,
                     }
                 );
             } catch (paystackError) {
@@ -2414,7 +2450,8 @@ export const createOrderController = async (req, res) => {
                 headers: {
                     Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}`,
                     "Content-Type": "application/json"
-                }
+                },
+                timeout: 15000,
             }
         );
 

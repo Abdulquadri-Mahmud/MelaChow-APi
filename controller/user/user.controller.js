@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import jwt from 'jsonwebtoken';
 import bcryptjs from 'bcryptjs';
 import User from '../../model/user.model.js';
@@ -30,7 +31,7 @@ export const verifyEmail = async (req, res) => {
     if (user.isVerified) return res.status(400).json({ message: 'Email already verified' });
 
     //Generate 6-digit OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otp = crypto.randomInt(100000, 1000000).toString();
 
     //Set OTP expiry to 10 minutes from now
     const otpExpires = Date.now() + 10 * 60 * 1000;
@@ -39,7 +40,7 @@ export const verifyEmail = async (req, res) => {
     user.otpExpires = otpExpires;
     await user.save();
 
-    console.log(`OTP for ${email}: ${otp}`); // For debugging, remove in production
+    // OTP logging removed to avoid plaintext OTP exposure in logs
 
     await sendMail({
       to: email,
@@ -124,7 +125,7 @@ export const forgotPassword = async (req, res) => {
 
   try {
     if (postgresUserIdentityEnabled()) {
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const otp = crypto.randomInt(100000, 1000000).toString();
       const result = await startIdentityPasswordReset({ email, otp, otpExpires: new Date(Date.now() + 10 * 60 * 1000) });
       if (result.error) return res.status(404).json({ message: 'User not found' });
       await sendMail({ to: email, subject: 'Reset Your Password - MelaChow', html: `<p>Your password reset OTP is <strong>${otp}</strong>. It expires in 10 minutes.</p>` });
@@ -134,7 +135,7 @@ export const forgotPassword = async (req, res) => {
     if (!user) return res.status(404).json({ message: 'User not found' });
 
     //Generate 6-digit OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otp = crypto.randomInt(100000, 1000000).toString();
 
     //Set OTP expiry to 10 minutes from now
     const otpExpires = Date.now() + 10 * 60 * 1000;
@@ -215,11 +216,11 @@ export const resetPassword = async (req, res) => {
       return res.status(400).json({ message: "Invalid or expired OTP" });
     }
 
-    // 3. Hash new password
-    const hashedPassword = bcryptjs.hashSync(password, 10);
-
-    // Update user's password
-    user.password = hashedPassword;
+    // Update user's password (UserSchema pre-save hook handles bcrypt hashing)
+    if (!password || String(password).length < 8) {
+      return res.status(400).json({ message: "Password must be at least 8 characters" });
+    }
+    user.password = password;
     // 4. Clear OTP
     user.otp = undefined;
     user.otpExpires = undefined;
@@ -246,7 +247,7 @@ const generateToken = (user) => {
 // import bcrypt from "bcryptjs"; // not "bcrypt"
 
 export const signup = async (req, res, next) => {
-  const { firstname, lastname, email, addresses, avatar, phone, role } = req.body;
+  const { firstname, lastname, email, addresses, avatar, phone } = req.body;
 
   try {
 
@@ -261,9 +262,8 @@ export const signup = async (req, res, next) => {
       return next(errorHandler(404, 'Phone number has been used by another user!'))
     }
 
-    // Password logic removed for OTP auth
-
-    const newUser = new User({ firstname, lastname, email, addresses, avatar, phone, role });
+    // Password logic removed for OTP auth; role is always forced to "user"
+    const newUser = new User({ firstname, lastname, email, addresses, avatar, phone, role: "user" });
 
     await newUser.save();
 
@@ -289,7 +289,7 @@ export const login = async (req, res, next) => {
     // Password check removed for OTP flow
 
     // OTP generation logic...
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otp = crypto.randomInt(100000, 1000000).toString();
     user.otp = otp;
     user.otpExpires = Date.now() + 10 * 60 * 1000;
     await user.save();
@@ -352,7 +352,7 @@ export const resendOtp = async (req, res, next) => {
     }
 
     // Generate new OTP
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otp = crypto.randomInt(100000, 1000000).toString();
     user.otp = otp;
     user.otpExpires = Date.now() + 10 * 60 * 1000; // expires in 10 min
     await user.save();
