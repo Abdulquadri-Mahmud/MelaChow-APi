@@ -162,7 +162,9 @@ app.use((req, res, next) => {
   const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(req.method);
   const origin = req.get('Origin');
   const isTrustedNativeApp = origin && nativeAppOrigins.has(origin);
-  if (unsafe && req.get('Sec-Fetch-Site') === 'cross-site' && !isTrustedNativeApp) {
+  const hasBearerAuth = typeof req.headers.authorization === 'string' && req.headers.authorization.startsWith('Bearer ');
+  const isAllowlistedBearer = Boolean(origin && allowedOrigins.includes(origin) && hasBearerAuth);
+  if (unsafe && req.get('Sec-Fetch-Site') === 'cross-site' && !isTrustedNativeApp && !isAllowlistedBearer) {
     return res.status(403).json({ success: false, message: 'Cross-site request blocked' });
   }
   return next();
