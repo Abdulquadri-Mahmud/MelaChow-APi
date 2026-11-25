@@ -119,6 +119,7 @@ const recommendationItemShape = (item, deliveryConfig) => {
       coordinates: vendor.address?.coordinates,
       latitude: vendor.address?.latitude ?? vendor.address?.coordinates?.lat,
       longitude: vendor.address?.longitude ?? vendor.address?.coordinates?.lng,
+      estimatedDeliveryTime: 30,
       openingHours: vendor.openingHours,
     },
   };

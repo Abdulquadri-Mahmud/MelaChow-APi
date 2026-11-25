@@ -112,6 +112,7 @@ const buildRecommendationItems = async (items) => {
         coordinates: vendor.address?.coordinates,
         latitude: vendor.address?.latitude ?? vendor.address?.coordinates?.lat,
         longitude: vendor.address?.longitude ?? vendor.address?.coordinates?.lng,
+        estimatedDeliveryTime: vendor.estimatedDeliveryTime ?? 30,
         openingHours: vendor.openingHours,
       },
     };
