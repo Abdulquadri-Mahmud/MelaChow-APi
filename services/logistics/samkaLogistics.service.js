@@ -202,9 +202,19 @@ export async function dispatchSamkaDelivery(id) {
     }
     return loadDelivery(id);
   } catch (error) {
+    const errorPayload = error.responseBody && typeof error.responseBody === "object"
+      ? error.responseBody
+      : error.responseBody
+        ? { raw: String(error.responseBody).slice(0, 1000) }
+        : undefined;
     await prisma.logisticsDelivery.updateMany({
       where: { id, dispatchStatus: "dispatching", lastAttemptAt: now },
-      data: { dispatchStatus: "retry", nextAttemptAt: new Date(Date.now() + Math.min(15 * 60_000, 30_000 * (2 ** Math.min(attempt - 1, 5)))), lastError: error.message.slice(0, 1000) },
+      data: {
+        dispatchStatus: "retry",
+        nextAttemptAt: new Date(Date.now() + Math.min(15 * 60_000, 30_000 * (2 ** Math.min(attempt - 1, 5)))),
+        lastError: error.message.slice(0, 1000),
+        ...(errorPayload !== undefined ? { responsePayload: errorPayload } : {}),
+      },
     });
     throw error;
   }
