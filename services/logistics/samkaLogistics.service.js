@@ -1,6 +1,7 @@
 import prisma from "../../config/prisma.js";
 import { deliveryContentsFrom } from "./deliveryContents.js";
 import { sendOrderNotification, sendVendorNotification } from "../notification.service.js";
+import { registerSamkaCallHooks, terminateActiveCallsForOrder } from "../call/callSession.service.js";
 
 const SOURCE_MELACHOW = "MelaChow";
 const TERMINAL_STATUSES = new Set([8, 9, 10]);
@@ -252,7 +253,10 @@ async function applyExternalStatus(delivery, externalStatus, responsePayload) {
     const changed = current.orderStatus !== nextVendorStatus;
     const statusLog = Array.isArray(current.userOrder.statusLog) ? current.userOrder.statusLog : [];
     await tx.vendorOrder.update({ where: { id: current.id }, data: { orderStatus: nextVendorStatus, ...(externalStatus === 8 ? { escrowReleased: true } : {}) } });
+    const previousRiderId = String(delivery.assignedRider?.id || delivery.assignedRider?.riderId || current.userOrder.riderAssignment?.rider?.id || "").trim() || null;
     const assignedRider = responsePayload?.rider || responsePayload?.data?.rider || delivery.assignedRider || current.userOrder.riderAssignment?.rider || null;
+    const nextRiderId = String(assignedRider?.id || assignedRider?.riderId || "").trim() || null;
+    const riderReassigned = Boolean(previousRiderId && nextRiderId && previousRiderId.toLowerCase() !== nextRiderId.toLowerCase());
     const assignment = current.userOrder.riderAssignment && typeof current.userOrder.riderAssignment === "object"
       ? current.userOrder.riderAssignment : {};
     const notifiedMilestones = assignment.customerNotifiedMilestones && typeof assignment.customerNotifiedMilestones === "object"
@@ -288,9 +292,20 @@ async function applyExternalStatus(delivery, externalStatus, responsePayload) {
       restaurantName: current.restaurant?.storeName,
       riderName: assignedRider?.name || null,
       rider: assignedRider,
+      riderReassigned,
+      orderUuid: current.userOrderId,
+      vendorOrderUuid: current.id,
     };
   }, { isolationLevel: "Serializable" });
   if (transition.stale) return transition;
+  if (externalStatus === 8 || transition.riderReassigned) {
+    await terminateActiveCallsForOrder({
+      orderId: transition.orderUuid,
+      vendorOrderId: transition.vendorOrderUuid,
+      externalDeliveryId: delivery.externalDeliveryId,
+      reason: externalStatus === 8 ? "order_delivered" : "rider_reassigned",
+    });
+  }
   if (transition.changed || transition.customerMilestone || (transition.externalChanged && [5, 7].includes(externalStatus))) await notifySamkaOrderTransition(transition);
   return transition;
 }
@@ -429,8 +444,16 @@ async function applyTerminalStatus(delivery, status, responsePayload, reason) {
       vendorId: current.restaurant?.legacyMongoId || current.restaurantId,
       vendorOrderId: current.legacyMongoId || current.id,
       restaurantName: current.restaurant?.storeName,
+      orderUuid: current.userOrderId,
+      vendorOrderUuid: current.id,
     };
   }, { isolationLevel: "Serializable" });
+  await terminateActiveCallsForOrder({
+    orderId: transition.orderUuid,
+    vendorOrderId: transition.vendorOrderUuid,
+    externalDeliveryId: delivery.externalDeliveryId,
+    reason: `order_${nextStatus}`,
+  });
   if (transition.changed) await notifySamkaOrderTransition(transition);
   return transition;
 }
@@ -497,11 +520,49 @@ export async function cancelQueuedSamkaDeliveryForVendorOrder(vendorOrderId, rea
   const delivery = await prisma.logisticsDelivery.findUnique({ where: { vendorOrderId } });
   if (!delivery || delivery.dispatchStatus === "terminal") return delivery;
   if (delivery.externalDeliveryId) await cancelSamkaDelivery(delivery.externalDeliveryId, reason);
+  await terminateActiveCallsForOrder({
+    vendorOrderId,
+    externalDeliveryId: delivery.externalDeliveryId,
+    reason: "order_cancelled",
+  });
   return prisma.logisticsDelivery.update({
     where: { id: delivery.id },
     data: { dispatchStatus: "terminal", externalStatus: 9, lastError: String(reason || "Cancelled by MelaChow"), lastSyncedAt: new Date() },
   });
 }
+
+export async function notifySamkaRiderCallEvent(externalDeliveryId, payload) {
+  if (!externalDeliveryId) return null;
+  return request(`/api/source-deliveries/${externalDeliveryId}/call-notification?source=${SOURCE_MELACHOW}`, {
+    method: "POST",
+    body: JSON.stringify(payload || {}),
+  });
+}
+
+export async function refreshSamkaDeliveryRider(delivery) {
+  if (!delivery?.externalDeliveryId) return null;
+  const details = await request(`/api/source-deliveries/${delivery.externalDeliveryId}/details?source=${SOURCE_MELACHOW}`);
+  const rawRider = details?.rider || details?.data?.rider || null;
+  if (!rawRider) return null;
+  const normalized = {
+    id: rawRider.id || rawRider.riderId || null,
+    name: rawRider.fullName || rawRider.name || "Delivery Rider",
+    fullName: rawRider.fullName || rawRider.name || "Delivery Rider",
+    avatar: rawRider.profileImageUrl || rawRider.avatar || null,
+    profileImageUrl: rawRider.profileImageUrl || rawRider.avatar || null,
+    vehicleType: rawRider.vehicleType || null,
+  };
+  await prisma.logisticsDelivery.update({
+    where: { id: delivery.id },
+    data: { assignedRider: normalized, lastSyncedAt: new Date() },
+  });
+  return normalized;
+}
+
+registerSamkaCallHooks({
+  notifyRiderCallEvent: notifySamkaRiderCallEvent,
+  refreshDeliveryRider: refreshSamkaDeliveryRider,
+});
 
 export async function processSamkaCallback({ eventType, externalDeliveryId, sourceOrderId, data = {}, payload = {} }) {
   const normalizedExternalId = String(externalDeliveryId || "").trim();

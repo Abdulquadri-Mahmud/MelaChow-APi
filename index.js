@@ -51,6 +51,7 @@ import bannerRoutes from "./routes/Admin/banner.routes.js";
 import platformConfigPublicRoutes from "./routes/public/platformConfig.public.routes.js";
 import samkaLogisticsRoutes from "./routes/integrations/samkaLogistics.routes.js";
 import samkaLogisticsAdminRoutes from "./routes/Admin/samkaLogisticsAdmin.routes.js";
+import callRoutes from "./routes/call.routes.js";
 import supportTicketRoutes from "./routes/supportTicket.routes.js";
 import qrRoutes from "./routes/qr.routes.js";
 import adminSupportTicketRoutes from "./routes/Admin/supportTicket.routes.js";
@@ -430,6 +431,15 @@ app.use('/api/categories', categoryRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/locations', publicLocationRoutes);
 app.use('/api/notifications', notificationRoutes);
+const callLimiter = rateLimit({
+  windowMs: 5 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: 'Too many call requests, please try again shortly.' },
+});
+
+app.use('/api/calls', callLimiter, callRoutes);
 app.use('/api/socket', socketHealthRoutes);
 app.use("/api/promos", publicPromoRoutes);
 app.use("/api/banners", bannerRoutes);

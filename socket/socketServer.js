@@ -5,6 +5,8 @@ import Vendor from '../model/vendor/vendor.model.js';
 import Admin from '../model/Admin/admin.model.js';
 import Rider from '../model/rider.model.js';
 import { registerRiderSocketHandlers } from './rider.socket.js';
+import { registerCallSocketHandlers } from './call.socket.js';
+import { verifySamkaRiderCallToken } from '../services/call/callAuth.service.js';
 import { createAdapter } from '@socket.io/redis-adapter';
 import { pubClient, subClient, isRedisReady } from '../config/redis.js';
 import { JWT_SECRET } from '../utils/jwt.js';
@@ -99,6 +101,23 @@ export async function initializeSocket(server) {
                 return next(new Error('Authentication token required'));
             }
 
+            // Check for short-lived Samka Rider Call Token (minted by SamkaTech.Logistics)
+            try {
+                const samkaActor = verifySamkaRiderCallToken(token);
+                if (samkaActor) {
+                    socket.userId = samkaActor.riderId;
+                    socket.riderId = samkaActor.riderId;
+                    socket.riderName = samkaActor.name;
+                    socket.userEmail = samkaActor.name;
+                    socket.userRole = 'samka_rider';
+                    console.log(`✅ Socket authenticated: samka_rider ${socket.riderId} (${socket.id})`);
+                    return next();
+                }
+            } catch (samkaErr) {
+                console.error('❌ Socket Auth Failed: Invalid Samka rider call token', samkaErr.message);
+                return next(new Error('Authentication failed'));
+            }
+
             if (await isTokenBlocked(token)) {
                 return next(new Error('Session has been revoked'));
             }
@@ -140,8 +159,15 @@ export async function initializeSocket(server) {
                 if (postgresUserIdentityEnabled()) {
                     const pgUser = await findIdentityByTokenId(targetId);
                     identity = pgUser ? publicUser(pgUser) : null;
+                    if (pgUser) {
+                        socket.postgresUserId = String(pgUser.id);
+                        socket.userName = pgUser.fullName || [pgUser.firstname, pgUser.lastname].filter(Boolean).join(' ').trim() || 'Customer';
+                    }
                 } else {
                     identity = await User.findById(targetId).select('-password');
+                    if (identity) {
+                        socket.userName = identity.fullName || identity.name || [identity.firstname, identity.lastname].filter(Boolean).join(' ').trim() || 'Customer';
+                    }
                 }
             }
 
@@ -172,11 +198,24 @@ export async function initializeSocket(server) {
     io.on('connection', async (socket) => {
         console.log(`🔌 Client connected: ${socket.id} | Role: ${socket.userRole} | User: ${socket.userEmail}`);
 
+        // Register Voice Calling Signaling Handlers (Customer + Samka Rider)
+        registerCallSocketHandlers(io, socket);
+
+        // Samka Riders only use the calling signaling channel and join their dedicated room
+        if (socket.userRole === 'samka_rider' && socket.riderId) {
+            socket.join(`samka_rider_${socket.riderId}`);
+            console.log(`🛵 Samka Rider ${socket.riderId} joined calling room: samka_rider_${socket.riderId}`);
+            return;
+        }
+
         // Register Rider Specific Handlers
         registerRiderSocketHandlers(io, socket);
 
         // Join personal room (used by emitToUser, emitToAdmin)
         socket.join(`user_${socket.userId}`);
+        if (socket.postgresUserId && socket.postgresUserId !== socket.userId) {
+            socket.join(`user_${socket.postgresUserId}`);
+        }
         console.log(`👤 ${socket.userRole} ${socket.userId} joined personal room`);
 
         // ── Rider room handlers ────────────────────────────────────────────
@@ -400,6 +439,15 @@ export function emitToRider(riderId, event, data) {
     // Match the room format used in rider_connect
     io.to(`rider:${riderId}`).emit(event, data);
     console.log(`📤 Emitted '${event}' to rider ${riderId}`);
+}
+
+/**
+ * Emit event to a connected Samka Rider (voice calling signaling)
+ */
+export function emitToSamkaRider(riderId, event, data) {
+    if (!io || !riderId) return;
+    io.to(`samka_rider_${riderId}`).emit(event, data);
+    console.log(`📤 Emitted '${event}' to Samka rider ${riderId}`);
 }
 
 /**
