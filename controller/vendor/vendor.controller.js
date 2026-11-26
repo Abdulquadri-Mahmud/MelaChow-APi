@@ -19,16 +19,20 @@ import { disputeRepository } from "../../services/postgres/dispute.repository.js
 import {
   postgresVendorIdentityEnabled, publicVendor, setVendorDeletedIdentity,
   setVendorLiveStatusIdentity, updateVendorProfileIdentity,
-  updateVendorTodayHoursIdentity,
-  getVendorDashboardIdentity,
+  updateVendorTodayHoursIdentity, updateVendorAvailabilityIdentity,
+  getVendorDashboardIdentity, findVendorByTokenId,
 } from "../../services/postgres/vendorIdentity.repository.js";
 import { vendorOrdersRepository } from "../../services/postgres/vendorOrders.repository.js";
 import { runShadowComparison } from "../../services/postgres/shadowCompare.js";
-import { usePostgresWalletReads } from "../../services/postgres/compat.js";
+import { usePostgresReviewReads, usePostgresWalletReads } from "../../services/postgres/compat.js";
+import { reviewManagementRepository } from "../../services/postgres/reviewManagement.repository.js";
 import { walletRepository } from "../../services/postgres/wallet.repository.js";
 import MenuItem from "../../model/menu/MenuItem.js";
 import MenuItemPortion from "../../model/menu/MenuItemPortion.js";
+import Reviews from "../../model/reviews/review.model.js";
 import { PUBLIC_VENDOR_FILTER } from "../../utils/vendorAvailability.js";
+import { getVendorOpenStatus, normalizeAvailabilityConfig } from "../../utils/vendorOpenStatus.js";
+import { computeVendorAnalytics } from "../../utils/vendorAnalytics.js";
 import { getDeliveryQuotes } from "../../services/deliveryPricing.service.js";
 
 const stripRecipientCode = (value) => {
@@ -491,13 +495,20 @@ export const updateVendor = async (req, res) => {
       delete updates.payoutDetails;
     }
 
-    // Vendors may edit their weekly schedule, but only a super-admin may
-    // create or remove the live operating-status override.
+    // Vendors may edit their weekly schedule and availability controls, but only
+    // a super-admin may create or remove the live operating-status override.
     if (updates.openingHours) {
       const allowedDays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
       allowedDays.forEach((day) => {
         if (updates.openingHours[day]) updates[`openingHours.${day}`] = updates.openingHours[day];
       });
+      if (updates.openingHours.availability) {
+        const existingVendor = await vendorModel.findById(id).select("openingHours.availability").lean();
+        updates["openingHours.availability"] = normalizeAvailabilityConfig(
+          updates.openingHours.availability,
+          existingVendor?.openingHours?.availability
+        );
+      }
       delete updates.openingHours;
     }
 
@@ -1290,6 +1301,163 @@ export const respondToRemakeRequest = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Failed to process remake response.",
+      error: error.message,
+    });
+  }
+};
+
+// ----------------------------------------------
+// RESTAURANT AVAILABILITY AUTOMATION CONTROLS
+// ----------------------------------------------
+export const updateVendorAvailability = async (req, res) => {
+  try {
+    if (!req.vendor) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized. Authentication required.",
+      });
+    }
+
+    const vendorId = req.vendor._id;
+    const patch = req.body || {};
+
+    if (postgresVendorIdentityEnabled()) {
+      const updated = await updateVendorAvailabilityIdentity(vendorId, patch);
+      if (!updated) {
+        return res.status(404).json({ success: false, message: "Vendor not found" });
+      }
+      const nextAvailability = updated.openingHours?.availability || {};
+      vendorModel
+        .updateOne(
+          { _id: updated.legacyMongoId || vendorId },
+          { $set: { "openingHours.availability": nextAvailability } }
+        )
+        .catch((err) => console.error("Vendor availability Mongo mirror failed:", err.message));
+
+      const openStatus = getVendorOpenStatus(updated.openingHours);
+      return res.status(200).json({
+        success: true,
+        message: "Store availability updated.",
+        data: publicVendor(updated),
+        availability: nextAvailability,
+        openStatus,
+      });
+    }
+
+    const vendor = await vendorModel.findById(vendorId);
+    if (!vendor) {
+      return res.status(404).json({ success: false, message: "Vendor not found" });
+    }
+
+    const existingHours = vendor.openingHours?.toObject?.() || vendor.openingHours || {};
+    const nextAvailability = normalizeAvailabilityConfig(patch, existingHours.availability);
+
+    vendor.openingHours = {
+      ...existingHours,
+      availability: nextAvailability,
+    };
+    await vendor.save();
+
+    const openStatus = getVendorOpenStatus(vendor.openingHours);
+
+    return res.status(200).json({
+      success: true,
+      message: "Store availability updated.",
+      data: stripRecipientCode(vendor),
+      availability: nextAvailability,
+      openStatus,
+    });
+  } catch (error) {
+    console.error("Failed to update vendor availability:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Unable to update store availability controls.",
+      error: error.message,
+    });
+  }
+};
+
+// ----------------------------------------------
+// VENDOR BUSINESS ANALYTICS & PERFORMANCE INSIGHTS
+// ----------------------------------------------
+export const getVendorAnalytics = async (req, res) => {
+  try {
+    if (!req.vendor) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized. Authentication required.",
+      });
+    }
+
+    const vendorId = req.vendor._id;
+    const timeframe = String(req.query?.timeframe || "30d").toLowerCase();
+
+    let vendor = null;
+    let orders = [];
+    let menuItems = [];
+    let reviews = [];
+
+    if (postgresVendorIdentityEnabled()) {
+      const identity = await findVendorByTokenId(vendorId);
+      if (!identity) {
+        return res.status(404).json({ success: false, message: "Vendor not found" });
+      }
+      vendor = publicVendor(identity);
+
+      const [ordersRes, menuRes, reviewsRes] = await Promise.all([
+        vendorOrdersRepository.listVendorOrders(identity.id).catch(() => []),
+        usePostgresMenuReads()
+          ? menuCatalogRepository
+              .listVendorMenuItems(identity.id, { page: 1, limit: 250 })
+              .then((r) => r?.items || [])
+              .catch(() => [])
+          : MenuItem.find({ vendor_id: identity.legacyMongoId || vendorId, is_archived: false }).lean().catch(() => []),
+        usePostgresReviewReads()
+          ? reviewManagementRepository.getVendorReviews(identity.id).catch(() => [])
+          : Reviews.find({ vendorId: identity.legacyMongoId || vendorId }).lean().catch(() => []),
+      ]);
+
+      orders = Array.isArray(ordersRes) ? ordersRes : [];
+      menuItems = Array.isArray(menuRes) ? menuRes : [];
+      reviews = Array.isArray(reviewsRes) ? reviewsRes : [];
+    } else {
+      vendor = await vendorModel.findById(vendorId).lean();
+      if (!vendor) {
+        return res.status(404).json({ success: false, message: "Vendor not found" });
+      }
+
+      const [ordersRes, menuRes, reviewsRes] = await Promise.all([
+        VendorOrder.find({ restaurantId: vendor._id })
+          .populate({ path: "userOrderId", select: "statusLog orderId createdAt" })
+          .lean()
+          .catch(() => []),
+        MenuItem.find({ vendor_id: vendor._id, is_archived: false }).lean().catch(() => []),
+        Reviews.find({ vendorId: vendor._id }).lean().catch(() => []),
+      ]);
+
+      orders = Array.isArray(ordersRes) ? ordersRes : [];
+      menuItems = Array.isArray(menuRes) ? menuRes : [];
+      reviews = Array.isArray(reviewsRes) ? reviewsRes : [];
+    }
+
+    const analytics = computeVendorAnalytics({
+      vendor,
+      orders,
+      menuItems,
+      reviews,
+      timeframe,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: analytics,
+      openStatus: getVendorOpenStatus(vendor?.openingHours),
+    });
+  } catch (error) {
+    console.error("Failed to compute vendor analytics:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Unable to load store analytics.",
       error: error.message,
     });
   }

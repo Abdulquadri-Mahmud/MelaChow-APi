@@ -12,6 +12,8 @@ import {
     restoreVendor,
     updateVendor,
     updateVendorTodayHours,
+    updateVendorAvailability,
+    getVendorAnalytics,
     getVendorPayoutDetails,
     respondToRemakeRequest,
     setVendorLiveStatus,
@@ -44,6 +46,8 @@ router.get("/vendor", getVendorForUserDisplay); // Get nearby vendors
 router.get("/nearby", getNearbyVendors); // Get nearby vendors
 router.get("/get-vendor", vendorAuth, getVendorById);       // Get vendor by ID/slug
 router.patch("/live-status", vendorAuth, setVendorLiveStatus); // Vendor publishes or pauses own store
+router.patch("/availability", vendorAuth, updateVendorAvailability); // Intelligent availability controls (busy mode, pause, temp closure, prep time, auto-schedule)
+router.get("/analytics", vendorAuth, getVendorAnalytics); // Business analytics & restaurant insights
 router.get("/get-wallet", vendorAuth, getWalletForVendor);  // Get vendor wallet
 router.get("/payout-details", vendorAuth, getVendorPayoutDetails);  // Get hidden payout structure
 router.get("/reviews", vendorAuth, getVendorReviews);         // Get vendor reviews

@@ -90,6 +90,29 @@ const vendorSchema = new Schema(
         changedAt: Date,
         changedBy: { type: mongoose.Schema.Types.ObjectId, ref: "Admin" },
       },
+      availability: {
+        autoScheduleEnabled: { type: Boolean, default: true },
+        basePrepTimeMinutes: { type: Number, default: 25 },
+        busyMode: {
+          active: { type: Boolean, default: false },
+          extraPrepMinutes: { type: Number, default: 15 },
+          until: { type: Date, default: null },
+          reason: { type: String, default: "" },
+          updatedAt: { type: Date, default: null },
+        },
+        orderPause: {
+          active: { type: Boolean, default: false },
+          until: { type: Date, default: null },
+          reason: { type: String, default: "" },
+          updatedAt: { type: Date, default: null },
+        },
+        temporaryClosure: {
+          active: { type: Boolean, default: false },
+          until: { type: Date, default: null },
+          reason: { type: String, default: "" },
+          updatedAt: { type: Date, default: null },
+        },
+      },
     },
 
     // Wallet & bank payout info

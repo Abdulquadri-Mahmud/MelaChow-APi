@@ -2,6 +2,7 @@ import bcrypt from "bcryptjs";
 import prisma from "../../config/prisma.js";
 import MongoVendor from "../../model/vendor/vendor.model.js";
 import { syncVendorPickupPoint } from "./geography.js";
+import { normalizeAvailabilityConfig } from "../../utils/vendorOpenStatus.js";
 
 export const postgresVendorIdentityEnabled = () =>
   process.env.POSTGRES_MIGRATION_ENABLED === "true" &&
@@ -224,6 +225,25 @@ export const updateVendorProfileIdentity = async (tokenId, updates = {}) => {
     if (editableVendorFields.has(key) && value !== undefined) data[key] = value;
   }
 
+  // Always preserve adminOverride & availability controls when a vendor edits their weekly schedule.
+  if (data.openingHours && typeof data.openingHours === "object") {
+    const existingHours = vendor.openingHours && typeof vendor.openingHours === "object" ? vendor.openingHours : {};
+    const mergedHours = { ...existingHours };
+    ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"].forEach((day) => {
+      if (data.openingHours[day]) mergedHours[day] = data.openingHours[day];
+    });
+    if (data.openingHours.availability) {
+      mergedHours.availability = normalizeAvailabilityConfig(
+        data.openingHours.availability,
+        existingHours.availability
+      );
+    }
+    if (existingHours.adminOverride) {
+      mergedHours.adminOverride = existingHours.adminOverride;
+    }
+    data.openingHours = mergedHours;
+  }
+
   const address = updates.address && typeof updates.address === "object" ? updates.address : null;
   const latitude = address?.latitude ?? address?.coordinates?.lat;
   const longitude = address?.longitude ?? address?.coordinates?.lng;
@@ -276,6 +296,18 @@ export const updateVendorTodayHoursIdentity = async (tokenId, day, hours) => {
   const vendor = await findVendorByTokenId(tokenId);
   if (!vendor) return null;
   const openingHours = { ...(vendor.openingHours || {}), [day]: hours };
+  return prisma.vendor.update({ where: { id: vendor.id }, data: { openingHours }, include: includeLocation });
+};
+
+export const updateVendorAvailabilityIdentity = async (tokenId, availabilityPatch = {}) => {
+  const vendor = await findVendorByTokenId(tokenId);
+  if (!vendor) return null;
+  const existingHours = vendor.openingHours && typeof vendor.openingHours === "object" ? vendor.openingHours : {};
+  const nextAvailability = normalizeAvailabilityConfig(availabilityPatch, existingHours.availability);
+  const openingHours = {
+    ...existingHours,
+    availability: nextAvailability,
+  };
   return prisma.vendor.update({ where: { id: vendor.id }, data: { openingHours }, include: includeLocation });
 };
 
