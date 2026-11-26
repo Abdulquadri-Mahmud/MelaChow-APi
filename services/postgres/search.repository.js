@@ -204,7 +204,7 @@ export const searchRepository = {
     return resolveLegacyIds(prisma.vendor, vendorIds);
   },
 
-  async resolveCategoryId(category) {
+  async resolveCategoryIds(category) {
     if (!category) return null;
 
     const where = uuidPattern.test(String(category))
@@ -218,10 +218,26 @@ export const searchRepository = {
 
     const row = await prisma.category.findFirst({
       where,
-      select: { id: true },
+      select: { id: true, parentId: true },
     });
 
-    return row?.id || null;
+    if (!row) return null;
+
+    // Home categories can be parents of the menu categories vendors assign.
+    // Include the full subtree so selecting a parent returns its menus too.
+    const categoryIds = [row.id];
+    let parentIds = [row.id];
+    while (parentIds.length) {
+      const children = await prisma.category.findMany({
+        where: { parentId: { in: parentIds } },
+        select: { id: true },
+      });
+      const nextIds = children.map((child) => child.id).filter((id) => !categoryIds.includes(id));
+      categoryIds.push(...nextIds);
+      parentIds = nextIds;
+    }
+
+    return categoryIds;
   },
 
   async findVendorNameMatches(q, resolvedVendorIds) {
@@ -316,8 +332,8 @@ export const searchRepository = {
       };
     }
 
-    const categoryId = category ? await this.resolveCategoryId(category) : null;
-    if (category && !categoryId) {
+    const categoryIds = category ? await this.resolveCategoryIds(category) : null;
+    if (category && !categoryIds?.length) {
       return {
         success: true,
         count: 0,
@@ -337,7 +353,7 @@ export const searchRepository = {
       isArchived: false,
       ...(available === "false" ? {} : { isAvailable: true }),
       ...(resolvedVendorIds !== null ? { vendorId: { in: resolvedVendorIds } } : {}),
-      ...(categoryId ? { platformCategoryId: categoryId } : {}),
+      ...(categoryIds ? { platformCategoryId: { in: categoryIds } } : {}),
       ...(q?.trim() ? { OR: [...textWhere, ...(vendorMatchIds.length ? [{ vendorId: { in: vendorMatchIds } }] : [])] } : {}),
     };
     const sortOption = orderByFor(sort);
