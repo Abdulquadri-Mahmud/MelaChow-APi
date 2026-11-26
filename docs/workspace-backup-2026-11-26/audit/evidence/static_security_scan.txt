@@ -1,0 +1,31 @@
+﻿===== MelaChow-API-staging =====
+[CodeExec_eval_child_process] (1 hits)
+  prisma/sync-mongo-changes.js:2:import { execFile } from "node:child_process";
+[Math_random_OTP] (8 hits)
+  controller/Admin/admin.controller.js:140:    if(usePostgresAdminWrites()){const admin=await adminAccountRepository.findByEmail(email,{raw:true});if(!admin)return res.status(404).json({success:false,message:"Admin not found"});const otp=Math.floor(100000+Math.random()*900000).toString();await adminAccountRepository.setResetOtp(admin.id,otp,new Date(Date.now()+10*60*1000));await sendAdminEmail({...admin,role:admin.role==="super_admin"?"super-admin":admin.role},otp,"reset");return res.status(200).json({success:true,message:"OTP sent to your email"});}
+  controller/Admin/admin.controller.js:144:    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  controller/user/user.controller.js:33:    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  controller/user/user.controller.js:127:      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  controller/user/user.controller.js:137:    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  controller/user/user.controller.js:292:    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  controller/user/user.controller.js:355:    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+  services/otp.service.js:120:        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+[Stack_leak] (1 hits)
+  controller/wallet/withdrawal.controller.js:302:    return res.status(500).json({ message: "Failed to fetch withdrawal history", error: error.message, stack: error.stack });
+[SQL_raw_unsafe] (1 hits)
+  services/postgres/geography.js:7:  const rows = await prisma.$queryRawUnsafe("SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'postgis') AS installed");
+===== MelaChow-Admin =====
+===== MelaChow-Frontend =====
+[XSS_dangerouslySetInnerHTML] (1 hits)
+  src/app/components/JsonLd.jsx:12:      dangerouslySetInnerHTML={{ __html: JSON.stringify(schema.length === 1 ? schema[0] : schema) }}
+[CodeExec_eval_child_process] (2 hits)
+  scripts/build-mobile.mjs:4:import { spawnSync } from "node:child_process";
+  scripts/mobile-doctor.mjs:3:import { spawnSync } from "node:child_process";
+===== MelaChow-Vendor =====
+[XSS_dangerouslySetInnerHTML] (1 hits)
+  src/app/components/JsonLd.jsx:12:      dangerouslySetInnerHTML={{ __html: JSON.stringify(schema.length === 1 ? schema[0] : schema) }}
+[CodeExec_eval_child_process] (1 hits)
+  scripts/build-native.mjs:2:import path from "node:path"; import { fileURLToPath } from "node:url"; import { spawnSync } from "node:child_process"; import { createRequire } from "node:module";
+===== MelaChow-Rider =====
+[XSS_dangerouslySetInnerHTML] (1 hits)
+  src/app/components/JsonLd.jsx:12:      dangerouslySetInnerHTML={{ __html: JSON.stringify(schema.length === 1 ? schema[0] : schema) }}
