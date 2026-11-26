@@ -575,6 +575,12 @@ const startServer = async () => {
       if (!process.env.DATABASE_URL) throw new Error("DATABASE_URL is required");
       await prisma.$queryRaw`SELECT 1`;
       await assertSamkaSchemaReady();
+      try {
+        const { ensureReferralSchemaReady } = await import("./services/referral.service.js");
+        await ensureReferralSchemaReady();
+      } catch (refSchemaErr) {
+        logger.warn({ err: refSchemaErr.message }, "Referral schema startup ensure failed (will retry lazily)");
+      }
       logger.info("PostgreSQL connected as primary database; logistics schema verified");
     } else {
       await connectDB();

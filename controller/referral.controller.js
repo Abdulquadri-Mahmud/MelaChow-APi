@@ -1,3 +1,4 @@
+import logger from "../config/logger.js";
 import {
   attributeReferral,
   getAdminReferralOverview,
@@ -128,6 +129,7 @@ export const getAdminReferralsOverview = async (_req, res) => {
     const data = await getAdminReferralOverview();
     return res.status(200).json({ success: true, data });
   } catch (error) {
+    logger.error({ err: error.message, code: error.code }, "getAdminReferralsOverview failed");
     return res.status(500).json({ success: false, message: error.message });
   }
 };
@@ -138,6 +140,7 @@ export const getAdminReferralsAttributions = async (req, res) => {
     const data = await listAdminReferralAttributions({ status, search, page, limit });
     return res.status(200).json({ success: true, data });
   } catch (error) {
+    logger.error({ err: error.message, code: error.code }, "getAdminReferralsAttributions failed");
     return res.status(500).json({ success: false, message: error.message });
   }
 };
