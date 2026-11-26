@@ -127,6 +127,12 @@ const platformConfigSchema = new mongoose.Schema(
       max: [23, "Payout hour must be a valid hour"],
     },
 
+    // ── Referral Program Configuration (Super Admin) ──────────────────────
+    referralConfig: {
+      type: mongoose.Schema.Types.Mixed,
+      default: undefined,
+    },
+
     // ── Audit ─────────────────────────────────────────────────────────────
     lastUpdatedBy: {
       type: mongoose.Schema.Types.ObjectId,

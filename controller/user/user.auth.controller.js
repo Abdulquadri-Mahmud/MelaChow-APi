@@ -4,6 +4,7 @@ import { sendMail } from '../../config/mailer.js';
 import { sendAuthCookies } from '../../utils/sendTokenCookie.js';
 import { blockToken, isTokenBlocked } from '../../middleware/tokenBlocklist.js';
 import { wrapLayout } from '../../services/emailTemplate.service.js';
+import { attributeReferral } from '../../services/referral.service.js';
 import {
     authenticateIdentity,
     postgresUserIdentityEnabled,
@@ -23,7 +24,7 @@ import {
 
 export const register = async (req, res) => {
     try {
-        const { email, firstname, lastname, phone } = req.body;
+        const { email, firstname, lastname, phone, referralCode } = req.body;
 
         // Validate input
         if (!email) {
@@ -35,6 +36,25 @@ export const register = async (req, res) => {
             const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
             const result = await registerIdentity({ email, firstname, lastname, phone, otp, otpExpires });
             if (result.conflict) return res.status(400).json({ message: 'Email already registered' });
+
+            let referralStatus = null;
+            if (referralCode && result.user?.id) {
+                try {
+                    const deviceId = req.headers['x-melachow-device-id'] || req.body?.deviceId || null;
+                    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || null;
+                    referralStatus = await attributeReferral({
+                        refereeUserToken: result.user.id,
+                        code: referralCode,
+                        deviceId,
+                        ip,
+                        phone,
+                        email,
+                    });
+                } catch {
+                    referralStatus = null;
+                }
+            }
+
             await sendMail({
                 to: email,
                 subject: 'Verify Your Email: ' + otp,
@@ -42,6 +62,7 @@ export const register = async (req, res) => {
             });
             return res.status(200).json({
                 message: 'Verification code sent to your email', email,
+                ...(referralStatus ? { referralAttributed: Boolean(referralStatus.attributed), referralMessage: referralStatus.message || null } : {}),
                 ...(process.env.NODE_ENV !== 'production' && !process.env.RESEND_API_KEY ? { devOtp: otp } : {})
             });
         }

@@ -56,6 +56,9 @@ import supportTicketRoutes from "./routes/supportTicket.routes.js";
 import qrRoutes from "./routes/qr.routes.js";
 import adminSupportTicketRoutes from "./routes/Admin/supportTicket.routes.js";
 import adminSupportKnowledgeRoutes from "./routes/Admin/supportKnowledge.routes.js";
+import referralRoutes from "./routes/referral.routes.js";
+import adminReferralRoutes from "./routes/Admin/referral.routes.js";
+import { expireStaleReferralsAndCredits } from "./services/referral.service.js";
 import http from 'http';
 import redisClient from './config/redis.js';
 import './config/queue.js';
@@ -452,6 +455,7 @@ app.use("/api/public", platformConfigPublicRoutes);
 app.use("/api/integrations/logistics", samkaLogisticsRoutes);
 app.use("/api/support", supportTicketRoutes);
 app.use("/api/qr", qrRoutes);
+app.use("/api/referrals", referralRoutes);
 
 // Vendors routes
 app.use("/api/vendors", vendorRoutes);
@@ -478,6 +482,7 @@ app.use('/api/admin/finance', platformFinanceRouter);
 app.use('/api/admin/support', adminSupportTicketRoutes);
 app.use('/api/admin/support', adminSupportKnowledgeRoutes);
 app.use('/api/admin/logistics', samkaLogisticsAdminRoutes);
+app.use('/api/admin/referrals', adminReferralRoutes);
 
 // Transactions
 app.use("/api/transactions", transactionRoutes);
@@ -682,6 +687,24 @@ const startServer = async () => {
       logger.error({ err: err.message }, "Initial PostgreSQL order timeout sweep failed")
     );
     console.log("PostgreSQL order timeout sweep registered (every minute)");
+
+    if (dbProvider === "postgres") {
+      cron.schedule(
+        "*/30 * * * *",
+        async () => {
+          try {
+            const summary = await expireStaleReferralsAndCredits();
+            if (summary.expiredAttributions || summary.expiredCredits || summary.remindedCount) {
+              logger.info(summary, "Referral & reward credit expiry sweep completed");
+            }
+          } catch (err) {
+            logger.warn({ err: err.message }, "Referral expiry sweep failed");
+          }
+        },
+        { timezone: "Africa/Lagos" }
+      );
+      console.log("Referral & reward credit expiry sweep registered (every 30 minutes)");
+    }
 
     if (usesSamkaLogistics()) {
       cron.schedule(

@@ -3,6 +3,7 @@ import prisma from "../../config/prisma.js";
 import { koboToNaira, orderItemToNaira } from "../../utils/moneyContract.js";
 import { assertVendorIsOpen } from "../../utils/vendorOpenStatus.js";
 import { quoteVendorDelivery } from "../deliveryPricing.service.js";
+import { reserveRewardCreditsInTx } from "../referral.service.js";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -343,6 +344,7 @@ const orderShape = (order) => ({
   serviceFee: koboToNaira(order.serviceFee),
   total: koboToNaira(order.total),
   appliedDiscount: order.appliedDiscount,
+  rewardCredit: koboToNaira(order.rewardCreditKobo || 0),
   paymentReference: order.paymentReference,
   paymentStatus: order.paymentStatus,
   orderStatus: order.orderStatus,
@@ -364,6 +366,7 @@ export const postgresOrderCreationRepository = {
     idempotencyKey = null,
     orderCode = null,
     discountCode = null,
+    useRewardCredits = false,
     promoIdentity = {},
     rawIp = "unknown",
   }) {
@@ -496,15 +499,35 @@ export const postgresOrderCreationRepository = {
         reservedDiscount = discount;
       }
       const finalOrderCode = orderCode || generateOrderCode();
+      const orderUuid = crypto.randomUUID();
+      const foodDiscountKobo =
+        appliedDiscount && appliedDiscount.scope !== "DELIVERY_FEE"
+          ? Math.round(Number(appliedDiscount.amount || 0) * 100)
+          : 0;
+      const remainingFoodSubtotalKobo = Math.max(0, subtotal - foodDiscountKobo);
+
+      const { appliedKobo: rewardCreditKobo } = await reserveRewardCreditsInTx(tx, {
+        userId: customerId,
+        orderId: orderUuid,
+        orderCode: finalOrderCode,
+        foodSubtotalKobo: remainingFoodSubtotalKobo,
+        useRewardCredits: Boolean(useRewardCredits),
+        hasCoupon: Boolean(reservedDiscount),
+        hasFreeDelivery: Boolean(selectedPromo),
+        platformConfig,
+      });
+      total = Math.max(0, total - rewardCreditKobo);
 
       const order = await tx.order.create({
         data: {
+          id: orderUuid,
           userId: customerId,
           deliveryAddress: normalizeAddress(deliveryAddress),
           phone,
           subtotal,
           deliveryFee: totalDeliveryFee,
           serviceFee,
+          rewardCreditKobo,
           total,
           orderCode: finalOrderCode,
           paymentStatus: "pending",

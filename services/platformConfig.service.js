@@ -1,6 +1,7 @@
 import PlatformConfig from "../model/platform/PlatformConfig.model.js";
 import { usePostgresPlatformConfigReads } from "./postgres/compat.js";
 import { platformConfigRepository } from "./postgres/platformConfig.repository.js";
+import { DEFAULT_REFERRAL_CONFIG, normalizeReferralConfig } from "../utils/referralConfig.js";
 
 /**
  * Fetch the singleton platform config.
@@ -31,12 +32,14 @@ export const getPlatformConfig = async () => {
       serviceFeeValue: 0,
       serviceFeeCap: 500,
       paystackFeeBearer: "customer",
+      referralConfig: { ...DEFAULT_REFERRAL_CONFIG },
     };
   }
 
   return {
     ...config,
     paystackFeeBearer: config.paystackFeeBearer || "customer",
+    referralConfig: normalizeReferralConfig(config.referralConfig),
   };
 };
 

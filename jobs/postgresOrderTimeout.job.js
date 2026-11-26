@@ -1,6 +1,7 @@
 import logger from "../config/logger.js";
 import { usePostgresOrderStatusWrites } from "../services/postgres/compat.js";
 import { vendorOrdersRepository } from "../services/postgres/vendorOrders.repository.js";
+import { restoreRewardCreditsForOrder } from "../services/referral.service.js";
 
 export const cancelStalePostgresOrders = async () => {
   if (!usePostgresOrderStatusWrites()) return [];
@@ -9,6 +10,13 @@ export const cancelStalePostgresOrders = async () => {
   const results = await vendorOrdersRepository.autoCancelStalePendingOrders({ olderThanMinutes });
   const cancelled = results.filter((result) => result.success);
   const failed = results.filter((result) => !result.success);
+
+  for (const item of cancelled) {
+    const targetOrderId = item?.orderId || item?.id;
+    if (targetOrderId) {
+      await restoreRewardCreditsForOrder(targetOrderId).catch(() => {});
+    }
+  }
 
   if (cancelled.length) logger.info({ orders: cancelled }, "Stale PostgreSQL orders auto-cancelled and refunded");
   if (failed.length) logger.error({ orders: failed }, "Some PostgreSQL order timeout cancellations failed");

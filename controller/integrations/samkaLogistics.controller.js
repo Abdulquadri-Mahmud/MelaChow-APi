@@ -54,7 +54,19 @@ export const receiveSamkaCallback = async (req, res) => {
     const result = await processSamkaCallback({ eventType, externalDeliveryId: callback.deliveryId, sourceOrderId: callback.sourceOrderId, data: callback.data || {}, payload: callback });
     const order = result.delivery?.vendorOrder?.userOrder;
     if (order && result.riderLocation) emitDeliveryLocationUpdate(order.orderCode, order.userId, result.riderLocation);
-    if (order && result.statusChanged) emitOrderStatusUpdate({ orderId: order.orderCode, userId: order.userId, orderStatus: result.status, rider: ["delivered", "completed"].includes(result.status) ? null : result.rider || null }, order.orderStatus);
+    if (order && result.statusChanged) {
+      emitOrderStatusUpdate({ orderId: order.orderCode, userId: order.userId, orderStatus: result.status, rider: ["delivered", "completed"].includes(result.status) ? null : result.rider || null }, order.orderStatus);
+      if (["delivered", "completed"].includes(result.status)) {
+        import("../../services/referral.service.js")
+          .then(({ evaluateAndIssueReferralRewardForOrder }) =>
+            evaluateAndIssueReferralRewardForOrder({
+              orderToken: order.id || order.orderCode,
+              trigger: result.status === "completed" ? "on_completed" : "on_delivered",
+            })
+          )
+          .catch(() => {});
+      }
+    }
     return res.status(204).end();
   } catch (error) {
     await prisma.logisticsCallbackEvent.delete({ where: { eventId } }).catch(() => null);

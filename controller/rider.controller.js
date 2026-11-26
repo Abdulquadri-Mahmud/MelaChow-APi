@@ -1194,6 +1194,16 @@ export const confirmDelivery = async (req, res, next) => {
             ? await riderSelfRepository.markDelivered(actualOrderId, riderId)
             : await riderService.markDelivered(actualOrderId, riderId);
 
+        // Immediately evaluate & issue referral reward credit when rider marks Delivered
+        import('../services/referral.service.js')
+            .then(({ evaluateAndIssueReferralRewardForOrder }) =>
+                evaluateAndIssueReferralRewardForOrder({
+                    orderToken: order?._id || order?.id || actualOrderId,
+                    trigger: 'on_delivered',
+                })
+            )
+            .catch(() => {});
+
         // Emit real-time status update to customer tracking page
         try {
             const io = getIO();

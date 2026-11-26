@@ -1,4 +1,5 @@
 import prisma from "../../config/prisma.js";
+import { DEFAULT_REFERRAL_CONFIG, normalizeReferralConfig } from "../../utils/referralConfig.js";
 
 const defaultPlatformConfig = {
   riderPayoutType: "flat",
@@ -15,6 +16,7 @@ const defaultPlatformConfig = {
   serviceFeeValue: 0,
   serviceFeeCap: 500,
   paystackFeeBearer: "customer",
+  referralConfig: { ...DEFAULT_REFERRAL_CONFIG },
 };
 
 const legacyId = (record) => record?.legacyMongoId || record?.id || null;
@@ -25,6 +27,7 @@ const configValue = (config) => {
     ...defaultPlatformConfig,
     ...stored,
     riderPayoutValue: stored.riderPayoutValue ?? stored.riderFixedPayout ?? defaultPlatformConfig.riderPayoutValue,
+    referralConfig: normalizeReferralConfig(stored.referralConfig),
   };
 };
 

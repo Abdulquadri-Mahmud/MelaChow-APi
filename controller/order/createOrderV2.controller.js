@@ -2260,7 +2260,7 @@ export const createOrderController = async (req, res) => {
     let order = null;
     let reference = null;
     try {
-        const { items, vendorDeliveryFees, deliveryAddress, phone, discountCode, useWallet, idempotencyKey, deviceId, notes = {} } = req.body;
+        const { items, vendorDeliveryFees, deliveryAddress, phone, discountCode, useWallet, useRewardCredits, idempotencyKey, deviceId, notes = {} } = req.body;
         const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip || "unknown";
         const userId = req.userId; // From auth middleware
 
@@ -2273,6 +2273,7 @@ export const createOrderController = async (req, res) => {
                 phone,
                 idempotencyKey: idempotencyKey || null,
                 discountCode: discountCode || null,
+                useRewardCredits: Boolean(useRewardCredits),
                 promoIdentity: buildPromoIdentity({ deviceId: deviceId || req.headers["x-melachow-device-id"], phone: req.user?.phone }),
                 rawIp: clientIp,
             });
