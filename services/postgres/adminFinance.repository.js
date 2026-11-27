@@ -243,6 +243,11 @@ const adminFinanceRepositoryKobo = {
     const totalCredits = adminTransactions.filter((tx) => tx.type === "credit").reduce((sum, tx) => sum + numberValue(tx.amount), 0);
     const totalDebits = adminTransactions.filter((tx) => tx.type === "debit").reduce((sum, tx) => sum + numberValue(tx.amount), 0);
     const currentPlatformBalance = adminWallet?.balance || 0;
+    const paidOrderCount = paidOrders.length;
+    const totalOrderRevenue = paidOrders.reduce((sum, order) => sum + numberValue(order.total), 0);
+    const totalFoodSubtotalKobo = paidOrders.reduce((sum, order) => sum + numberValue(order.subtotal), 0);
+    const totalDeliveryFeesCollected = paidOrders.reduce((sum, order) => sum + numberValue(order.deliveryFee), 0);
+    const totalServiceFeesCollected = paidOrders.reduce((sum, order) => sum + numberValue(order.serviceFee), 0);
 
     return {
       success: true,
@@ -255,9 +260,17 @@ const adminFinanceRepositoryKobo = {
         totalDeliverySpreadEarned: totalPlatformDeliveryRevenue,
         totalServiceFeeRevenue,
         combinedPlatformRevenue: totalCommissionEarned + totalPlatformDeliveryRevenue + totalServiceFeeRevenue,
-        totalOrderRevenue: paidOrders.reduce((sum, order) => sum + numberValue(order.total), 0),
-        totalDeliveryFeesCollected: paidOrders.reduce((sum, order) => sum + numberValue(order.deliveryFee), 0),
-        totalServiceFeesCollected: paidOrders.reduce((sum, order) => sum + numberValue(order.serviceFee), 0),
+        totalOrderRevenue,
+        totalDeliveryFeesCollected,
+        totalServiceFeesCollected,
+        paidOrderCount,
+        orderAverages: {
+          paidOrderCount,
+          avgFoodSubtotalNaira: paidOrderCount > 0 ? Math.round(totalFoodSubtotalKobo / paidOrderCount / 100) : 0,
+          avgDeliveryFeeNaira: paidOrderCount > 0 ? Math.round(totalDeliveryFeesCollected / paidOrderCount / 100) : 0,
+          avgServiceFeeNaira: paidOrderCount > 0 ? Math.round(totalServiceFeesCollected / paidOrderCount / 100) : 0,
+          avgOrderTotalNaira: paidOrderCount > 0 ? Math.round(totalOrderRevenue / paidOrderCount / 100) : 0,
+        },
         totalCredits,
         totalDebits,
         period: { startDate, endDate },
