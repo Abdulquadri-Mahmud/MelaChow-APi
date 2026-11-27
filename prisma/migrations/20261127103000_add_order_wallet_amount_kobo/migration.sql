@@ -1,0 +1,1 @@
+ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "wallet_amount_kobo" INTEGER NOT NULL DEFAULT 0;

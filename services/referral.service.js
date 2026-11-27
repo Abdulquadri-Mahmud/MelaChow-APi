@@ -21,6 +21,7 @@ let referralSchemaReadyPromise = null;
 
 const REFERRAL_DDL_STATEMENTS = [
   `ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "reward_credit_kobo" INTEGER NOT NULL DEFAULT 0`,
+  `ALTER TABLE "orders" ADD COLUMN IF NOT EXISTS "wallet_amount_kobo" INTEGER NOT NULL DEFAULT 0`,
   `CREATE TABLE IF NOT EXISTS "referral_codes" (
     "id" UUID NOT NULL,
     "user_id" UUID NOT NULL,

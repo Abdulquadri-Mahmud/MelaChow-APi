@@ -2260,7 +2260,7 @@ export const createOrderController = async (req, res) => {
     let order = null;
     let reference = null;
     try {
-        const { items, vendorDeliveryFees, deliveryAddress, phone, discountCode, useWallet, useRewardCredits, idempotencyKey, deviceId, notes = {} } = req.body;
+        const { items, vendorDeliveryFees, deliveryAddress, phone, discountCode, useWallet, walletAmount, useRewardCredits, idempotencyKey, deviceId, notes = {} } = req.body;
         const clientIp = req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.ip || "unknown";
         const userId = req.userId; // From auth middleware
 
@@ -2273,22 +2273,61 @@ export const createOrderController = async (req, res) => {
                 phone,
                 idempotencyKey: idempotencyKey || null,
                 discountCode: discountCode || null,
+                useWallet: Boolean(useWallet),
+                walletAmount: walletAmount ?? null,
                 useRewardCredits: Boolean(useRewardCredits),
                 promoIdentity: buildPromoIdentity({ deviceId: deviceId || req.headers["x-melachow-device-id"], phone: req.user?.phone }),
                 rawIp: clientIp,
             });
 
-            if (useWallet) {
+            const totalKobo = result.order.moneyUnit === "naira"
+                ? Math.round(Number(result.order.total || 0) * 100)
+                : Math.round(Number(result.order.total || 0));
+            const walletAmountKobo = Math.min(
+                totalKobo,
+                Math.max(0, Math.round(Number(result.order.walletAmount || 0) * 100))
+            );
+            const paystackAmountKobo = Math.max(0, totalKobo - walletAmountKobo);
+            const isSplitWalletPaystack = walletAmountKobo > 0 && paystackAmountKobo > 0;
+
+            if ((useWallet && paystackAmountKobo === 0) || totalKobo === 0) {
                 reference = `WALLET_${result.order.orderId}`;
-                await postgresPaymentRepository.initializeOrderPaymentReference({ orderId: result.order.id, reference, cartSnapshot: { items, vendorDeliveryFees, deliveryAddress, phone, discountCode, useWallet: true, idempotencyKey, deviceId: deviceId || req.headers["x-melachow-device-id"] || null } });
-                const fulfilled = await postgresPaymentRepository.fulfillPaidOrder(reference, { walletPayment: true });
+                await postgresPaymentRepository.initializeOrderPaymentReference({
+                    orderId: result.order.id,
+                    reference,
+                    cartSnapshot: {
+                        items,
+                        vendorDeliveryFees,
+                        deliveryAddress,
+                        phone,
+                        discountCode,
+                        useWallet: Boolean(useWallet),
+                        walletAmountNaira: walletAmountKobo / 100,
+                        paystackAmountNaira: 0,
+                        idempotencyKey,
+                        deviceId: deviceId || req.headers["x-melachow-device-id"] || null,
+                    },
+                });
+                const fulfilled = await postgresPaymentRepository.fulfillPaidOrder(reference, { walletPayment: walletAmountKobo > 0 });
                 if (!fulfilled.idempotent && fulfilled.notificationContext) {
                     const { dispatchFulfilledOrderNotifications } = await import("../../services/postgres/payment.repository.js");
                     dispatchFulfilledOrderNotifications(fulfilled).catch((err) => {
                         console.error("Postgres wallet-order notification dispatch error:", err.message);
                     });
                 }
-                return res.status(result.idempotent ? 200 : 201).json({ success: true, message: "Order created and paid successfully from wallet.", reference, order: fulfilled.order, payment: { provider: "wallet", status: "paid" } });
+                return res.status(result.idempotent ? 200 : 201).json({
+                    success: true,
+                    paymentStatus: "paid",
+                    message: "Order created and paid successfully from wallet.",
+                    reference,
+                    order: fulfilled.order,
+                    payment: {
+                        provider: "wallet",
+                        status: "paid",
+                        walletAmount: walletAmountKobo / 100,
+                        paystackAmount: 0,
+                    },
+                });
             }
 
             if (!usePostgresPaymentWrites()) {
@@ -2314,7 +2353,9 @@ export const createOrderController = async (req, res) => {
                     deliveryAddress,
                     phone,
                     discountCode,
-                    useWallet,
+                    useWallet: Boolean(useWallet),
+                    walletAmountNaira: walletAmountKobo / 100,
+                    paystackAmountNaira: paystackAmountKobo / 100,
                     idempotencyKey,
                     deviceId: deviceId || req.headers["x-melachow-device-id"] || null,
                 },
@@ -2330,9 +2371,7 @@ export const createOrderController = async (req, res) => {
                     "https://api.paystack.co/transaction/initialize",
                     {
                         email: userEmail,
-                        amount: result.order.moneyUnit === "naira"
-                            ? Math.round(Number(result.order.total || 0) * 100)
-                            : Math.round(Number(result.order.total || 0)),
+                        amount: paystackAmountKobo,
                         reference,
                         callback_url: getPaymentCallbackUrl(req),
                         metadata: {
@@ -2340,6 +2379,10 @@ export const createOrderController = async (req, res) => {
                             postgresOrderId: result.order.id,
                             userId: String(userId),
                             moneyUnit: "kobo",
+                            paymentMode: isSplitWalletPaystack ? "wallet_paystack_split" : "paystack",
+                            orderTotalKobo: totalKobo,
+                            walletAmountKobo,
+                            paystackAmountKobo,
                             feeBearer,
                             platform: "melachow",
                         }
@@ -2373,9 +2416,17 @@ export const createOrderController = async (req, res) => {
 
             return res.status(result.idempotent ? 200 : 201).json({
                 success: true,
-                message: "Order created successfully. Proceed to payment.",
+                message: isSplitWalletPaystack
+                    ? `Applying ₦${(walletAmountKobo / 100).toLocaleString()} from wallet. Proceed to pay remaining ₦${(paystackAmountKobo / 100).toLocaleString()} via Paystack.`
+                    : "Order created successfully. Proceed to payment.",
                 authorization_url: data.authorization_url,
                 reference: data.reference,
+                payment: {
+                    provider: isSplitWalletPaystack ? "wallet_paystack_split" : "paystack",
+                    walletAmount: walletAmountKobo / 100,
+                    paystackAmount: paystackAmountKobo / 100,
+                    total: totalKobo / 100,
+                },
                 order: {
                     ...result.order,
                     paymentReference: data.reference || reference,

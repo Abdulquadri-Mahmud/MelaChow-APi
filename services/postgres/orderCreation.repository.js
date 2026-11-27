@@ -343,6 +343,8 @@ const orderShape = (order) => ({
   deliveryFee: koboToNaira(order.deliveryFee),
   serviceFee: koboToNaira(order.serviceFee),
   total: koboToNaira(order.total),
+  walletAmount: koboToNaira(order.walletAmountKobo || 0),
+  paystackAmount: koboToNaira(Math.max(0, Number(order.total || 0) - Number(order.walletAmountKobo || 0))),
   appliedDiscount: order.appliedDiscount,
   rewardCredit: koboToNaira(order.rewardCreditKobo || 0),
   paymentReference: order.paymentReference,
@@ -366,6 +368,8 @@ export const postgresOrderCreationRepository = {
     idempotencyKey = null,
     orderCode = null,
     discountCode = null,
+    useWallet = false,
+    walletAmount = null,
     useRewardCredits = false,
     promoIdentity = {},
     rawIp = "unknown",
@@ -518,6 +522,24 @@ export const postgresOrderCreationRepository = {
       });
       total = Math.max(0, total - rewardCreditKobo);
 
+      let walletAmountKobo = 0;
+      if (useWallet && total > 0) {
+        const customerWallet = await tx.wallet.findUnique({
+          where: { ownerId_ownerModel: { ownerId: customerId, ownerModel: "User" } },
+          select: { id: true, balance: true },
+        });
+        const availableWalletKobo = Math.max(0, Math.floor(Number(customerWallet?.balance || 0)));
+        if (availableWalletKobo <= 0) {
+          throw new Error("Your wallet balance is ₦0. Turn off wallet payment or fund your wallet first.");
+        }
+        const parsedRequestedNaira = walletAmount != null && walletAmount !== "" ? Number(walletAmount) : null;
+        const requestedWalletKobo =
+          parsedRequestedNaira != null && Number.isFinite(parsedRequestedNaira) && parsedRequestedNaira > 0
+            ? Math.round(parsedRequestedNaira * 100)
+            : availableWalletKobo;
+        walletAmountKobo = Math.min(availableWalletKobo, total, requestedWalletKobo);
+      }
+
       const order = await tx.order.create({
         data: {
           id: orderUuid,
@@ -528,6 +550,7 @@ export const postgresOrderCreationRepository = {
           deliveryFee: totalDeliveryFee,
           serviceFee,
           rewardCreditKobo,
+          walletAmountKobo,
           total,
           orderCode: finalOrderCode,
           paymentStatus: "pending",

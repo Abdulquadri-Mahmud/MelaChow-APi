@@ -8,16 +8,22 @@ const nextInvoiceNumber = (type) => {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 7).toUpperCase()}`;
 };
 
-const orderSnapshot = (order) => ({
-  orderId: order?.orderCode || order?.orderId || "",
-  total: Number(order?.total || 0),
-  subtotal: Number(order?.subtotal || 0),
-  deliveryFee: Number(order?.deliveryFee || 0),
-  serviceFee: Number(order?.serviceFee || 0),
-  paymentStatus: order?.paymentStatus || "",
-  orderStatus: order?.orderStatus || "",
-  moneyUnit: "kobo",
-});
+const orderSnapshot = (order) => {
+  const totalKobo = Number(order?.total || 0);
+  const walletAmountKobo = Math.max(0, Math.min(totalKobo, Number(order?.walletAmountKobo || 0)));
+  return {
+    orderId: order?.orderCode || order?.orderId || "",
+    total: totalKobo,
+    walletAmountKobo,
+    paystackAmountKobo: Math.max(0, totalKobo - walletAmountKobo),
+    subtotal: Number(order?.subtotal || 0),
+    deliveryFee: Number(order?.deliveryFee || 0),
+    serviceFee: Number(order?.serviceFee || 0),
+    paymentStatus: order?.paymentStatus || "",
+    orderStatus: order?.orderStatus || "",
+    moneyUnit: "kobo",
+  };
+};
 
 const providerSnapshot = (payData) => ({
   reference: payData?.reference || "",
@@ -45,6 +51,7 @@ const paymentAttemptInclude = {
       legacyMongoId: true,
       orderCode: true,
       total: true,
+      walletAmountKobo: true,
       subtotal: true,
       deliveryFee: true,
       serviceFee: true,
@@ -139,25 +146,31 @@ const paymentAttemptShape = (attempt) => {
   };
 };
 
-const postgresOrderShape = (order) => ({
-  _id: order?.legacyMongoId || order?.id,
-  id: order?.id,
-  orderId: order?.orderCode,
-  orderCode: order?.orderCode,
-  userId: order?.user?.legacyMongoId || order?.userId,
-  paymentReference: order?.paymentReference,
-  paymentStatus: order?.paymentStatus,
-  orderStatus: order?.orderStatus,
-  total: koboToNaira(order?.total),
-  subtotal: koboToNaira(order?.subtotal),
-  deliveryFee: koboToNaira(order?.deliveryFee),
-  serviceFee: koboToNaira(order?.serviceFee),
-  moneyUnit: "naira",
-  deliveryAddress: order?.deliveryAddress,
-  phone: order?.phone,
-  createdAt: order?.createdAt,
-  updatedAt: order?.updatedAt,
-});
+const postgresOrderShape = (order) => {
+  const totalKobo = Number(order?.total || 0);
+  const walletAmountKobo = Math.max(0, Math.min(totalKobo, Number(order?.walletAmountKobo || 0)));
+  return {
+    _id: order?.legacyMongoId || order?.id,
+    id: order?.id,
+    orderId: order?.orderCode,
+    orderCode: order?.orderCode,
+    userId: order?.user?.legacyMongoId || order?.userId,
+    paymentReference: order?.paymentReference,
+    paymentStatus: order?.paymentStatus,
+    orderStatus: order?.orderStatus,
+    total: koboToNaira(totalKobo),
+    walletAmount: koboToNaira(walletAmountKobo),
+    paystackAmount: koboToNaira(Math.max(0, totalKobo - walletAmountKobo)),
+    subtotal: koboToNaira(order?.subtotal),
+    deliveryFee: koboToNaira(order?.deliveryFee),
+    serviceFee: koboToNaira(order?.serviceFee),
+    moneyUnit: "naira",
+    deliveryAddress: order?.deliveryAddress,
+    phone: order?.phone,
+    createdAt: order?.createdAt,
+    updatedAt: order?.updatedAt,
+  };
+};
 
 const paidNotificationContext = (order) => ({
   userId: order?.user?.legacyMongoId || order?.userId,
@@ -282,6 +295,7 @@ export const postgresPaymentRepository = {
           userId: true,
           orderCode: true,
           total: true,
+          walletAmountKobo: true,
           subtotal: true,
           deliveryFee: true,
           serviceFee: true,
@@ -289,6 +303,12 @@ export const postgresPaymentRepository = {
           orderStatus: true,
         },
       });
+
+      const totalKobo = Number(order.total || 0);
+      const walletAmountKobo = Math.max(0, Math.min(totalKobo, Number(order.walletAmountKobo || 0)));
+      const expectedPaystackKobo = Math.max(0, totalKobo - walletAmountKobo);
+      const isWalletOnly = String(reference).startsWith("WALLET_") || expectedPaystackKobo === 0;
+      const attemptExpectedKobo = isWalletOnly ? totalKobo : expectedPaystackKobo;
 
       const existingAttempt = await tx.paymentAttempt.findUnique({
         where: { reference },
@@ -299,36 +319,41 @@ export const postgresPaymentRepository = {
         where: { reference },
         create: {
           reference,
-          provider: "paystack",
+          provider: isWalletOnly ? "wallet" : "paystack",
           orderId: order.id,
           orderCode: order.orderCode,
           userId: order.userId,
           status: "initialized",
           recoveryState: "awaiting_verification",
-          expectedAmount: toBigIntKobo(order.total),
-          expectedAmountKobo: toBigIntKobo(order.total),
+          expectedAmount: toBigIntKobo(attemptExpectedKobo),
+          expectedAmountKobo: toBigIntKobo(attemptExpectedKobo),
           orderSnapshot: orderSnapshot(order),
           cartSnapshot: cartSnapshot || {},
           events: appendEvent([], {
             type: "payment_initialized",
-            message: "Payment reference created before Paystack redirect",
-            metadata: { moneyUnit: "kobo" },
+            message: walletAmountKobo > 0 && expectedPaystackKobo > 0
+              ? `Split payment initialized: ₦${walletAmountKobo / 100} wallet + ₦${expectedPaystackKobo / 100} Paystack`
+              : "Payment reference created before Paystack redirect",
+            metadata: { moneyUnit: "kobo", walletAmountKobo, paystackAmountKobo: expectedPaystackKobo },
           }),
         },
         update: {
           orderId: order.id,
           orderCode: order.orderCode,
           userId: order.userId,
+          provider: isWalletOnly ? "wallet" : "paystack",
           status: "initialized",
           recoveryState: "awaiting_verification",
-          expectedAmount: toBigIntKobo(order.total),
-          expectedAmountKobo: toBigIntKobo(order.total),
+          expectedAmount: toBigIntKobo(attemptExpectedKobo),
+          expectedAmountKobo: toBigIntKobo(attemptExpectedKobo),
           orderSnapshot: orderSnapshot(order),
           cartSnapshot: cartSnapshot || {},
           events: appendEvent(existingAttempt?.events, {
             type: "payment_initialized",
-            message: "Payment reference created before Paystack redirect",
-            metadata: { moneyUnit: "kobo" },
+            message: walletAmountKobo > 0 && expectedPaystackKobo > 0
+              ? `Split payment initialized: ₦${walletAmountKobo / 100} wallet + ₦${expectedPaystackKobo / 100} Paystack`
+              : "Payment reference created before Paystack redirect",
+            metadata: { moneyUnit: "kobo", walletAmountKobo, paystackAmountKobo: expectedPaystackKobo },
           }),
         },
         include: paymentAttemptInclude,
@@ -581,7 +606,9 @@ export const postgresPaymentRepository = {
       throw error;
     }
 
-    const expectedKobo = Number(order.total || 0);
+    const totalKobo = Number(order.total || 0);
+    const walletAmountKobo = Math.max(0, Math.min(totalKobo, Number(order.walletAmountKobo || 0)));
+    const expectedKobo = Math.max(0, totalKobo - walletAmountKobo);
     const paidKobo = Number(payData.amount || 0);
 
     const rawFees = payData.fees !== undefined && payData.fees !== null ? payData.fees : payData.fees_split?.paystack;
@@ -774,16 +801,65 @@ export const postgresPaymentRepository = {
         };
       }
 
-      if (walletPayment) {
-        const customerWallet = await tx.wallet.findUnique({ where: { ownerId_ownerModel: { ownerId: order.userId, ownerModel: "User" } } });
+      const totalKobo = Number(order.total || 0);
+      const orderWalletKobo = Math.max(0, Math.min(totalKobo, Number(order.walletAmountKobo || 0)));
+      const walletDebitKobo = walletPayment ? (orderWalletKobo > 0 ? orderWalletKobo : totalKobo) : orderWalletKobo;
+      const paystackPaidKobo = walletPayment ? 0 : Math.max(0, totalKobo - walletDebitKobo);
+      const isSplitPayment = !walletPayment && walletDebitKobo > 0 && paystackPaidKobo > 0;
+
+      if (walletDebitKobo > 0) {
+        const customerWallet = await tx.wallet.findUnique({
+          where: { ownerId_ownerModel: { ownerId: order.userId, ownerModel: "User" } },
+        });
         if (!customerWallet) {
-          const error = new Error("Wallet not found. Please fund your wallet first."); error.code = "POSTGRES_CUSTOMER_WALLET_MISSING"; error.statusCode = 400; throw error;
+          if (isSplitPayment) {
+            const error = new Error("Wallet not found during split payment fulfillment.");
+            error.code = "SPLIT_WALLET_INSUFFICIENT";
+            error.statusCode = 409;
+            error.splitFallback = { orderId: order.id, userId: order.userId, orderCode: order.orderCode, paystackPaidKobo, reference };
+            throw error;
+          }
+          const error = new Error("Wallet not found. Please fund your wallet first.");
+          error.code = "POSTGRES_CUSTOMER_WALLET_MISSING";
+          error.statusCode = 400;
+          throw error;
         }
-        const debited = await tx.wallet.updateMany({ where: { id: customerWallet.id, balance: { gte: order.total } }, data: { balance: { decrement: order.total } } });
+        const debited = await tx.wallet.updateMany({
+          where: { id: customerWallet.id, balance: { gte: walletDebitKobo } },
+          data: { balance: { decrement: walletDebitKobo } },
+        });
         if (debited.count !== 1) {
-          const error = new Error(`Insufficient wallet balance (₦${customerWallet.balance / 100}) for total ₦${order.total / 100}`); error.code = "POSTGRES_WALLET_INSUFFICIENT"; error.statusCode = 400; throw error;
+          if (isSplitPayment) {
+            const error = new Error(`Wallet balance changed before Paystack finished (available ₦${customerWallet.balance / 100}, needed ₦${walletDebitKobo / 100}).`);
+            error.code = "SPLIT_WALLET_INSUFFICIENT";
+            error.statusCode = 409;
+            error.splitFallback = { orderId: order.id, userId: order.userId, orderCode: order.orderCode, paystackPaidKobo, reference };
+            throw error;
+          }
+          const error = new Error(`Insufficient wallet balance (₦${customerWallet.balance / 100}) for total ₦${walletDebitKobo / 100}`);
+          error.code = "POSTGRES_WALLET_INSUFFICIENT";
+          error.statusCode = 400;
+          throw error;
         }
-        await tx.walletTransaction.create({ data: { walletId: customerWallet.id, type: "debit", amount: order.total, transactionType: "order_payment", orderId: order.id, description: `Payment for order ${order.orderCode}`, metadata: { source: "postgres_wallet_order_payment", reference } } });
+        await tx.walletTransaction.create({
+          data: {
+            walletId: customerWallet.id,
+            type: "debit",
+            amount: walletDebitKobo,
+            transactionType: "order_payment",
+            orderId: order.id,
+            description: isSplitPayment
+              ? `Wallet portion (₦${(walletDebitKobo / 100).toLocaleString()}) for split-paid order ${order.orderCode}`
+              : `Payment for order ${order.orderCode}`,
+            metadata: {
+              source: isSplitPayment ? "postgres_split_wallet_paystack_payment" : "postgres_wallet_order_payment",
+              reference,
+              walletAmountKobo: walletDebitKobo,
+              paystackAmountKobo: paystackPaidKobo,
+              orderTotalKobo: totalKobo,
+            },
+          },
+        });
       }
 
       const walletTransactions = [];
@@ -886,6 +962,9 @@ export const postgresPaymentRepository = {
               legacyUserId: order.user?.legacyMongoId,
               status: "paid",
               currency: "NGN",
+              paymentMode: isSplitPayment ? "wallet_paystack_split" : walletPayment ? "wallet" : "paystack",
+              walletAmountKobo: walletDebitKobo,
+              paystackAmountKobo: paystackPaidKobo,
               subtotal: order.subtotal,
               deliveryFee: order.deliveryFee,
               serviceFee: order.serviceFee,
@@ -932,6 +1011,63 @@ export const postgresPaymentRepository = {
         },
         creditedKobo,
       };
+    }).catch(async (error) => {
+      // Safety net for split payment: if Paystack already captured the remainder but the user's
+      // wallet balance dropped concurrently before verification, safely credit the verified
+      // Paystack amount into the customer's MelaChow Wallet so zero funds are stranded.
+      if (error?.code === "SPLIT_WALLET_INSUFFICIENT" && error.splitFallback?.paystackPaidKobo > 0) {
+        const { orderId, userId, orderCode, paystackPaidKobo, reference: ref } = error.splitFallback;
+        await prisma.$transaction(async (tx) => {
+          const existingRefund = await tx.walletTransaction.findFirst({
+            where: { orderId, transactionType: "refund", type: "credit" },
+            select: { id: true },
+          });
+          await tx.order.updateMany({
+            where: { id: orderId, paymentStatus: { notIn: ["paid", "refunded"] } },
+            data: { paymentStatus: "failed", orderStatus: "failed" },
+          });
+          if (!existingRefund) {
+            const wallet = await tx.wallet.upsert({
+              where: { ownerId_ownerModel: { ownerId: userId, ownerModel: "User" } },
+              create: { ownerId: userId, ownerModel: "User", balance: paystackPaidKobo, totalEarned: 0 },
+              update: { balance: { increment: paystackPaidKobo } },
+            });
+            await tx.walletTransaction.create({
+              data: {
+                walletId: wallet.id,
+                type: "credit",
+                amount: paystackPaidKobo,
+                transactionType: "refund",
+                orderId,
+                description: `Paystack payment (₦${(paystackPaidKobo / 100).toLocaleString()}) credited to wallet after wallet balance changed during split checkout for ${orderCode}`,
+                metadata: { source: "split_payment_wallet_insufficient_credit", reference: ref, paystackPaidKobo },
+              },
+            });
+          }
+          const existingAttempt = await tx.paymentAttempt.findUnique({ where: { reference: ref }, select: { events: true } });
+          if (existingAttempt) {
+            await tx.paymentAttempt.update({
+              where: { reference: ref },
+              data: {
+                status: "failed",
+                recoveryState: "refunded",
+                events: appendEvent(existingAttempt.events, {
+                  type: "split_payment_paystack_credited_to_wallet",
+                  message: `Wallet balance dropped before verification; credited ₦${paystackPaidKobo / 100} Paystack payment to customer wallet`,
+                  metadata: { orderId, orderCode, paystackPaidKobo },
+                }),
+              },
+            });
+          }
+        });
+        const safeError = new Error(
+          `Your wallet balance changed before payment completed, so your ₦${(paystackPaidKobo / 100).toLocaleString()} Paystack payment has been credited to your MelaChow Wallet. Please place your order again.`
+        );
+        safeError.code = "SPLIT_WALLET_INSUFFICIENT_CREDITED";
+        safeError.statusCode = 409;
+        throw safeError;
+      }
+      throw error;
     });
   },
 };

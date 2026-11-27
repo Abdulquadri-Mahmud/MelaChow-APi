@@ -912,6 +912,7 @@ model Order {
   deliveryFee            Int           @map("delivery_fee_kobo")
   serviceFee             Int           @default(0) @map("service_fee_kobo")
   rewardCreditKobo       Int           @default(0) @map("reward_credit_kobo")
+  walletAmountKobo       Int           @default(0) @map("wallet_amount_kobo")
   appliedDiscount        Json?         @map("applied_discount")
   freeDeliveryPromo      Json          @default("{}") @map("free_delivery_promo")
   vendorDeliveryPromo    Json          @default("{}") @map("vendor_delivery_promo")
