@@ -2,6 +2,7 @@ import prisma from "../../config/prisma.js";
 import { getGlobalDeliveryConfig, quoteVendorDelivery } from "../deliveryPricing.service.js";
 import { getPostgisDistancesFromAddress } from "./geography.js";
 
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const idOf = (row) => row?.legacyMongoId || row?.id;
 const stateNames = (value) => {
   const raw = String(value || "").trim();
@@ -12,8 +13,14 @@ const stateNames = (value) => {
 export const nearbyVendorsRepository = {
   async list({ city, state, addressId, userId }) {
     const now = new Date();
-    const address = addressId
-      ? await prisma.userAddress.findFirst({ where: { OR: [{ id: addressId }, { legacyMongoId: addressId }], ...(userId ? { userId } : {}) } })
+    const addressToken = addressId ? String(addressId).trim() : "";
+    const address = addressToken
+      ? await prisma.userAddress.findFirst({
+          where: {
+            ...(uuidPattern.test(addressToken) ? { id: addressToken } : { legacyMongoId: addressToken }),
+            ...(userId ? { userId } : {}),
+          },
+        })
       : userId ? await prisma.userAddress.findFirst({ where: { userId }, orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }] }) : null;
     const targetCity = city || address?.cityName || address?.cityText;
     const targetState = state || address?.stateName || address?.stateText;

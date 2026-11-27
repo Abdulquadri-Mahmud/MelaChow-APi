@@ -1,5 +1,8 @@
 import prisma from "../../config/prisma.js";
-import { getGlobalDeliveryConfig } from "../deliveryPricing.service.js";
+import { getGlobalDeliveryConfig, quoteVendorDelivery } from "../deliveryPricing.service.js";
+import { getPostgisDistancesFromAddress } from "./geography.js";
+
+const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const legacyId = (record) => record?.legacyMongoId || record?.id || null;
 
@@ -47,10 +50,22 @@ const vendorSelect = {
   logo: true,
   address: true,
   openingHours: true,
+  pickupLatitude: true,
+  pickupLongitude: true,
+  deliveryManagedBy: true,
+  flatRateDeliveryFee: true,
   platformDeliveryFeeOverride: true,
+  deliveryRadiusOverrideKm: true,
+  deliveryRadiusKm: true,
   city: {
     select: {
+      name: true,
       platformDeliveryFee: true,
+    },
+  },
+  state: {
+    select: {
+      name: true,
     },
   },
 };
@@ -90,13 +105,130 @@ const resolveDeliveryFee = (vendor, config) => {
   const feeKobo = vendor.deliveryManagedBy === "vendor"
     ? Number(vendor.flatRateDeliveryFee || 0)
     : Number(vendor.platformDeliveryFeeOverride ?? Number(config?.fallbackFlatFeeNaira ?? 400) * 100);
-  return feeKobo / 100;
+  return Math.round(feeKobo / 100);
 };
 
-const recommendationItemShape = (item, deliveryConfig) => {
+const resolveCustomerAddress = async ({ addressId, userId, lat, lng }) => {
+  if (addressId) {
+    const token = String(addressId).trim();
+    if (token) {
+      const found = await prisma.userAddress.findFirst({
+        where: {
+          ...(uuidPattern.test(token) ? { id: token } : { legacyMongoId: token }),
+          ...(userId ? { userId } : {}),
+        },
+      });
+      if (found) return found;
+    }
+  }
+
+  if (userId) {
+    const found = await prisma.userAddress.findFirst({
+      where: { userId },
+      orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
+    });
+    if (found) return found;
+  }
+
+  const parsedLat = Number(lat);
+  const parsedLng = Number(lng);
+  if (
+    lat != null &&
+    lng != null &&
+    String(lat).trim() !== "" &&
+    String(lng).trim() !== "" &&
+    Number.isFinite(parsedLat) &&
+    Number.isFinite(parsedLng) &&
+    parsedLat >= -90 &&
+    parsedLat <= 90 &&
+    parsedLng >= -180 &&
+    parsedLng <= 180
+  ) {
+    return {
+      id: null,
+      latitude: parsedLat,
+      longitude: parsedLng,
+    };
+  }
+
+  return null;
+};
+
+const buildVendorDeliveryContext = async ({ itemsLists = [], address, deliveryConfig }) => {
+  const vendorById = new Map();
+  for (const list of itemsLists) {
+    for (const item of list || []) {
+      if (item?.vendor?.id && !vendorById.has(item.vendor.id)) {
+        vendorById.set(item.vendor.id, item.vendor);
+      }
+    }
+  }
+
+  const vendors = [...vendorById.values()];
+  if (!vendors.length) {
+    return { quoteByVendorId: new Map(), promoByVendorId: new Map() };
+  }
+
+  const vendorIds = vendors.map((vendor) => vendor.id);
+  const now = new Date();
+
+  const [promos, postgisDistances] = await Promise.all([
+    prisma.vendorDeliveryPromo.findMany({
+      where: {
+        vendorId: { in: vendorIds },
+        isActive: true,
+        OR: [{ startsAt: null }, { startsAt: { lte: now } }],
+        AND: [{ OR: [{ endsAt: null }, { endsAt: { gte: now } }] }],
+      },
+      orderBy: { createdAt: "desc" },
+    }),
+    address?.id
+      ? getPostgisDistancesFromAddress({ addressId: address.id, vendorIds })
+      : Promise.resolve(new Map()),
+  ]);
+
+  const promoByVendorId = new Map();
+  for (const promo of promos) {
+    if (promoByVendorId.has(promo.vendorId)) continue;
+    if (promo.maxOrders == null || promo.usedOrders < promo.maxOrders) {
+      promoByVendorId.set(promo.vendorId, promo);
+    }
+  }
+
+  const quoteByVendorId = new Map();
+  if (address) {
+    const quotes = await Promise.all(
+      vendors.map((vendor) =>
+        quoteVendorDelivery({
+          vendor,
+          address,
+          checkout: false,
+          globalConfig: deliveryConfig,
+          estimatedDistanceMeters: postgisDistances.get(vendor.id),
+        })
+      )
+    );
+    quotes.forEach((quote) => {
+      if (quote?.vendorUuid) {
+        quoteByVendorId.set(quote.vendorUuid, quote);
+      }
+    });
+  }
+
+  return { quoteByVendorId, promoByVendorId };
+};
+
+const recommendationItemShape = (item, { deliveryConfig, quoteByVendorId, promoByVendorId }) => {
   const isCombo = item.item_type === "combo";
   const vendor = item.vendor || {};
   const cheapest = item.portions?.[0];
+  const promo = vendor.id ? promoByVendorId?.get(vendor.id) || null : null;
+  const quote = vendor.id ? quoteByVendorId?.get(vendor.id) || null : null;
+  const deliveryFee = promo
+    ? 0
+    : quote
+      ? Math.round(Number(quote.deliveryFeeKobo || 0) / 100)
+      : resolveDeliveryFee(vendor, deliveryConfig);
 
   return {
     _id: legacyId(item),
@@ -109,17 +241,28 @@ const recommendationItemShape = (item, deliveryConfig) => {
     tags: item.tags || [],
     rating: item.rating || 0,
     ratingCount: item.ratingCount || 0,
-    deliveryFee: resolveDeliveryFee(vendor, deliveryConfig),
+    deliveryFee,
+    hasActiveDeliveryPromo: Boolean(promo),
+    distanceKm: quote?.distanceKm ?? null,
+    deliveryQuote: quote
+      ? {
+          ...quote,
+          deliveryFee: Number(quote.deliveryFeeKobo || 0) / 100,
+          deliveryFeeKobo: undefined,
+        }
+      : null,
     restaurant: {
       _id: legacyId(vendor),
       storeName: vendor.storeName,
       logo: vendor.logo,
-      city: vendor.address?.city,
-      state: vendor.address?.state,
+      city: vendor.city?.name || vendor.address?.city,
+      state: vendor.state?.name || vendor.address?.state,
       coordinates: vendor.address?.coordinates,
-      latitude: vendor.address?.latitude ?? vendor.address?.coordinates?.lat,
-      longitude: vendor.address?.longitude ?? vendor.address?.coordinates?.lng,
-      estimatedDeliveryTime: 30,
+      latitude: vendor.pickupLatitude ?? vendor.address?.latitude ?? vendor.address?.coordinates?.lat,
+      longitude: vendor.pickupLongitude ?? vendor.address?.longitude ?? vendor.address?.coordinates?.lng,
+      deliveryFee,
+      hasActiveDeliveryPromo: Boolean(promo),
+      estimatedDeliveryTime: quote?.estimatedDurationMinutes ?? 30,
       openingHours: vendor.openingHours,
     },
   };
@@ -178,7 +321,7 @@ const findLocationVendorIds = async ({ city, state }) => {
   return vendors.map((vendor) => vendor.id);
 };
 
-const listTaggedRecommendations = async ({ tags, vendorIds, sortField, limit, deliveryConfig }) => {
+const listTaggedRecommendations = async ({ tags, vendorIds, sortField, limit }) => {
   const [menuItems, combos] = await Promise.all([
     prisma.menuItem.findMany({
       where: baseMenuWhere(vendorIds),
@@ -197,11 +340,10 @@ const listTaggedRecommendations = async ({ tags, vendorIds, sortField, limit, de
     ...combos.filter((combo) => tagMatches(combo, tags)).map((combo) => ({ ...combo, item_type: "combo" })),
   ]
     .sort((left, right) => (right[sortField] || 0) - (left[sortField] || 0))
-    .slice(0, limit)
-    .map((item) => recommendationItemShape(item, deliveryConfig));
+    .slice(0, limit);
 };
 
-const listUnderratedRecommendations = async ({ vendorIds, deliveryConfig }) => {
+const listUnderratedRecommendations = async ({ vendorIds }) => {
   const [menuItems, combos] = await Promise.all([
     prisma.menuItem.findMany({
       where: {
@@ -227,11 +369,10 @@ const listUnderratedRecommendations = async ({ vendorIds, deliveryConfig }) => {
 
   return [...menuItems, ...combos.map((combo) => ({ ...combo, item_type: "combo" }))]
     .sort((left, right) => (right.rating || 0) - (left.rating || 0))
-    .slice(0, 6)
-    .map((item) => recommendationItemShape(item, deliveryConfig));
+    .slice(0, 6);
 };
 
-const listTrendingNearby = async ({ city, deliveryConfig }) => {
+const listTrendingNearby = async ({ city }) => {
   if (!city?.trim()) return [];
 
   const twoDaysAgo = new Date();
@@ -285,12 +426,10 @@ const listTrendingNearby = async ({ city, deliveryConfig }) => {
     orderMap[id] = index;
   });
 
-  return items
-    .sort((left, right) => (orderMap[left.id] ?? 99) - (orderMap[right.id] ?? 99))
-    .map((item) => recommendationItemShape(item, deliveryConfig));
+  return items.sort((left, right) => (orderMap[left.id] ?? 99) - (orderMap[right.id] ?? 99));
 };
 
-const listBudgetFriendly = async ({ vendorIds, deliveryConfig }) => {
+const listBudgetFriendly = async ({ vendorIds }) => {
   const [menuItems, combos] = await Promise.all([
     prisma.menuItem.findMany({
       where: {
@@ -320,23 +459,28 @@ const listBudgetFriendly = async ({ vendorIds, deliveryConfig }) => {
     ...combos.map((combo) => ({ ...combo, item_type: "combo", finalPrice: combo.price })),
   ]
     .sort((left, right) => left.finalPrice - right.finalPrice)
-    .slice(0, 8)
-    .map((item) => recommendationItemShape(item, deliveryConfig));
+    .slice(0, 8);
 };
 
 export const recommendationRepository = {
-  async getRecommendations({ city, state, weather } = {}) {
+  async getRecommendations({ city, state, weather, addressId, userId, lat, lng } = {}) {
     const timeContext = getTimeOfDayContext();
-    const vendorIds = await findLocationVendorIds({ city, state });
-    const deliveryConfig = await getGlobalDeliveryConfig();
+    const [address, deliveryConfig] = await Promise.all([
+      resolveCustomerAddress({ addressId, userId, lat, lng }),
+      getGlobalDeliveryConfig(),
+    ]);
 
-    if (vendorIds.length === 0 && (city || state)) {
+    const targetCity = city || address?.cityName || address?.cityText;
+    const targetState = state || address?.stateName || address?.stateText;
+    const vendorIds = await findLocationVendorIds({ city: targetCity, state: targetState });
+
+    if (vendorIds.length === 0 && (targetCity || targetState)) {
       return {
         success: true,
         meta: {
           timeOfDayLabel: timeContext.label,
           weatherCondition: weather || null,
-          location: { city, state },
+          location: { city: targetCity, state: targetState },
         },
         data: {
           timeOfDay: [],
@@ -349,29 +493,36 @@ export const recommendationRepository = {
     }
 
     const weatherTags = getWeatherTags(weather);
-    const [timeOfDay, underrated, weatherBased, trendingNearby, budgetFriendly] = await Promise.all([
-      listTaggedRecommendations({ tags: timeContext.tags, vendorIds, sortField: "ratingCount", limit: 6, deliveryConfig }),
-      listUnderratedRecommendations({ vendorIds, deliveryConfig }),
+    const [timeOfDayRaw, underratedRaw, weatherBasedRaw, trendingNearbyRaw, budgetFriendlyRaw] = await Promise.all([
+      listTaggedRecommendations({ tags: timeContext.tags, vendorIds, sortField: "ratingCount", limit: 6 }),
+      listUnderratedRecommendations({ vendorIds }),
       weatherTags.length
-        ? listTaggedRecommendations({ tags: weatherTags, vendorIds, sortField: "ratingCount", limit: 6, deliveryConfig })
+        ? listTaggedRecommendations({ tags: weatherTags, vendorIds, sortField: "ratingCount", limit: 6 })
         : Promise.resolve([]),
-      listTrendingNearby({ city, deliveryConfig }),
-      listBudgetFriendly({ vendorIds, deliveryConfig }),
+      listTrendingNearby({ city: targetCity }),
+      listBudgetFriendly({ vendorIds }),
     ]);
+
+    const deliveryContext = await buildVendorDeliveryContext({
+      itemsLists: [timeOfDayRaw, underratedRaw, weatherBasedRaw, trendingNearbyRaw, budgetFriendlyRaw],
+      address,
+      deliveryConfig,
+    });
+    const shapeOptions = { deliveryConfig, ...deliveryContext };
 
     return {
       success: true,
       meta: {
         timeOfDayLabel: timeContext.label,
         weatherCondition: weather || null,
-        location: { city, state },
+        location: { city: targetCity, state: targetState },
       },
       data: {
-        timeOfDay,
-        underrated,
-        weatherBased,
-        trendingNearby,
-        budgetFriendly,
+        timeOfDay: timeOfDayRaw.map((item) => recommendationItemShape(item, shapeOptions)),
+        underrated: underratedRaw.map((item) => recommendationItemShape(item, shapeOptions)),
+        weatherBased: weatherBasedRaw.map((item) => recommendationItemShape(item, shapeOptions)),
+        trendingNearby: trendingNearbyRaw.map((item) => recommendationItemShape(item, shapeOptions)),
+        budgetFriendly: budgetFriendlyRaw.map((item) => recommendationItemShape(item, shapeOptions)),
       },
     };
   },

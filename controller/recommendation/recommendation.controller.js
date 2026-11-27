@@ -158,17 +158,25 @@ const getWeatherTags = (condition) => {
 export const getRecommendations = async (req, res) => {
     try {
         // 1. Establish User Context (Location)
-        let { city, state, weather } = req.query;
+        let { city, state, weather, addressId, lat, lng } = req.query;
 
         // Fallback to authenticated user's default address if not provided in query
         if ((!city || !state) && req.user && req.user.addresses && req.user.addresses.length > 0) {
             const defaultAddr = req.user.addresses.find(a => a.isDefault) || req.user.addresses[0];
-            if (!city) city = defaultAddr.city;
-            if (!state) state = defaultAddr.state;
+            if (!city) city = defaultAddr.city || defaultAddr.cityName;
+            if (!state) state = defaultAddr.state || defaultAddr.stateName;
         }
 
         if (usePostgresRecommendationReads()) {
-            const response = await recommendationRepository.getRecommendations({ city, state, weather });
+            const response = await recommendationRepository.getRecommendations({
+                city,
+                state,
+                weather,
+                addressId,
+                userId: req.postgresUserId,
+                lat,
+                lng,
+            });
             return res.status(200).json(response);
         }
 
