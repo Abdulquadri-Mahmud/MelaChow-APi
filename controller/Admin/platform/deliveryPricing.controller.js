@@ -2,7 +2,7 @@ import prisma from "../../../config/prisma.js";
 import { DEFAULT_DISTANCE_DELIVERY_CONFIG } from "../../../services/deliveryPricing.service.js";
 import { syncVendorPickupPoint } from "../../../services/postgres/geography.js";
 
-const numberFields = ["fallbackFlatFeeNaira", "baseFeeNaira", "includedDistanceKm", "additionalFeePerKmNaira", "roundingStepKm", "minimumFeeNaira", "maximumFeeNaira", "maximumDistanceKm"];
+const numberFields = ["fallbackFlatFeeNaira", "baseFeeNaira", "includedDistanceKm", "additionalFeePerKmNaira", "roundingStepKm", "minimumFeeNaira", "maximumFeeNaira", "discoveryDistanceKm", "maximumDistanceKm"];
 const validate = (input) => {
   const config = { ...DEFAULT_DISTANCE_DELIVERY_CONFIG, ...(input || {}) };
   for (const field of numberFields) if (!Number.isFinite(Number(config[field])) || Number(config[field]) < 0) throw new Error(`${field} must be a non-negative number`);
