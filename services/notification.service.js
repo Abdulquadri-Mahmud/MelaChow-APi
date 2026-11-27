@@ -9,7 +9,11 @@ import { redisClient, isRedisReady, safeRedisGet, safeRedisSet } from '../config
 import dotenv from 'dotenv';
 import { usePostgresNotificationWrites } from './postgres/compat.js';
 import { notificationRepository } from './postgres/notification.repository.js';
-import { sendFirebasePush } from './firebasePush.service.js';
+import {
+    sendFirebasePush,
+    sendVendorOrderAlarmFirebasePush,
+    sendVendorOrderDismissFirebasePush,
+} from './firebasePush.service.js';
 
 dotenv.config();
 
@@ -483,7 +487,11 @@ export async function sendNotification(recipientId, type, data = {}, role = 'use
                 const pushPromises = subscriptions.map(async (sub) => {
                     try {
                         if (sub.subscription?.provider === 'firebase') {
-                            const delivered = await sendFirebasePush(sub.subscription.fcmToken, pushPayload);
+                            const delivered = role === 'vendor' && notificationData.type === 'vendor_new_order'
+                                ? await sendVendorOrderAlarmFirebasePush(sub.subscription.fcmToken, pushPayload)
+                                : role === 'vendor' && notificationData.type === 'vendor_order_cancelled'
+                                    ? await sendVendorOrderDismissFirebasePush(sub.subscription.fcmToken, pushPayload)
+                                    : await sendFirebasePush(sub.subscription.fcmToken, pushPayload);
                             console.log(delivered
                                 ? `Firebase push sent to device: ${sub.subscription.platform || 'native'} (${role})`
                                 : `Firebase push skipped because credentials are unavailable (${role})`);

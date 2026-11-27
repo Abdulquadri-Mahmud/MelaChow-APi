@@ -35,7 +35,90 @@ export async function sendFirebasePush(token, payload) {
     token,
     notification: { title: payload.title || "MelaChow", body: payload.body || "" },
     data,
-    android: { notification: { channelId: "melachow_orders", tag: payload.tag } },
+    android: { priority: "high", notification: { channelId: "melachow_orders", tag: payload.tag } },
+  });
+  return true;
+}
+
+/**
+ * Send a high-priority data-only FCM message for vendor incoming orders.
+ * Data-only payloads wake VendorAlarmFirebaseMessagingService.onMessageReceived()
+ * even when the Android app is backgrounded, locked, or terminated so the kitchen
+ * alarm rings loudly on USAGE_ALARM until accepted or silenced.
+ */
+export async function sendVendorOrderAlarmFirebasePush(token, payload = {}) {
+  const messaging = getMessagingClient();
+  if (!messaging || !token) return false;
+
+  const rawData = {
+    ...(payload.data || {}),
+    type: payload.type || payload.data?.type || "vendor_new_order",
+    title: payload.title || "New Order Received!",
+    body: payload.body || "A customer just placed an order. Open MelaChow Vendor now to accept.",
+    url: payload.url || payload.data?.url || "/vendors/order",
+    route: payload.url || payload.data?.url || "/vendors/order",
+    alarm: "true",
+    channelId: "melachow_vendor_order_alarm_v1",
+    durationMs: String(Number(payload.durationMs) || 60000),
+  };
+
+  const data = Object.fromEntries(
+    Object.entries(rawData)
+      .filter(([, value]) => value !== undefined && value !== null)
+      .map(([key, value]) => [key, typeof value === "string" ? value : JSON.stringify(value)])
+  );
+
+  await messaging.send({
+    token,
+    data,
+    android: {
+      priority: "high",
+      ttl: 120000,
+    },
+    apns: {
+      headers: { "apns-priority": "10" },
+      payload: {
+        aps: {
+          alert: { title: rawData.title, body: rawData.body },
+          sound: "vendor_order_alarm.wav",
+          "content-available": 1,
+        },
+      },
+    },
+  });
+  return true;
+}
+
+/**
+ * Send a high-priority data-only FCM message to stop an active vendor order alarm
+ * (e.g. when a pending order is cancelled before acceptance).
+ */
+export async function sendVendorOrderDismissFirebasePush(token, payload = {}) {
+  const messaging = getMessagingClient();
+  if (!messaging || !token) return false;
+
+  const rawData = {
+    ...(payload.data || {}),
+    type: payload.type || payload.data?.type || "vendor_order_cancelled",
+    title: payload.title || "Order Cancelled",
+    body: payload.body || "A pending order was cancelled.",
+    url: payload.url || payload.data?.url || "/vendors/order",
+    dismissAlarm: "true",
+  };
+
+  const data = Object.fromEntries(
+    Object.entries(rawData)
+      .filter(([, value]) => value !== undefined && value !== null)
+      .map(([key, value]) => [key, typeof value === "string" ? value : JSON.stringify(value)])
+  );
+
+  await messaging.send({
+    token,
+    data,
+    android: {
+      priority: "high",
+      ttl: 60000,
+    },
   });
   return true;
 }
