@@ -135,34 +135,9 @@ const handlePostgresPaymentVerification = async ({ reference, userId = null, pos
   const fulfillment = await postgresPaymentRepository.fulfillPaidOrder(reference);
 
   if (!fulfillment.idempotent && fulfillment.notificationContext) {
-    const context = fulfillment.notificationContext;
-    const notificationTasks = [
-      sendOrderNotification(context.userId, fulfillment.order.orderId, "pending", {
-        orderDatabaseId: fulfillment.order._id,
-        orderId: fulfillment.order.orderId,
-      }),
-    ];
-    const { sendVendorNotification, notifyAdmins } = await import("../../services/notification.service.js");
-    for (const vendor of context.vendors) {
-      notificationTasks.push(sendVendorNotification(vendor.vendorId, fulfillment.order.orderId, "vendor_new_order", {
-        orderId: fulfillment.order.orderId,
-        orderDatabaseId: vendor.vendorOrderId,
-        customerName: context.customerName,
-        location: context.location,
-        restaurantName: vendor.restaurantName,
-        items: vendor.items,
-        totalAmount: context.totalKobo / 100,
-      }));
-    }
-    notificationTasks.push(notifyAdmins("system", {
-      orderId: fulfillment.order.orderId,
-      orderDatabaseId: fulfillment.order._id,
-      message: `New paid order #${fulfillment.order.orderId} is awaiting vendor acceptance.`,
-      url: `/admin/orders/${fulfillment.order._id}`,
-    }));
-    Promise.allSettled(notificationTasks).then((results) => {
-      const failures = results.filter((result) => result.status === "rejected");
-      if (failures.length) console.error("Postgres paid-order notification fan-out failures:", failures.map((failure) => failure.reason?.message));
+    const { dispatchFulfilledOrderNotifications } = await import("../../services/postgres/payment.repository.js");
+    dispatchFulfilledOrderNotifications(fulfillment).catch((err) => {
+      console.error("Postgres paid-order notification dispatch error:", err.message);
     });
   }
 
@@ -2385,7 +2360,7 @@ export const paystackWebhook = async (req, res) => {
 
         try {
           await postgresPaymentRepository.validateSuccessfulPaymentForOrder(postgresOrder, event.data);
-          await postgresPaymentRepository.fulfillPaidOrder(reference);
+          const fulfillment = await postgresPaymentRepository.fulfillPaidOrder(reference);
           await postgresPaymentRepository.markWebhookEventProcessed({
             reference,
             order: postgresOrder,
@@ -2395,6 +2370,12 @@ export const paystackWebhook = async (req, res) => {
             providerEventId,
             message: "Paystack charge.success webhook fulfilled Postgres order",
           });
+          if (!fulfillment.idempotent && fulfillment.notificationContext) {
+            const { dispatchFulfilledOrderNotifications } = await import("../../services/postgres/payment.repository.js");
+            dispatchFulfilledOrderNotifications(fulfillment).catch((err) => {
+              console.error("Postgres webhook paid-order notification dispatch error:", err.message);
+            });
+          }
         } catch (validationErr) {
           console.error("Postgres webhook payment validation failed:", validationErr.message);
           return res.status(200).send("Postgres webhook payment validation recorded for manual review");

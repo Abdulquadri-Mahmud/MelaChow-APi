@@ -95,15 +95,32 @@ const buildPayload = (delivery) => {
   assertLocation(dropoff, "Customer delivery location");
 
   // Platform-managed vendor orders intentionally store deliveryShare as zero. Use the
-  // customer order's per-vendor quote (kobo) as the source of truth for rider earnings.
+  // customer order's per-vendor quote (kobo) as the source of truth for rider earnings,
+  // recovering the original subsidized delivery fee whenever a free-delivery promo waived it.
   const vendorDeliveryFee = (order.vendorDeliveryFees || []).find(
     (entry) => String(entry.restaurantId) === String(vendorOrder.restaurantId),
   );
-  const feeKobo = Number(vendorDeliveryFee?.deliveryFee ?? order.deliveryFee ?? vendorOrder.deliveryShare ?? 0);
-  const estimatedFee = Number((feeKobo / 100).toFixed(2));
-  const riderCommission = Number(process.env.SAMKA_RIDER_COMMISSION_NAIRA || 0);
+  const rawFeeKobo = Number(vendorDeliveryFee?.deliveryFee ?? order.deliveryFee ?? vendorOrder.deliveryShare ?? 0);
+  const promoOriginalFeeNaira = Number(
+    order.vendorDeliveryPromo?.originalDeliveryFee
+      ?? order.freeDeliveryPromo?.originalDeliveryFee
+      ?? 0,
+  );
+  const snapshotBaseFeeKobo = Number(
+    vendorDeliveryFee?.pricingSnapshot?.fallbackFlatFeeKobo
+      ?? vendorDeliveryFee?.pricingSnapshot?.baseFeeKobo
+      ?? 0,
+  );
+  const feeKobo = rawFeeKobo > 0
+    ? rawFeeKobo
+    : promoOriginalFeeNaira > 0
+      ? Math.round(promoOriginalFeeNaira * 100)
+      : snapshotBaseFeeKobo;
+  const estimatedFee = Number(Math.max(0, feeKobo / 100).toFixed(2));
+  const configuredCommission = Math.max(0, Number(process.env.SAMKA_RIDER_COMMISSION_NAIRA || 0));
+  const riderCommission = Number(Math.min(configuredCommission, estimatedFee).toFixed(2));
   const distanceEntry = order.vendorDeliveryFees?.find((entry) => entry.restaurantId === vendorOrder.restaurantId);
-  if (estimatedFee < 0 || riderCommission < 0 || riderCommission > estimatedFee) {
+  if (!Number.isFinite(estimatedFee) || !Number.isFinite(riderCommission) || estimatedFee < 0 || riderCommission < 0) {
     throw new Error("Samka delivery fee configuration is invalid");
   }
 

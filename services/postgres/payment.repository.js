@@ -162,15 +162,90 @@ const postgresOrderShape = (order) => ({
 const paidNotificationContext = (order) => ({
   userId: order?.user?.legacyMongoId || order?.userId,
   customerName: order?.user?.fullName || `${order?.user?.firstname || ""} ${order?.user?.lastname || ""}`.trim() || "a customer",
+  phone: order?.phone || order?.user?.phone || "",
+  deliveryAddress: order?.deliveryAddress || null,
   location: order?.deliveryAddress?.addressLine || order?.deliveryAddress?.address || "specified location",
   vendors: (order?.vendorOrders || []).map((vendorOrder) => ({
     vendorId: vendorOrder.restaurant?.legacyMongoId || vendorOrder.restaurantId,
+    vendorUuid: vendorOrder.restaurantId,
     vendorOrderId: vendorOrder.legacyMongoId || vendorOrder.id,
     restaurantName: vendorOrder.restaurant?.storeName || "Restaurant",
     items: (order?.items || []).filter((item) => item.restaurantId === vendorOrder.restaurantId),
   })),
   totalKobo: Number(order?.total || 0),
 });
+
+export async function dispatchFulfilledOrderNotifications(fulfillment) {
+  if (!fulfillment || fulfillment.idempotent || !fulfillment.notificationContext || !fulfillment.order) {
+    return;
+  }
+
+  const context = fulfillment.notificationContext;
+  const [{ sendOrderNotification, sendVendorNotification, notifyAdmins }, { emitNewOrderToRestaurant }] = await Promise.all([
+    import("../notification.service.js"),
+    import("../../socket/events/orderEvents.js"),
+  ]);
+
+  const notificationTasks = [
+    sendOrderNotification(context.userId, fulfillment.order.orderId, "pending", {
+      orderDatabaseId: fulfillment.order._id,
+      orderId: fulfillment.order.orderId,
+    }),
+  ];
+
+  for (const vendor of context.vendors || []) {
+    notificationTasks.push(
+      sendVendorNotification(vendor.vendorId, fulfillment.order.orderId, "vendor_new_order", {
+        orderId: fulfillment.order.orderId,
+        orderDatabaseId: vendor.vendorOrderId,
+        customerName: context.customerName,
+        location: context.location,
+        restaurantName: vendor.restaurantName,
+        items: vendor.items,
+        totalAmount: context.totalKobo / 100,
+      })
+    );
+
+    const targetRoomIds = [...new Set([vendor.vendorId, vendor.vendorUuid].filter(Boolean).map(String))];
+    for (const targetRestaurantId of targetRoomIds) {
+      try {
+        emitNewOrderToRestaurant({
+          _id: fulfillment.order._id,
+          orderId: fulfillment.order.orderId,
+          orderNumber: fulfillment.order.orderId,
+          vendorOrderId: vendor.vendorOrderId,
+          restaurantId: targetRestaurantId,
+          customerName: context.customerName,
+          phone: context.phone,
+          deliveryAddress: context.deliveryAddress || {
+            name: context.customerName,
+            address: context.location,
+          },
+          items: vendor.items || [],
+          totalAmount: context.totalKobo / 100,
+          total: context.totalKobo / 100,
+        });
+      } catch (socketError) {
+        console.error("Vendor real-time new_order emission failed:", socketError.message);
+      }
+    }
+  }
+
+  notificationTasks.push(
+    notifyAdmins("system", {
+      orderId: fulfillment.order.orderId,
+      orderDatabaseId: fulfillment.order._id,
+      message: `New paid order #${fulfillment.order.orderId} is awaiting vendor acceptance.`,
+      url: `/admin/orders/${fulfillment.order._id}`,
+    })
+  );
+
+  const results = await Promise.allSettled(notificationTasks);
+  const failures = results.filter((result) => result.status === "rejected");
+  if (failures.length) {
+    console.error("Postgres paid-order notification fan-out failures:", failures.map((failure) => failure.reason?.message));
+  }
+}
 
 export const postgresPaymentRepository = {
   async findOrderByPaymentReference(reference) {

@@ -148,6 +148,9 @@ export async function initializeSocket(server) {
                 if (postgresVendorIdentityEnabled()) {
                     const pgVendor = await findVendorByTokenId(targetId);
                     identity = pgVendor ? publicVendor(pgVendor) : null;
+                    if (pgVendor) {
+                        socket.postgresVendorId = String(pgVendor.id);
+                    }
                 } else {
                     identity = await Vendor.findById(targetId).select('-password');
                 }
@@ -215,6 +218,14 @@ export async function initializeSocket(server) {
         socket.join(`user_${socket.userId}`);
         if (socket.postgresUserId && socket.postgresUserId !== socket.userId) {
             socket.join(`user_${socket.postgresUserId}`);
+        }
+        // Auto-join vendor rooms immediately upon authentication so incoming order alerts
+        // are never missed while the frontend mounts VendorSocketManager or across UUID/legacy IDs.
+        if (socket.userRole === 'vendor') {
+            socket.join(`vendor:${socket.userId}`);
+            if (socket.postgresVendorId && socket.postgresVendorId !== socket.userId) {
+                socket.join(`vendor:${socket.postgresVendorId}`);
+            }
         }
         console.log(`👤 ${socket.userRole} ${socket.userId} joined personal room`);
 

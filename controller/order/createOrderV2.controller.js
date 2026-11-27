@@ -2282,6 +2282,12 @@ export const createOrderController = async (req, res) => {
                 reference = `WALLET_${result.order.orderId}`;
                 await postgresPaymentRepository.initializeOrderPaymentReference({ orderId: result.order.id, reference, cartSnapshot: { items, vendorDeliveryFees, deliveryAddress, phone, discountCode, useWallet: true, idempotencyKey, deviceId: deviceId || req.headers["x-melachow-device-id"] || null } });
                 const fulfilled = await postgresPaymentRepository.fulfillPaidOrder(reference, { walletPayment: true });
+                if (!fulfilled.idempotent && fulfilled.notificationContext) {
+                    const { dispatchFulfilledOrderNotifications } = await import("../../services/postgres/payment.repository.js");
+                    dispatchFulfilledOrderNotifications(fulfilled).catch((err) => {
+                        console.error("Postgres wallet-order notification dispatch error:", err.message);
+                    });
+                }
                 return res.status(result.idempotent ? 200 : 201).json({ success: true, message: "Order created and paid successfully from wallet.", reference, order: fulfilled.order, payment: { provider: "wallet", status: "paid" } });
             }
 
