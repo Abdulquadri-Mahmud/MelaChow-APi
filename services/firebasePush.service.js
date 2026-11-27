@@ -35,7 +35,7 @@ export async function sendFirebasePush(token, payload) {
     token,
     notification: { title: payload.title || "MelaChow", body: payload.body || "" },
     data,
-    android: { priority: "high", notification: { channelId: "melachow_orders", tag: payload.tag } },
+    android: { priority: "high", notification: { channelId: "melachow_order_updates_v1", tag: payload.tag } },
   });
   return true;
 }
