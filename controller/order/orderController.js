@@ -33,7 +33,11 @@ import {
 } from "../../services/paymentHardening.service.js";
 import { usePostgresReads, usePostgresOrderStatusWrites, usePostgresPaymentWrites, usePostgresRiderAssignmentWrites, usePostgresVendorOrderReads } from "../../services/postgres/compat.js";
 import { adminOrdersRepository } from "../../services/postgres/adminOrders.repository.js";
-import { vendorOrdersRepository } from "../../services/postgres/vendorOrders.repository.js";
+import {
+  vendorOrdersRepository,
+  getVendorOrderAutoCancelMinutes,
+  isVendorVisiblePaymentStatus,
+} from "../../services/postgres/vendorOrders.repository.js";
 import { postgresPaymentRepository } from "../../services/postgres/payment.repository.js";
 import { applyTransferOutcome } from "../../services/transferReconciliation.service.js";
 import { cancelQueuedSamkaDeliveryForVendorOrder, dispatchSamkaDelivery, queueSamkaDelivery, usesSamkaLogistics } from "../../services/logistics/samkaLogistics.service.js";
@@ -1523,12 +1527,16 @@ export const getUserOrders = async (req, res) => {
 export const getVendorOrders = async (req, res) => {
   try {
     const vendorId = req.vendor._id;
+    const autoCancelMinutes = getVendorOrderAutoCancelMinutes();
 
     if (usePostgresVendorOrderReads()) {
-      return res.json({ vendorOrders: await vendorOrdersRepository.listVendorOrders(vendorId) });
+      return res.json({
+        vendorOrders: await vendorOrdersRepository.listVendorOrders(vendorId),
+        meta: { autoCancelMinutes },
+      });
     }
 
-    const vendorOrders = await VendorOrder.find({ restaurantId: vendorId })
+    const rawVendorOrders = await VendorOrder.find({ restaurantId: vendorId })
       .sort({ createdAt: -1 })
       .populate({
         path: "userOrderId",
@@ -1560,7 +1568,11 @@ export const getVendorOrders = async (req, res) => {
         model: "ComboItem",
       });
 
-    return res.json({ vendorOrders });
+    const vendorOrders = rawVendorOrders.filter((vo) =>
+      isVendorVisiblePaymentStatus(vo?.userOrderId?.paymentStatus)
+    );
+
+    return res.json({ vendorOrders, meta: { autoCancelMinutes } });
   } catch (err) {
     console.error("Get Vendor Orders Error:", err);
     return res.status(500).json({ message: "Server error" });

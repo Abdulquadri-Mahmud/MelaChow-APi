@@ -22,7 +22,11 @@ import {
   updateVendorTodayHoursIdentity, updateVendorAvailabilityIdentity,
   getVendorDashboardIdentity, findVendorByTokenId,
 } from "../../services/postgres/vendorIdentity.repository.js";
-import { vendorOrdersRepository } from "../../services/postgres/vendorOrders.repository.js";
+import {
+  vendorOrdersRepository,
+  getVendorOrderAutoCancelMinutes,
+  isVendorVisiblePaymentStatus,
+} from "../../services/postgres/vendorOrders.repository.js";
 import { runShadowComparison } from "../../services/postgres/shadowCompare.js";
 import { usePostgresReviewReads, usePostgresWalletReads } from "../../services/postgres/compat.js";
 import { reviewManagementRepository } from "../../services/postgres/reviewManagement.repository.js";
@@ -887,11 +891,14 @@ export const getVendorOrders = async (req, res) => {
 
     const id = req.vendor._id;
 
+    const autoCancelMinutes = getVendorOrderAutoCancelMinutes();
+
     if (usePostgresVendorOrderReads()) {
       const vendorOrders = await vendorOrdersRepository.listVendorOrders(id);
       return res.status(200).json({
         success: true,
         data: vendorOrders,
+        meta: { autoCancelMinutes },
       });
     }
 
@@ -903,7 +910,7 @@ export const getVendorOrders = async (req, res) => {
       });
     }
 
-    const vendorOrders = await VendorOrder.find({ restaurantId: id })
+    const rawVendorOrders = await VendorOrder.find({ restaurantId: id })
       .populate({
         path: "userOrderId",
         populate: [
@@ -924,6 +931,19 @@ export const getVendorOrders = async (req, res) => {
       .sort({ createdAt: -1 }) // Newest first
       .lean();
 
+    const vendorOrders = rawVendorOrders
+      .filter((vo) => isVendorVisiblePaymentStatus(vo?.userOrderId?.paymentStatus))
+      .map((vo) => {
+        const baseMs = new Date(vo?.userOrderId?.createdAt || vo?.createdAt || 0).getTime();
+        return {
+          ...vo,
+          autoCancelMinutes,
+          autoCancelAt: Number.isFinite(baseMs) && baseMs > 0
+            ? new Date(baseMs + autoCancelMinutes * 60 * 1000).toISOString()
+            : null,
+        };
+      });
+
     runShadowComparison({
       domain: "vendor-orders",
       operation: "list",
@@ -934,6 +954,7 @@ export const getVendorOrders = async (req, res) => {
     res.status(200).json({
       success: true,
       data: vendorOrders,
+      meta: { autoCancelMinutes },
     });
   } catch (error) {
     res.status(500).json({
@@ -1025,7 +1046,7 @@ export const getVendorOrderById = async (req, res) => {
       })
       .lean();
 
-    if (!vendorOrder) {
+    if (!vendorOrder || !isVendorVisiblePaymentStatus(vendorOrder?.userOrderId?.paymentStatus)) {
       return res.status(404).json({
         success: false,
         message: "Vendor order not found",

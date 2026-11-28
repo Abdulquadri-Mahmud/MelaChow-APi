@@ -3,6 +3,19 @@ import { koboToNaira, orderItemToNaira } from "../../utils/moneyContract.js";
 
 const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+// Vendors must only ever see orders whose payment actually succeeded
+// (or paid orders that were subsequently refunded). Unpaid / abandoned /
+// failed checkout attempts stay hidden from the kitchen Order Desk.
+export const VENDOR_VISIBLE_PAYMENT_STATUSES = ["paid", "refunded"];
+
+export const getVendorOrderAutoCancelMinutes = () => {
+  const parsed = Number(process.env.VENDOR_ORDER_AUTO_CANCEL_MINUTES || 10);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : 10;
+};
+
+export const isVendorVisiblePaymentStatus = (status) =>
+  VENDOR_VISIBLE_PAYMENT_STATUSES.includes(String(status || "").trim().toLowerCase());
+
 const legacyId = (record) => record?.legacyMongoId || record?.id || null;
 
 const compactObject = (value) =>
@@ -122,26 +135,37 @@ const customerOrderShape = (order) => {
   return result;
 };
 
-const vendorOrderShape = (vendorOrder) => ({
-  _id: legacyId(vendorOrder),
-  restaurantId: vendorOrder.restaurant?.legacyMongoId || vendorOrder.restaurantId,
-  userOrderId: userOrderShape(vendorOrder.userOrder),
-  items: (vendorOrder.items || []).map(orderItemToNaira),
-  commission: koboToNaira(vendorOrder.commission),
-  vendorTotal: koboToNaira(vendorOrder.vendorTotal),
-  customerNote: vendorOrder.customerNote,
-  deliveryShare: koboToNaira(vendorOrder.deliveryShare),
-  escrowAmount: koboToNaira(vendorOrder.escrowAmount),
-  escrowReleased: vendorOrder.escrowReleased,
-  orderStatus: vendorOrder.orderStatus,
-  riderId: riderShape(vendorOrder.rider) || vendorOrder.riderId,
-  cityId: vendorOrder.cityId,
-  stateId: vendorOrder.stateId,
-  createdAt: vendorOrder.createdAt,
-  updatedAt: vendorOrder.updatedAt,
-  moneyUnit: "naira",
-  __v: 0,
-});
+const vendorOrderShape = (vendorOrder) => {
+  const autoCancelMinutes = getVendorOrderAutoCancelMinutes();
+  const baseTimestamp = vendorOrder.userOrder?.createdAt || vendorOrder.createdAt;
+  const parsedBaseMs = baseTimestamp ? new Date(baseTimestamp).getTime() : NaN;
+  const autoCancelAt = Number.isFinite(parsedBaseMs)
+    ? new Date(parsedBaseMs + autoCancelMinutes * 60 * 1000).toISOString()
+    : null;
+
+  return {
+    _id: legacyId(vendorOrder),
+    restaurantId: vendorOrder.restaurant?.legacyMongoId || vendorOrder.restaurantId,
+    userOrderId: userOrderShape(vendorOrder.userOrder),
+    items: (vendorOrder.items || []).map(orderItemToNaira),
+    commission: koboToNaira(vendorOrder.commission),
+    vendorTotal: koboToNaira(vendorOrder.vendorTotal),
+    customerNote: vendorOrder.customerNote,
+    deliveryShare: koboToNaira(vendorOrder.deliveryShare),
+    escrowAmount: koboToNaira(vendorOrder.escrowAmount),
+    escrowReleased: vendorOrder.escrowReleased,
+    orderStatus: vendorOrder.orderStatus,
+    riderId: riderShape(vendorOrder.rider) || vendorOrder.riderId,
+    cityId: vendorOrder.cityId,
+    stateId: vendorOrder.stateId,
+    autoCancelMinutes,
+    autoCancelAt,
+    createdAt: vendorOrder.createdAt,
+    updatedAt: vendorOrder.updatedAt,
+    moneyUnit: "naira",
+    __v: 0,
+  };
+};
 
 const vendorOrderInclude = {
   restaurant: {
@@ -341,7 +365,12 @@ export const vendorOrdersRepository = {
     if (!resolvedVendorId) return [];
 
     const vendorOrders = await prisma.vendorOrder.findMany({
-      where: { restaurantId: resolvedVendorId },
+      where: {
+        restaurantId: resolvedVendorId,
+        userOrder: {
+          paymentStatus: { in: VENDOR_VISIBLE_PAYMENT_STATUSES },
+        },
+      },
       orderBy: { createdAt: "desc" },
       include: vendorOrderInclude,
     });
@@ -349,12 +378,17 @@ export const vendorOrdersRepository = {
     return vendorOrders.map(vendorOrderShape);
   },
 
-  async getVendorOrder(vendorOrderId) {
+  async getVendorOrder(vendorOrderId, { includeUnpaid = false } = {}) {
     const vendorOrder = await prisma.vendorOrder.findFirst({
       where: uuidPattern.test(String(vendorOrderId)) ? { id: vendorOrderId } : { legacyMongoId: String(vendorOrderId) },
       include: vendorOrderInclude,
     });
 
-    return vendorOrder ? vendorOrderShape(vendorOrder) : null;
+    if (!vendorOrder) return null;
+    if (!includeUnpaid && !isVendorVisiblePaymentStatus(vendorOrder.userOrder?.paymentStatus)) {
+      return null;
+    }
+
+    return vendorOrderShape(vendorOrder);
   },
 };
